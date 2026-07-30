@@ -25,6 +25,7 @@ import ru.zevsus.proxy.boardvpn.infrastructure.vpn.permission.VpnPermissionStatu
 import ru.zevsus.proxy.boardvpn.ui.home.HomeViewModel
 import ru.zevsus.proxy.boardvpn.ui.navigation.BoardVpnApp
 import ru.zevsus.proxy.boardvpn.ui.profiles.ProfilesViewModel
+import ru.zevsus.proxy.boardvpn.ui.routing.AppRoutingViewModel
 import ru.zevsus.proxy.boardvpn.ui.settings.SettingsViewModel
 import ru.zevsus.proxy.boardvpn.ui.theme.BoardVPNTheme
 
@@ -52,6 +53,18 @@ class MainActivity : ComponentActivity() {
     private val settingsViewModel: SettingsViewModel by viewModels {
         viewModelFactory {
             initializer { SettingsViewModel(settingsRepository = container.settingsRepository) }
+        }
+    }
+
+    private val appRoutingViewModel: AppRoutingViewModel by viewModels {
+        viewModelFactory {
+            initializer {
+                AppRoutingViewModel(
+                    settingsRepository = container.settingsRepository,
+                    applicationsRepository = container.installedApplicationsRepository,
+                    vpnRepository = container.vpnRepository,
+                )
+            }
         }
     }
 
@@ -86,12 +99,12 @@ class MainActivity : ComponentActivity() {
 
             BoardVPNTheme(
                 themeMode = settings.themeMode,
-                dynamicColor = settings.dynamicColor,
             ) {
                 BoardVpnApp(
                     homeViewModel = homeViewModel,
                     profilesViewModel = profilesViewModel,
                     settingsViewModel = settingsViewModel,
+                    appRoutingViewModel = appRoutingViewModel,
                     onConnectRequest = ::requestVpnConnection,
                     onClipboardImportRequest = ::importKeylinkFromClipboard,
                     onOpenSystemVpnSettings = ::openSystemVpnSettings,

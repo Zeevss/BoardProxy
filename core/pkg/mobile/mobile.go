@@ -52,6 +52,7 @@ type mobileConfig struct {
 type Client interface {
 	Start() error
 	Stop()
+	Reconnect() bool
 	AwaitTermination() error
 	Status() string
 	MetricsJSON() string
@@ -145,6 +146,10 @@ func (c *client) Start() error {
 // thread. Call AwaitTermination from a worker coroutine when resource teardown
 // must finish.
 func (c *client) Stop() { c.core.Stop() }
+
+// Reconnect replaces the current BoardProxy transport without stopping the
+// local SOCKS listener. It is safe to call for transient Android network events.
+func (c *client) Reconnect() bool { return c.core.Reconnect() }
 
 // AwaitTermination blocks until the Go client has fully stopped.
 func (c *client) AwaitTermination() error {

@@ -42,6 +42,7 @@ import ru.zevsus.proxy.boardvpn.domain.model.BoardProxyKeylink
 import ru.zevsus.proxy.boardvpn.domain.model.ThemeMode
 import ru.zevsus.proxy.boardvpn.domain.model.VpnProfile
 import ru.zevsus.proxy.boardvpn.domain.model.VpnProfileId
+import ru.zevsus.proxy.boardvpn.ui.components.BoardVpnPageHeader
 import ru.zevsus.proxy.boardvpn.ui.components.BoardVpnShieldOutline
 import ru.zevsus.proxy.boardvpn.ui.components.formatFingerprint
 import ru.zevsus.proxy.boardvpn.ui.theme.BoardVPNTheme
@@ -60,10 +61,10 @@ fun ProfilesScreen(
             .padding(contentPadding),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            Text(
-                text = stringResource(R.string.profiles_title),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+            BoardVpnPageHeader(
+                title = stringResource(R.string.profiles_title),
+                subtitle = stringResource(R.string.profiles_subtitle),
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp),
             )
 
             if (state.profiles.isEmpty()) {
@@ -160,7 +161,7 @@ private fun ProfileCard(
         color = if (selected) {
             MaterialTheme.colorScheme.primaryContainer
         } else {
-            MaterialTheme.colorScheme.surfaceVariant
+            MaterialTheme.colorScheme.surfaceContainer
         },
         modifier = modifier.fillMaxWidth(),
     ) {
@@ -264,7 +265,7 @@ private val previewProfiles = listOf(
 @Preview(showBackground = true)
 @Composable
 private fun ProfilesPreview() {
-    BoardVPNTheme(dynamicColor = false) {
+    BoardVPNTheme {
         ProfilesScreen(
             state = ProfilesUiState(
                 profiles = previewProfiles,
@@ -278,7 +279,7 @@ private fun ProfilesPreview() {
 @Preview(showBackground = true)
 @Composable
 private fun ProfilesEmptyPreview() {
-    BoardVPNTheme(themeMode = ThemeMode.Dark, dynamicColor = false) {
+    BoardVPNTheme(themeMode = ThemeMode.Dark) {
         ProfilesScreen(state = ProfilesUiState(), onAction = {})
     }
 }

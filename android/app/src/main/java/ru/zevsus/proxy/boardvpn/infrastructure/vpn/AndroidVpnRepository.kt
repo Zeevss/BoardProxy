@@ -79,6 +79,16 @@ class AndroidVpnRepository(
         }
     }
 
+    override suspend fun restart() {
+        val active = mutex.withLock {
+            session.value as? VpnSessionState.Active
+        } ?: return
+
+        if (active.phase != ru.zevsus.proxy.boardvpn.domain.model.VpnSessionPhase.Stopping) {
+            context.startService(VpnServiceCommand.restartIntent(context))
+        }
+    }
+
     suspend fun applyEvent(event: VpnEvent): VpnSessionState = mutex.withLock {
         VpnStateReducer.reduce(session.value, event).also { session.value = it }
     }

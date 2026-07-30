@@ -18,6 +18,9 @@ data object ProfilesDestination
 @Serializable
 data object SettingsDestination
 
+@Serializable
+data object AppRoutingDestination
+
 /** The three top-level tabs, in bottom bar order. */
 enum class BoardVpnTab(
     val route: Any,

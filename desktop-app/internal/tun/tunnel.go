@@ -70,9 +70,13 @@ type platform interface {
 	// TUN, привязывая их к физическому интерфейсу. Передаётся в bproxy.Config,
 	// без него получилась бы бесконечная петля маршрутизации.
 	protector() bproxy.SocketProtector
-	// applyRouting назначает адрес интерфейсу ifName, поднимает его, перекрывает
-	// маршрут по умолчанию через TUN и прописывает DNS.
+	// applyRouting назначает адрес интерфейсу ifName, поднимает его и перекрывает
+	// маршрут по умолчанию через TUN. DNS здесь НЕ трогается — он ставится
+	// отдельным шагом (applyDNS), уже после запуска локального резолвера.
 	applyRouting(ifName string, p Params) error
+	// applyDNS прописывает системе резолвер dns. Вызывается только когда этот
+	// резолвер уже слушает, иначе DNS в системе временно ломается.
+	applyDNS(dns string) error
 	// revertRouting восстанавливает исходные маршруты и DNS. Идемпотентна.
 	revertRouting() error
 }
@@ -92,6 +96,7 @@ type Controller struct {
 
 	mu      sync.Mutex
 	eng     stackEngine
+	params  Params
 	started bool
 	stopped bool
 }
@@ -141,12 +146,40 @@ func (c *Controller) Start(p Params) error {
 	}
 	if err := c.plat.applyRouting(ifName, p); err != nil {
 		eng.stop()
+		// Частично применённые маршруты откатываем — иначе система останется с
+		// перекрытым default в мёртвый интерфейс.
+		_ = c.plat.revertRouting()
 		return err
 	}
 	c.eng = eng
+	c.params = p
 	c.started = true
 	return nil
 }
+
+// ApplyDNS прописывает системе резолвер dns. Вызывать после того, как этот
+// резолвер уже слушает: иначе между сменой настроек и стартом резолвера система
+// остаётся без работающего DNS.
+//
+// Прописать резолвер обязательно: при полном туннеле прежний системный DNS
+// обычно указывает на локальный роутер, который через туннель недостижим, и
+// резолв в системе умирает. Пустой dns означает «использовать публичный
+// резолвер по умолчанию» (он достижим через туннель).
+func (c *Controller) ApplyDNS(dns string) error {
+	if dns == "" {
+		dns = defaultDNS
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.started || c.stopped {
+		return nil
+	}
+	return c.plat.applyDNS(dns)
+}
+
+// FallbackDNS — публичный резолвер, который прописывается системе, когда свой
+// локальный DNS-форвардер поднять не удалось.
+func FallbackDNS() string { return defaultDNS }
 
 // Stop восстанавливает маршруты/DNS и закрывает устройство. Безопасно вызывать
 // повторно и даже если Start не выполнялся. Возвращает ошибку отката маршрутов

@@ -194,13 +194,25 @@ func raiseTunnel(sess *session, cfg helperipc.SessionConfig, tunAddr string, log
 		cancel()
 		return
 	}
+	// Локальный резолвер поднимаем ДО того, как пропишем его системе: иначе между
+	// сменой настроек DNS и стартом форвардера система остаётся без резолва.
+	// Прописать резолвер нужно в любом случае: прежний системный DNS обычно
+	// указывает на локальный роутер, недостижимый через туннель.
+	resolver := tunAddr
 	dns, err := dnsproxy.Start(net.JoinHostPort(tunAddr, "53"), dnsUpstream)
 	if err != nil {
-		logger.Warn("DNS-форвардер не запущен (имена не будут показаны)", "err", err)
+		resolver = tun.FallbackDNS()
+		logger.Warn("локальный DNS-форвардер не запущен, используем публичный резолвер",
+			"resolver", resolver, "err", err)
 	} else {
 		sess.mu.Lock()
 		sess.dns = dns
 		sess.mu.Unlock()
+	}
+	if err := sess.controller.ApplyDNS(resolver); err != nil {
+		logger.Warn("системный DNS не изменён", "err", err)
+	} else {
+		logger.Info("системный DNS переключён", "resolver", resolver)
 	}
 	logger.Info("TUN активен: весь трафик идёт через доску")
 }

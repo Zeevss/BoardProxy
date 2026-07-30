@@ -1,6 +1,5 @@
 package ru.zevsus.proxy.boardvpn.ui.settings
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -9,29 +8,39 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.Surface
+import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import ru.zevsus.proxy.boardvpn.R
+import ru.zevsus.proxy.boardvpn.domain.model.AppRoutingMode
+import ru.zevsus.proxy.boardvpn.domain.model.AppRoutingPolicy
 import ru.zevsus.proxy.boardvpn.domain.model.AppSettings
 import ru.zevsus.proxy.boardvpn.domain.model.ThemeMode
+import ru.zevsus.proxy.boardvpn.ui.components.BoardVpnNavigationRow
+import ru.zevsus.proxy.boardvpn.ui.components.BoardVpnPageHeader
+import ru.zevsus.proxy.boardvpn.ui.components.BoardVpnSection
 import ru.zevsus.proxy.boardvpn.ui.theme.BoardVPNTheme
-import ru.zevsus.proxy.boardvpn.ui.theme.dynamicColorAvailable
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     state: SettingsUiState,
@@ -39,7 +48,6 @@ fun SettingsScreen(
     appVersion: String,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
-    showDynamicColor: Boolean = dynamicColorAvailable,
 ) {
     Column(
         modifier = modifier
@@ -47,79 +55,46 @@ fun SettingsScreen(
             .padding(contentPadding)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        Text(
-            text = stringResource(R.string.settings_title),
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(start = 8.dp, top = 16.dp),
+        BoardVpnPageHeader(
+            title = stringResource(R.string.settings_title),
+            subtitle = stringResource(R.string.settings_subtitle),
+            modifier = Modifier.padding(top = 20.dp),
         )
 
-        SettingsSection(title = stringResource(R.string.settings_section_appearance)) {
-            Column(
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text(
-                    text = stringResource(R.string.settings_theme),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    ThemeMode.entries.forEachIndexed { index, mode ->
-                        SegmentedButton(
-                            selected = state.settings.themeMode == mode,
-                            onClick = { onAction(SettingsAction.ChangeThemeMode(mode)) },
-                            shape = SegmentedButtonDefaults.itemShape(
-                                index = index,
-                                count = ThemeMode.entries.size,
-                            ),
-                        ) {
-                            Text(mode.label())
-                        }
-                    }
-                }
-
-                AnimatedVisibility(visible = showDynamicColor) {
-                    SettingsToggleRow(
-                        title = stringResource(R.string.settings_dynamic_color),
-                        subtitle = stringResource(R.string.settings_dynamic_color_hint),
-                        checked = state.settings.dynamicColor,
-                        onCheckedChange = {
-                            onAction(SettingsAction.ChangeDynamicColor(it))
-                        },
-                    )
-                }
-            }
-        }
-
-        SettingsSection(title = stringResource(R.string.settings_section_connection)) {
+        BoardVpnSection(title = stringResource(R.string.settings_section_connection)) {
+            BoardVpnNavigationRow(
+                title = stringResource(R.string.settings_app_routing),
+                subtitle = state.settings.appRoutingPolicy.routingSummary(),
+                onClick = { onAction(SettingsAction.OpenAppRouting) },
+            )
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 18.dp))
             SettingsToggleRow(
                 title = stringResource(R.string.settings_auto_connect),
                 subtitle = stringResource(R.string.settings_auto_connect_hint),
                 checked = state.settings.autoConnectOnLaunch,
                 onCheckedChange = { onAction(SettingsAction.ChangeAutoConnect(it)) },
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
             )
-
-            HorizontalDivider()
-
-            TextButton(
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 18.dp))
+            BoardVpnNavigationRow(
+                title = stringResource(R.string.settings_system_vpn),
+                subtitle = stringResource(R.string.settings_system_vpn_hint),
                 onClick = { onAction(SettingsAction.OpenSystemVpnSettings) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
-            ) {
-                Text(
-                    text = stringResource(R.string.settings_system_vpn),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+            )
         }
 
-        SettingsSection(title = stringResource(R.string.settings_section_about)) {
+        BoardVpnSection(title = stringResource(R.string.settings_section_appearance)) {
+            ThemeDropdown(
+                selected = state.settings.themeMode,
+                onSelected = { onAction(SettingsAction.ChangeThemeMode(it)) },
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+            )
+        }
+
+        BoardVpnSection(title = stringResource(R.string.settings_section_about)) {
             Column(
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
@@ -128,37 +103,59 @@ fun SettingsScreen(
                 )
                 Text(
                     text = stringResource(R.string.settings_version, appVersion),
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     text = stringResource(R.string.settings_core),
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
+        androidx.compose.foundation.layout.Spacer(Modifier.padding(bottom = 12.dp))
     }
 }
 
 @Composable
-private fun SettingsSection(
-    title: String,
-    content: @Composable () -> Unit,
+@OptIn(ExperimentalMaterial3Api::class)
+private fun ThemeDropdown(
+    selected: ThemeMode,
+    onSelected: (ThemeMode) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(start = 8.dp),
+    var expanded by remember { mutableStateOf(false) }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = modifier,
+    ) {
+        OutlinedTextField(
+            value = selected.label(),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(stringResource(R.string.settings_theme)) },
+            trailingIcon = {
+                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+            },
+            modifier = Modifier
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth(),
         )
-        Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.fillMaxWidth(),
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
         ) {
-            Column { content() }
+            ThemeMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = { Text(mode.label()) },
+                    onClick = {
+                        expanded = false
+                        onSelected(mode)
+                    },
+                )
+            }
         }
     }
 }
@@ -169,21 +166,42 @@ private fun SettingsToggleRow(
     subtitle: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier,
+    horizontalPadding: androidx.compose.ui.unit.Dp = 18.dp,
 ) {
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = horizontalPadding, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(text = title, style = MaterialTheme.typography.titleSmall)
             Text(
                 text = subtitle,
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+private fun AppRoutingPolicy.routingSummary(): String {
+    if (allProxy) return stringResource(R.string.routing_mode_all)
+    val selectedCount = packageNames.size
+    return when (mode) {
+        AppRoutingMode.AllApps -> stringResource(R.string.routing_mode_all)
+        AppRoutingMode.ExcludeSelectedApps -> pluralStringResource(
+            R.plurals.settings_routing_bypass_summary,
+            selectedCount,
+            selectedCount,
+        )
+        AppRoutingMode.OnlySelectedApps -> pluralStringResource(
+            R.plurals.settings_routing_only_summary,
+            selectedCount,
+            selectedCount,
+        )
     }
 }
 
@@ -199,25 +217,11 @@ private fun ThemeMode.label(): String = stringResource(
 @Preview(showBackground = true)
 @Composable
 private fun SettingsPreview() {
-    BoardVPNTheme(dynamicColor = false) {
+    BoardVPNTheme {
         SettingsScreen(
             state = SettingsUiState(AppSettings(autoConnectOnLaunch = true)),
             onAction = {},
             appVersion = "1.0",
-            showDynamicColor = true,
-        )
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-private fun SettingsDarkPreview() {
-    BoardVPNTheme(themeMode = ThemeMode.Dark, dynamicColor = false) {
-        SettingsScreen(
-            state = SettingsUiState(AppSettings(themeMode = ThemeMode.Dark)),
-            onAction = {},
-            appVersion = "1.0",
-            showDynamicColor = true,
         )
     }
 }

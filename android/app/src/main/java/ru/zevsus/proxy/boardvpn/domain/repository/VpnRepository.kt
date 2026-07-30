@@ -14,4 +14,6 @@ interface VpnRepository {
     suspend fun connect(profileId: VpnProfileId): VpnConnectResult
 
     suspend fun disconnect()
+
+    suspend fun restart()
 }

@@ -3,10 +3,11 @@
 package tun
 
 import (
-	"bproxy-core/pkg/bproxy"
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"bproxy-core/pkg/bproxy"
 )
 
 // defaultTunName — на macOS имя utun-интерфейса назначает ядро; передаём
@@ -22,7 +23,6 @@ type darwinPlatform struct {
 	service     string // сетевой сервис (напр. "Wi-Fi") для networksetup
 	splitRoutes bool
 	dnsBackup   string
-	dnsBackupOK bool
 	dnsReconfig bool
 	tunName     string
 }
@@ -34,14 +34,38 @@ type physNet struct {
 }
 
 func newPlatform() (platform, error) {
+	// Если прошлый запуск завершился аварийно, система осталась с нашим DNS и
+	// маршрутами — откатываем их до того, как поднимем новый туннель.
+	recoverStaleState()
+
 	phys, err := detectPhysical()
 	if err != nil {
 		return nil, err
 	}
 	return &darwinPlatform{
 		phys: phys,
+		// Свой DNS-резолв клиента направляем на публичный резолвер через
+		// физический интерфейс: системный DNS на время туннеля указывает внутрь
+		// TUN и для control-plane недостижим.
 		prot: &darwinProtector{index: phys.index, dns: defaultDNS},
 	}, nil
+}
+
+// recoverStaleState восстанавливает настройки, оставшиеся от аварийно
+// завершившегося запуска (см. journal).
+func recoverStaleState() {
+	j := loadJournal()
+	if j == nil {
+		return
+	}
+	if j.DNSService != "" {
+		restoreDNS(j.DNSService, j.DNSBackup)
+	}
+	if j.SplitRoutes && j.TunName != "" {
+		_ = run("route", "-n", "delete", "-net", "0.0.0.0/1", "-interface", j.TunName)
+		_ = run("route", "-n", "delete", "-net", "128.0.0.0/1", "-interface", j.TunName)
+	}
+	clearJournal()
 }
 
 func (d *darwinPlatform) protector() bproxy.SocketProtector { return d.prot }
@@ -71,14 +95,17 @@ func detectPhysical() (physNet, error) {
 	return p, nil
 }
 
+// applyRouting поднимает utun и перекрывает маршрут по умолчанию. DNS здесь не
+// трогаем — он ставится позже, из applyDNS.
 func (d *darwinPlatform) applyRouting(ifName string, p Params) error {
 	d.tunName = ifName
-	// Поднимаем utun как point-to-point: локальный и адрес-пир.
-	if err := run("ifconfig", ifName, p.TunAddr, p.Gateway, "up"); err != nil {
+	// utun — point-to-point: локальный адрес, адрес-пир и маска /32.
+	if err := run("ifconfig", ifName, "inet", p.TunAddr, p.Gateway,
+		"netmask", "255.255.255.255", "mtu", fmt.Sprint(p.MTU), "up"); err != nil {
 		return err
 	}
-	// Перекрываем default двумя более специфичными маршрутами (0/1 и 128/1),
-	// не трогая системный default, чтобы легко откатиться.
+	// Перекрываем default двумя более специфичными маршрутами (0/1 и 128/1), не
+	// трогая системный default, чтобы легко откатиться.
 	if err := run("route", "-n", "add", "-net", "0.0.0.0/1", "-interface", ifName); err != nil {
 		return err
 	}
@@ -87,44 +114,38 @@ func (d *darwinPlatform) applyRouting(ifName string, p Params) error {
 		return err
 	}
 	d.splitRoutes = true
-
-	if err := d.setDNS(p.DNS); err != nil {
-		// DNS — не фатально: split-маршруты всё равно уводят публичные резолверы
-		// в туннель. Продолжаем.
-		d.prot.dns = defaultDNS
-	}
+	d.writeJournal()
 	return nil
 }
 
-// setDNS определяет сетевой сервис по физическому устройству и прописывает наш
-// резолвер, сохранив прежний список.
-func (d *darwinPlatform) setDNS(dns string) error {
+// applyDNS прописывает резолвер сетевому сервису, сохранив прежний список.
+// Ошибка не фатальна: split-маршруты уже уводят публичные резолверы в туннель.
+func (d *darwinPlatform) applyDNS(dns string) error {
 	service, err := serviceForDevice(d.phys.dev)
 	if err != nil {
 		return err
 	}
 	d.service = service
 	if cur, err := exec.Command("networksetup", "-getdnsservers", service).Output(); err == nil {
-		d.dnsBackup = strings.TrimSpace(string(cur))
-		d.dnsBackupOK = true
+		d.dnsBackup = normalizeDNSBackup(string(cur))
 	}
+	// Журналируем ДО изменения: если процесс умрёт сразу после setdnsservers,
+	// откат всё равно возможен при следующем запуске.
+	d.dnsReconfig = true
+	d.writeJournal()
+
 	if err := run("networksetup", "-setdnsservers", service, dns); err != nil {
+		d.dnsReconfig = false
+		d.writeJournal()
 		return err
 	}
-	d.dnsReconfig = true
 	return nil
 }
 
 func (d *darwinPlatform) revertRouting() error {
 	var firstErr error
 	if d.dnsReconfig && d.service != "" {
-		// networksetup требует слово "empty" для сброса на DHCP-значения.
-		restore := "empty"
-		if d.dnsBackupOK && d.dnsBackup != "" && !strings.Contains(d.dnsBackup, "aren't any") {
-			restore = d.dnsBackup
-		}
-		args := append([]string{"-setdnsservers", d.service}, strings.Fields(restore)...)
-		if err := run("networksetup", args...); err != nil {
+		if err := restoreDNS(d.service, d.dnsBackup); err != nil {
 			firstErr = err
 		}
 		d.dnsReconfig = false
@@ -138,7 +159,49 @@ func (d *darwinPlatform) revertRouting() error {
 		}
 		d.splitRoutes = false
 	}
+	clearJournal()
 	return firstErr
+}
+
+// writeJournal сохраняет текущее состояние отката на диск.
+func (d *darwinPlatform) writeJournal() {
+	j := journal{TunName: d.tunName, SplitRoutes: d.splitRoutes}
+	if d.dnsReconfig {
+		j.DNSService = d.service
+		j.DNSBackup = d.dnsBackup
+	}
+	j.save()
+}
+
+// restoreDNS возвращает сервису прежние резолверы. Пустой backup означает
+// «не было своих» — networksetup сбрасывается словом empty (вернётся к DHCP).
+func restoreDNS(service, backup string) error {
+	args := []string{"-setdnsservers", service}
+	if backup == "" {
+		args = append(args, "empty")
+	} else {
+		args = append(args, strings.Fields(backup)...)
+	}
+	return run("networksetup", args...)
+}
+
+// normalizeDNSBackup приводит вывод -getdnsservers к списку адресов. Когда своих
+// резолверов нет, networksetup печатает фразу вида "There aren't any DNS
+// Servers set on ..." — её нужно трактовать как пустой список.
+func normalizeDNSBackup(out string) string {
+	out = strings.TrimSpace(out)
+	if out == "" || strings.Contains(strings.ToLower(out), "aren't any") {
+		return ""
+	}
+	fields := strings.Fields(out)
+	for _, f := range fields {
+		// Санитарная проверка: ожидаем адреса, а не текст сообщения.
+		if strings.ContainsAny(f, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") &&
+			!strings.Contains(f, ":") {
+			return ""
+		}
+	}
+	return strings.Join(fields, " ")
 }
 
 // serviceForDevice сопоставляет устройство (enX) с именем сетевого сервиса,

@@ -34,6 +34,7 @@ interface SocketProtector {
 interface BoardProxyClient {
     fun start()
     fun stop()
+    fun reconnect(): Boolean
     suspend fun awaitTermination()
 }
 

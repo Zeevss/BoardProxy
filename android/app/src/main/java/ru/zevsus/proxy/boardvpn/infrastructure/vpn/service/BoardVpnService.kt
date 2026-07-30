@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import ru.zevsus.proxy.boardvpn.app.BoardVpnApplication
 import ru.zevsus.proxy.boardvpn.domain.model.VpnConnectResult
@@ -18,6 +19,7 @@ import ru.zevsus.proxy.boardvpn.domain.model.VpnSessionPhase
 import ru.zevsus.proxy.boardvpn.domain.repository.VpnRepository
 import ru.zevsus.proxy.boardvpn.infrastructure.core.SocketProtector
 import ru.zevsus.proxy.boardvpn.infrastructure.tun.HevPacketForwarder
+import ru.zevsus.proxy.boardvpn.infrastructure.tun.VpnTunnelConfig
 import ru.zevsus.proxy.boardvpn.infrastructure.tun.VpnTunnelFactory
 import ru.zevsus.proxy.boardvpn.infrastructure.vpn.AndroidVpnRuntime
 import ru.zevsus.proxy.boardvpn.infrastructure.vpn.UnderlyingNetworkRoute
@@ -31,23 +33,31 @@ class BoardVpnService : VpnService() {
     private lateinit var underlyingRoute: UnderlyingNetworkRoute
     private lateinit var vpnRepository: VpnRepository
 
-    private var activeProfileId: VpnProfileId? = null
-    private var stopDisposition = StopDisposition.Finish
-    private var paused = false
-    private var shutdownInProgress = false
+    private var serviceState: ServiceState = ServiceState.Idle
 
     override fun onCreate() {
         super.onCreate()
         val container = (application as BoardVpnApplication).container
         vpnRepository = container.vpnRepository
-        underlyingRoute = UnderlyingNetworkRoute(this)
+        underlyingRoute = UnderlyingNetworkRoute(this) { change ->
+            if (::runtime.isInitialized) {
+                runtime.underlyingNetworkChanged(change)
+            }
+        }
         notifications = VpnNotificationManager(this).also { it.createChannel() }
         runtime = AndroidVpnRuntime(
             scope = serviceScope,
             profiles = container.profileRepository,
             repository = container.androidVpnRepository,
             clientFactory = container.boardProxyClientFactory,
-            tunnelFactory = VpnTunnelFactory(this),
+            tunnelFactory = VpnTunnelFactory(this) {
+                VpnTunnelConfig(
+                    appRoutingPolicy = container.settingsRepository
+                        .observeSettings()
+                        .first()
+                        .appRoutingPolicy,
+                )
+            },
             packetForwarder = HevPacketForwarder(this),
             socketProtector = object : SocketProtector {
                 override fun protect(fileDescriptor: Int): Boolean =
@@ -64,22 +74,14 @@ class BoardVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (val command = VpnServiceCommand.fromIntent(intent)) {
             is VpnServiceCommand.Connect -> {
-                activeProfileId = command.profileId
-                stopDisposition = StopDisposition.Finish
-                paused = false
-                shutdownInProgress = false
+                serviceState = ServiceState.Running(command.profileId)
                 startInForeground(VpnSessionPhase.Starting)
                 runtime.start(command.sessionId, command.profileId)
             }
             VpnServiceCommand.Pause -> pauseRuntime()
             VpnServiceCommand.Resume -> resumeRuntime()
-            VpnServiceCommand.Disconnect -> {
-                stopDisposition = StopDisposition.Finish
-                paused = false
-                shutdownInProgress = true
-                notifications.update(VpnSessionPhase.Stopping)
-                runtime.stop()
-            }
+            VpnServiceCommand.Restart -> restartRuntime()
+            VpnServiceCommand.Disconnect -> stopRuntime(keepNotification = false)
             null -> stopSelf(startId)
         }
         return START_NOT_STICKY
@@ -111,29 +113,43 @@ class BoardVpnService : VpnService() {
 
     private fun stopServiceAfterRuntime() {
         mainHandler.post {
-            shutdownInProgress = false
-            if (stopDisposition == StopDisposition.Pause && activeProfileId != null) {
-                stopDisposition = StopDisposition.Finish
-                paused = true
-                notifications.showPaused()
-            } else {
-                finishService()
+            when (val state = serviceState) {
+                is ServiceState.Stopping -> {
+                    if (state.restartAfterStop) {
+                        resumeProfile(state.profileId)
+                    } else if (state.keepNotification) {
+                        serviceState = ServiceState.Paused(state.profileId)
+                        notifications.showPaused()
+                    } else {
+                        finishService()
+                    }
+                }
+                ServiceState.Idle,
+                is ServiceState.Paused,
+                is ServiceState.Resuming,
+                is ServiceState.Running,
+                -> finishService()
             }
         }
     }
 
     private fun pauseRuntime() {
-        if (paused || shutdownInProgress || activeProfileId == null) return
-        stopDisposition = StopDisposition.Pause
-        shutdownInProgress = true
-        notifications.update(VpnSessionPhase.Stopping)
-        runtime.stop()
+        if (serviceState !is ServiceState.Running) return
+        stopRuntime(keepNotification = true)
     }
 
     private fun resumeRuntime() {
-        if (!paused || shutdownInProgress) return
-        val profileId = activeProfileId ?: return
-        paused = false
+        val pausedState = serviceState as? ServiceState.Paused ?: return
+        resumeProfile(pausedState.profileId)
+    }
+
+    private fun restartRuntime() {
+        if (serviceState !is ServiceState.Running) return
+        stopRuntime(keepNotification = true, restartAfterStop = true)
+    }
+
+    private fun resumeProfile(profileId: VpnProfileId) {
+        serviceState = ServiceState.Resuming(profileId)
         notifications.update(VpnSessionPhase.Starting)
 
         serviceScope.launch {
@@ -148,16 +164,48 @@ class BoardVpnService : VpnService() {
         }
     }
 
+    private fun stopRuntime(
+        keepNotification: Boolean,
+        restartAfterStop: Boolean = false,
+    ) {
+        val profileId = serviceState.profileId ?: run {
+            finishService()
+            return
+        }
+        serviceState = ServiceState.Stopping(profileId, keepNotification, restartAfterStop)
+        notifications.update(VpnSessionPhase.Stopping)
+        runtime.stop()
+    }
+
     private fun finishService() {
-        paused = false
-        shutdownInProgress = false
-        activeProfileId = null
+        serviceState = ServiceState.Idle
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
-    private enum class StopDisposition {
-        Pause,
-        Finish,
+    private sealed interface ServiceState {
+        val profileId: VpnProfileId?
+
+        data object Idle : ServiceState {
+            override val profileId: VpnProfileId? = null
+        }
+
+        data class Running(
+            override val profileId: VpnProfileId,
+        ) : ServiceState
+
+        data class Stopping(
+            override val profileId: VpnProfileId,
+            val keepNotification: Boolean,
+            val restartAfterStop: Boolean,
+        ) : ServiceState
+
+        data class Paused(
+            override val profileId: VpnProfileId,
+        ) : ServiceState
+
+        data class Resuming(
+            override val profileId: VpnProfileId,
+        ) : ServiceState
     }
 }

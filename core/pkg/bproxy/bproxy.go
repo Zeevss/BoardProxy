@@ -478,6 +478,24 @@ func (c *Client) Stop() {
 	}
 }
 
+// Reconnect forces the current transport session to be replaced while keeping
+// the local proxy listener alive. Android calls this when its physical network
+// or DNS configuration changes, so new control-plane sockets are protected and
+// bound against the latest network.
+func (c *Client) Reconnect() bool {
+	c.mu.Lock()
+	sess := c.sess
+	running := c.running && !c.stopped
+	c.mu.Unlock()
+	if !running || sess == nil || c.Status() == StatusReconnecting {
+		return false
+	}
+
+	c.setStatus(StatusReconnecting, nil)
+	go func() { _ = sess.Close() }()
+	return true
+}
+
 func (c *Client) finishStopping() {
 	c.beginStopping()
 	c.setStatus(StatusDisconnected, nil)

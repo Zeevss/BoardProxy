@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	bproxy-core v0.0.0
-	fyne.io/systray v1.11.0
+	github.com/energye/systray v1.0.3
 	github.com/wailsapp/wails/v2 v2.12.0
 	github.com/xjasonlyu/tun2socks/v2 v2.7.0
 	golang.org/x/net v0.56.0

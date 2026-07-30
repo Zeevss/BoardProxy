@@ -30,6 +30,18 @@ environment provides WebKitGTK 4.1. The binary is written to:
 build/bin/boardproxy
 ```
 
+## Logging
+
+Every log line and status change is printed to the binary's stdout in addition
+to the in-app Logs screen, so running from a terminal shows what is happening:
+
+```bash
+./build/bin/boardproxy
+```
+
+Helper-side logs are included: they travel to the GUI over the socket and go
+through the same path. Metrics are deliberately not printed (once per second).
+
 ## Modes: proxy and TUN
 
 The client supports two routing modes, chosen in **Proxy settings → Режим
@@ -98,7 +110,11 @@ stream metrics so the UI can show domains instead of bare IPs.
   `*_windows.go`);
 - `internal/helperipc` — GUI⇄helper protocol (config + events/commands);
 - `internal/elevate` — per-OS privilege-elevation launcher;
-- `tray.go` — show/quit tray lifecycle;
+- `tray.go` — tray menu (open / connect-toggle / profile submenu / quit). Uses
+  the `energye/systray` fork rather than `fyne.io/systray`: on macOS the latter
+  declares an Objective-C `AppDelegate` that clashes with wails at link time
+  (`duplicate symbol _OBJC_METACLASS_$_AppDelegate`). The fork also supports
+  separate left/right click handlers;
 - `frontend/src/store` — reactive Zustand state;
 - `frontend/src/screens` — overview, profiles, statistics, proxy settings and
   logs;

@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
+import ru.zevsus.proxy.boardvpn.domain.model.AppRoutingPolicy
 import ru.zevsus.proxy.boardvpn.domain.model.AppSettings
 import ru.zevsus.proxy.boardvpn.domain.model.ThemeMode
 import ru.zevsus.proxy.boardvpn.domain.repository.AppSettingsRepository
@@ -23,7 +24,7 @@ class SettingsViewModelTest {
     val mainDispatcherRule = MainDispatcherRule()
 
     @Test
-    fun `every toggle is persisted and observed back`() = runTest {
+    fun `settings changes are persisted and observed back`() = runTest {
         val repository = InMemoryAppSettingsRepository()
         val viewModel = SettingsViewModel(repository)
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
@@ -32,14 +33,12 @@ class SettingsViewModelTest {
         runCurrent()
 
         viewModel.onAction(SettingsAction.ChangeThemeMode(ThemeMode.Dark))
-        viewModel.onAction(SettingsAction.ChangeDynamicColor(false))
         viewModel.onAction(SettingsAction.ChangeAutoConnect(true))
         runCurrent()
 
         assertEquals(
             AppSettings(
                 themeMode = ThemeMode.Dark,
-                dynamicColor = false,
                 autoConnectOnLaunch = true,
             ),
             viewModel.uiState.value.settings,
@@ -56,11 +55,11 @@ private class InMemoryAppSettingsRepository : AppSettingsRepository {
         settings.update { it.copy(themeMode = mode) }
     }
 
-    override suspend fun setDynamicColor(enabled: Boolean) {
-        settings.update { it.copy(dynamicColor = enabled) }
-    }
-
     override suspend fun setAutoConnectOnLaunch(enabled: Boolean) {
         settings.update { it.copy(autoConnectOnLaunch = enabled) }
+    }
+
+    override suspend fun setAppRoutingPolicy(policy: AppRoutingPolicy) {
+        settings.update { it.copy(appRoutingPolicy = policy) }
     }
 }

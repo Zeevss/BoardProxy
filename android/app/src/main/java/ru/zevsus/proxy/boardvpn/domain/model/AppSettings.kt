@@ -11,8 +11,8 @@ enum class ThemeMode {
 @Serializable
 data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.System,
-    val dynamicColor: Boolean = true,
     val autoConnectOnLaunch: Boolean = false,
+    val appRoutingPolicy: AppRoutingPolicy = AppRoutingPolicy.AllApps,
 ) {
     companion object {
         val Default = AppSettings()

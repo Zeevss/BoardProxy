@@ -1,10 +1,10 @@
 package ru.zevsus.proxy.boardvpn.ui.home
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
-import kotlin.time.TimeSource
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -32,7 +32,7 @@ import ru.zevsus.proxy.boardvpn.domain.repository.VpnRepository
 class HomeViewModel(
     private val vpnRepository: VpnRepository,
     private val profileRepository: VpnProfileRepository,
-    private val timeSource: TimeSource = TimeSource.Monotonic,
+    private val elapsedRealtimeMillis: () -> Long = SystemClock::elapsedRealtime,
 ) : ViewModel() {
     private val commandProblem = MutableStateFlow<HomeProblem?>(null)
 
@@ -47,16 +47,24 @@ class HomeViewModel(
 
     /** Ticks once per second while a session carries traffic, `null` otherwise. */
     private val connectedDuration: Flow<Duration?> = vpnRepository.observeSession()
-        .map { session -> session.toHomeStatus().isSessionLive() }
+        .map { session ->
+            (session as? VpnSessionState.Active)
+                ?.takeIf { it.phase.isSessionLive() }
+                ?.connectedAtElapsedRealtimeMillis
+        }
         .distinctUntilChanged()
-        .flatMapLatest { live ->
-            if (!live) {
+        .flatMapLatest { connectedAt ->
+            if (connectedAt == null) {
                 flowOf(null)
             } else {
                 flow {
-                    val startMark = timeSource.markNow()
                     while (true) {
-                        emit(startMark.elapsedNow())
+                        emit(
+                            ((elapsedRealtimeMillis() - connectedAt)
+                                .coerceAtLeast(0)
+                                / 1_000)
+                                .seconds
+                        )
                         delay(1.seconds)
                     }
                 }
@@ -141,8 +149,8 @@ class HomeViewModel(
     )
 }
 
-private fun HomeConnectionStatus.isSessionLive(): Boolean =
-    this == HomeConnectionStatus.Connected || this == HomeConnectionStatus.Reconnecting
+private fun VpnSessionPhase.isSessionLive(): Boolean =
+    this == VpnSessionPhase.Connected || this is VpnSessionPhase.Reconnecting
 
 private fun VpnSessionState.toHomeStatus(): HomeConnectionStatus = when (this) {
     VpnSessionState.Idle,

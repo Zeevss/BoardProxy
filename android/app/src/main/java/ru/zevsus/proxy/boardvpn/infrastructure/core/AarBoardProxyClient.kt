@@ -47,6 +47,8 @@ private class AarBoardProxyClient(
         client.stop()
     }
 
+    override fun reconnect(): Boolean = client.reconnect()
+
     override suspend fun awaitTermination() {
         withContext(Dispatchers.IO) { client.awaitTermination() }
     }

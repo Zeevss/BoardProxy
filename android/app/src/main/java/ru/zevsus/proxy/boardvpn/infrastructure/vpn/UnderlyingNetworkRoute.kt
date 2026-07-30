@@ -21,7 +21,10 @@ import java.net.Inet4Address
  * A protected socket is outside the VPN, but it is not automatically pinned to the
  * same network from which an arbitrary ConnectivityManager callback obtained DNS.
  */
-class UnderlyingNetworkRoute(context: Context) : Closeable {
+class UnderlyingNetworkRoute(
+    context: Context,
+    private val onNetworkChanged: (String) -> Unit = {},
+) : Closeable {
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
     private val lock = Any()
     private val propertiesByNetwork = linkedMapOf<Network, LinkProperties>()
@@ -32,30 +35,47 @@ class UnderlyingNetworkRoute(context: Context) : Closeable {
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            synchronized(lock) {
-                connectivity.getLinkProperties(network)?.let {
-                    propertiesByNetwork[network] = it
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || currentNetwork == null) {
+            val changed = synchronized(lock) {
+                if (currentNetwork == network) {
+                    false
+                } else {
                     currentNetwork = network
-                    logSelection("available")
+                    true
                 }
+            }
+            logSelection("available")
+            if (changed) {
+                onNetworkChanged("physical network available")
             }
         }
 
         override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
-            synchronized(lock) {
+            val dnsChanged = synchronized(lock) {
+                val previousDns = propertiesByNetwork[network]?.preferredDnsAddress()
                 propertiesByNetwork[network] = properties
+                network == currentNetwork &&
+                    previousDns != null &&
+                    previousDns != properties.preferredDnsAddress()
+            }
+            if (dnsChanged) {
+                logSelection("dns changed")
+                onNetworkChanged("underlying DNS changed")
             }
         }
 
         override fun onLost(network: Network) {
-            synchronized(lock) {
+            val changed = synchronized(lock) {
                 propertiesByNetwork.remove(network)
                 if (currentNetwork == network) {
                     currentNetwork = propertiesByNetwork.keys.lastOrNull()
-                    logSelection("lost")
+                    true
+                } else {
+                    false
                 }
+            }
+            if (changed) {
+                logSelection("lost")
+                onNetworkChanged("physical network lost")
             }
         }
     }
@@ -95,15 +115,19 @@ class UnderlyingNetworkRoute(context: Context) : Closeable {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
 
         val network = currentNetwork ?: return true
-        return runCatching {
+        runCatching {
             // fromFd duplicates the descriptor. Binding the duplicate changes the
             // underlying socket while allowing Go to retain ownership of the original.
             ParcelFileDescriptor.fromFd(fileDescriptor).use { duplicate ->
                 network.bindSocket(duplicate.fileDescriptor)
             }
         }.onFailure { error ->
-            Log.e(TAG, "failed to bind fd=$fileDescriptor to network=$network", error)
-        }.isSuccess
+            // Some Android builds (notably Samsung One UI) reject binding an
+            // already protected descriptor with EPERM. Protection is sufficient
+            // to keep the socket outside the VPN, so network pinning is optional.
+            Log.w(TAG, "network pinning unavailable fd=$fileDescriptor network=$network", error)
+        }
+        return true
     }
 
     fun dnsAddress(): String = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
@@ -127,9 +151,13 @@ class UnderlyingNetworkRoute(context: Context) : Closeable {
         ?: false
 
     private fun logSelection(reason: String) {
-        val network = currentNetwork
-        val dns = network?.let(propertiesByNetwork::get)?.preferredDnsAddress()
-            ?: FALLBACK_DNS_ADDRESS
+        val (network, dns) = synchronized(lock) {
+            val network = currentNetwork
+            network to (
+                network?.let(propertiesByNetwork::get)?.preferredDnsAddress()
+                    ?: FALLBACK_DNS_ADDRESS
+                )
+        }
         Log.i(TAG, "underlying network reason=$reason network=$network dns=$dns")
     }
 

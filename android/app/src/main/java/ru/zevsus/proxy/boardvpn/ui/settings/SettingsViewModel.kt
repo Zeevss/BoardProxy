@@ -16,8 +16,8 @@ data class SettingsUiState(
 
 sealed interface SettingsAction {
     data class ChangeThemeMode(val mode: ThemeMode) : SettingsAction
-    data class ChangeDynamicColor(val enabled: Boolean) : SettingsAction
     data class ChangeAutoConnect(val enabled: Boolean) : SettingsAction
+    data object OpenAppRouting : SettingsAction
     data object OpenSystemVpnSettings : SettingsAction
 }
 
@@ -37,12 +37,10 @@ class SettingsViewModel(
             is SettingsAction.ChangeThemeMode -> viewModelScope.launch {
                 settingsRepository.setThemeMode(action.mode)
             }
-            is SettingsAction.ChangeDynamicColor -> viewModelScope.launch {
-                settingsRepository.setDynamicColor(action.enabled)
-            }
             is SettingsAction.ChangeAutoConnect -> viewModelScope.launch {
                 settingsRepository.setAutoConnectOnLaunch(action.enabled)
             }
+            SettingsAction.OpenAppRouting,
             SettingsAction.OpenSystemVpnSettings -> Unit // handled by the hosting Activity
         }
     }

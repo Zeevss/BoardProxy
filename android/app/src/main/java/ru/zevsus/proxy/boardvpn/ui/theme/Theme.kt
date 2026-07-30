@@ -1,18 +1,14 @@
 package ru.zevsus.proxy.boardvpn.ui.theme
 
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import ru.zevsus.proxy.boardvpn.domain.model.ThemeMode
 
 private val LightColors = lightColorScheme(
@@ -64,14 +60,9 @@ val LocalConnectionColors = staticCompositionLocalOf {
     ConnectionColors(connected = ConnectedLight, reconnecting = ReconnectingLight)
 }
 
-/** True when the device can honour the Material You setting. */
-val dynamicColorAvailable: Boolean
-    get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-
 @Composable
 fun BoardVPNTheme(
     themeMode: ThemeMode = ThemeMode.System,
-    dynamicColor: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val darkTheme = when (themeMode) {
@@ -80,14 +71,7 @@ fun BoardVPNTheme(
         ThemeMode.Dark -> true
     }
 
-    val colorScheme = when {
-        dynamicColor && dynamicColorAvailable -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-        darkTheme -> DarkColors
-        else -> LightColors
-    }
+    val colorScheme = if (darkTheme) DarkColors else LightColors
 
     val connectionColors = if (darkTheme) {
         ConnectionColors(connected = ConnectedDark, reconnecting = ReconnectingDark)

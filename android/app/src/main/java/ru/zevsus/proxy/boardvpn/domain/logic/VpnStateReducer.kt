@@ -1,5 +1,6 @@
 package ru.zevsus.proxy.boardvpn.domain.logic
 
+import ru.zevsus.proxy.boardvpn.domain.model.AppRoutingPolicy
 import ru.zevsus.proxy.boardvpn.domain.model.VpnFailure
 import ru.zevsus.proxy.boardvpn.domain.model.VpnProfileId
 import ru.zevsus.proxy.boardvpn.domain.model.VpnSessionId
@@ -15,9 +16,15 @@ sealed interface VpnEvent {
     ) : VpnEvent
 
     data class TunnelRequested(override val sessionId: VpnSessionId) : VpnEvent
-    data class TunnelEstablished(override val sessionId: VpnSessionId) : VpnEvent
+    data class TunnelEstablished(
+        override val sessionId: VpnSessionId,
+        val appRoutingPolicy: AppRoutingPolicy,
+    ) : VpnEvent
     data class CoreConnected(override val sessionId: VpnSessionId) : VpnEvent
-    data class TunStarted(override val sessionId: VpnSessionId) : VpnEvent
+    data class TunStarted(
+        override val sessionId: VpnSessionId,
+        val elapsedRealtimeMillis: Long,
+    ) : VpnEvent
 
     data class CoreReconnectStarted(
         override val sessionId: VpnSessionId,
@@ -69,19 +76,31 @@ object VpnStateReducer {
                 from = VpnSessionPhase.Starting,
                 to = VpnSessionPhase.RequestingTunnel,
             )
-            is VpnEvent.TunnelEstablished -> state.transition(
-                from = VpnSessionPhase.RequestingTunnel,
-                to = VpnSessionPhase.ConnectingCore,
-            )
+            is VpnEvent.TunnelEstablished -> {
+                if (state.phase == VpnSessionPhase.RequestingTunnel) {
+                    state.copy(
+                        phase = VpnSessionPhase.ConnectingCore,
+                        appliedAppRoutingPolicy = event.appRoutingPolicy,
+                    )
+                } else {
+                    state
+                }
+            }
             is VpnEvent.CoreConnected -> when (state.phase) {
                 VpnSessionPhase.ConnectingCore -> state.withPhase(VpnSessionPhase.StartingTun)
                 is VpnSessionPhase.Reconnecting -> state.withPhase(VpnSessionPhase.Connected)
                 else -> state
             }
-            is VpnEvent.TunStarted -> state.transition(
-                from = VpnSessionPhase.StartingTun,
-                to = VpnSessionPhase.Connected,
-            )
+            is VpnEvent.TunStarted -> {
+                if (state.phase == VpnSessionPhase.StartingTun) {
+                    state.copy(
+                        phase = VpnSessionPhase.Connected,
+                        connectedAtElapsedRealtimeMillis = event.elapsedRealtimeMillis,
+                    )
+                } else {
+                    state
+                }
+            }
             is VpnEvent.CoreReconnectStarted -> when (state.phase) {
                 VpnSessionPhase.Connected,
                 is VpnSessionPhase.Reconnecting,

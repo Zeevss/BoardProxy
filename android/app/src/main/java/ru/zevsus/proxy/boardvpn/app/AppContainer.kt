@@ -5,8 +5,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import ru.zevsus.proxy.boardvpn.domain.repository.AppSettingsRepository
+import ru.zevsus.proxy.boardvpn.domain.repository.InstalledApplicationsRepository
 import ru.zevsus.proxy.boardvpn.domain.repository.VpnProfileRepository
 import ru.zevsus.proxy.boardvpn.domain.repository.VpnRepository
+import ru.zevsus.proxy.boardvpn.infrastructure.applications.PackageManagerInstalledApplicationsRepository
 import ru.zevsus.proxy.boardvpn.infrastructure.core.AarBoardProxyClientFactory
 import ru.zevsus.proxy.boardvpn.infrastructure.core.BoardProxyClientFactory
 import ru.zevsus.proxy.boardvpn.infrastructure.persistence.DataStoreAppSettingsRepository
@@ -36,6 +38,9 @@ class AppContainer(
         context = applicationContext,
         scope = storageScope,
     )
+
+    val installedApplicationsRepository: InstalledApplicationsRepository =
+        PackageManagerInstalledApplicationsRepository(applicationContext)
 
     val androidVpnRepository = AndroidVpnRepository(
         context = applicationContext,

@@ -208,6 +208,47 @@ func TestRunReconnectsAfterEstablishedSessionCloses(t *testing.T) {
 	}
 }
 
+func TestReconnectClosesCurrentSessionAndPublishesStatus(t *testing.T) {
+	c := New(Config{Keylink: "test"})
+	conn := newReconnectTestConn()
+	sess := mux.New(conn, mux.Options{Client: true})
+
+	c.mu.Lock()
+	c.running = true
+	c.sess = sess
+	c.mu.Unlock()
+
+	status := make(chan Status, 1)
+	c.OnStatus(func(value Status, _ error) {
+		select {
+		case status <- value:
+		default:
+		}
+	})
+
+	if !c.Reconnect() {
+		t.Fatal("Reconnect rejected an active session")
+	}
+	if c.Reconnect() {
+		t.Fatal("second Reconnect was accepted while reconnecting")
+	}
+
+	select {
+	case got := <-status:
+		if got != StatusReconnecting {
+			t.Fatalf("status = %s, want %s", got, StatusReconnecting)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reconnecting status was not published")
+	}
+
+	select {
+	case <-sess.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("current mux session was not closed")
+	}
+}
+
 func containsStatus(statuses []Status, want Status) bool {
 	for _, s := range statuses {
 		if s == want {

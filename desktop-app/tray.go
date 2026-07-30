@@ -1,16 +1,22 @@
-//go:build !bindings && !darwin
+//go:build !bindings
 
 package main
 
 import (
 	"sync"
 
-	"fyne.io/systray"
+	"github.com/energye/systray"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// maxTrayProfiles — сколько слотов профилей заранее создаётся в подменю (systray
-// не умеет добавлять пункты после инициализации, поэтому слоты фиксированы и
+// Используется форк energye/systray, а не fyne.io/systray: на macOS последний
+// объявляет Objective-C класс AppDelegate, который уже есть в wails, и линковка
+// падает с "duplicate symbol _OBJC_METACLASS_$_AppDelegate". Форк называет свой
+// класс SystrayAppDelegate и вдобавок умеет раздельные обработчики левого и
+// правого клика по иконке.
+
+// maxTrayProfiles — сколько слотов профилей заранее создаётся в подменю (пункты
+// нельзя добавлять после инициализации, поэтому слоты фиксированы и
 // показываются/прячутся по мере надобности).
 const maxTrayProfiles = 20
 
@@ -69,15 +75,34 @@ func setupTray(app *App) (start, stop func()) {
 	tc := &trayController{app: app}
 	rawStart, rawStop := systray.RunWithExternalLoop(func() {
 		systray.SetIcon(trayIcon)
-		systray.SetTitle("BoardProxy")
 		systray.SetTooltip("BoardProxy")
 
+		// Левый клик по иконке — открыть окно; правый — системное меню.
+		systray.SetOnClick(func(systray.IMenu) { app.showWindow() })
+		systray.SetOnRClick(func(menu systray.IMenu) {
+			if menu != nil {
+				_ = menu.ShowMenu()
+			}
+		})
+
 		show := systray.AddMenuItem("Открыть BoardProxy", "Показать главное окно")
+		show.Click(func() { app.showWindow() })
+
 		systray.AddSeparator()
+
 		toggle := systray.AddMenuItem("Подключить", "Подключить или отключить туннель")
+		toggle.Click(func() { tc.emit("tray:toggle", nil) })
+
 		profiles := systray.AddMenuItem("Профиль", "Выбрать активный профиль")
+
 		systray.AddSeparator()
+
 		quit := systray.AddMenuItem("Выйти", "Остановить BoardProxy")
+		quit.Click(func() {
+			if ctx := app.runtimeContext(); ctx != nil {
+				wruntime.Quit(ctx)
+			}
+		})
 
 		tc.mu.Lock()
 		tc.toggleItem = toggle
@@ -88,38 +113,20 @@ func setupTray(app *App) (start, stop func()) {
 			item.Hide()
 			tc.profileItems[i] = item
 			idx := i
-			go func() {
-				for range item.ClickedCh {
-					tc.mu.Lock()
-					id := tc.profileIDs[idx]
-					tc.mu.Unlock()
-					if id != "" {
-						tc.emit("tray:selectProfile", map[string]string{"id": id})
-					}
+			item.Click(func() {
+				tc.mu.Lock()
+				id := tc.profileIDs[idx]
+				tc.mu.Unlock()
+				if id != "" {
+					tc.emit("tray:selectProfile", map[string]string{"id": id})
 				}
-			}()
+			})
 		}
 		tc.mu.Unlock()
 
 		app.mu.Lock()
 		app.tray = tc
 		app.mu.Unlock()
-
-		go func() {
-			for {
-				select {
-				case <-show.ClickedCh:
-					app.showWindow()
-				case <-toggle.ClickedCh:
-					tc.emit("tray:toggle", nil)
-				case <-quit.ClickedCh:
-					if ctx := app.runtimeContext(); ctx != nil {
-						wruntime.Quit(ctx)
-					}
-					return
-				}
-			}
-		}()
 	}, func() {})
 
 	return func() {

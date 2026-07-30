@@ -277,7 +277,7 @@ func (s *helperSession) handleEvent(ev helperipc.Event) {
 			s.closeSessionDone()
 		}
 	case helperipc.EventLog:
-		s.app.emit("tunnel:log", map[string]string{"level": ev.Level, "msg": ev.Msg})
+		s.app.emitLog(ev.Level, ev.Msg)
 	case helperipc.EventMetrics:
 		var dto MetricsDTO
 		if err := json.Unmarshal(ev.Metrics, &dto); err != nil {

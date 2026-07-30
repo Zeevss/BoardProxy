@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -27,6 +28,8 @@ import ru.zevsus.proxy.boardvpn.ui.home.HomeRoute
 import ru.zevsus.proxy.boardvpn.ui.home.HomeViewModel
 import ru.zevsus.proxy.boardvpn.ui.profiles.ProfilesRoute
 import ru.zevsus.proxy.boardvpn.ui.profiles.ProfilesViewModel
+import ru.zevsus.proxy.boardvpn.ui.routing.AppRoutingScreen
+import ru.zevsus.proxy.boardvpn.ui.routing.AppRoutingViewModel
 import ru.zevsus.proxy.boardvpn.ui.settings.SettingsRoute
 import ru.zevsus.proxy.boardvpn.ui.settings.SettingsViewModel
 
@@ -37,6 +40,7 @@ fun BoardVpnApp(
     homeViewModel: HomeViewModel,
     profilesViewModel: ProfilesViewModel,
     settingsViewModel: SettingsViewModel,
+    appRoutingViewModel: AppRoutingViewModel,
     onConnectRequest: () -> Unit,
     onClipboardImportRequest: () -> Unit,
     onOpenSystemVpnSettings: () -> Unit,
@@ -46,19 +50,24 @@ fun BoardVpnApp(
     val snackbarHostState = remember { SnackbarHostState() }
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
+    val showBottomBar = BoardVpnTab.entries.any { tab ->
+        currentDestination?.hasRoute(tab.route::class) == true
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
-            NavigationBar {
-                BoardVpnTab.entries.forEach { tab ->
-                    val selected = currentDestination?.hasRoute(tab.route::class) == true
-                    NavigationBarItem(
-                        selected = selected,
-                        onClick = { navController.switchTab(tab) },
-                        icon = { Icon(tab.icon, contentDescription = null) },
-                        label = { Text(stringResource(tab.labelRes)) },
-                    )
+            if (showBottomBar) {
+                NavigationBar {
+                    BoardVpnTab.entries.forEach { tab ->
+                        val selected = currentDestination?.hasRoute(tab.route::class) == true
+                        NavigationBarItem(
+                            selected = selected,
+                            onClick = { navController.switchTab(tab) },
+                            icon = { Icon(tab.icon, contentDescription = null) },
+                            label = { Text(stringResource(tab.labelRes)) },
+                        )
+                    }
                 }
             }
         },
@@ -93,7 +102,16 @@ fun BoardVpnApp(
                     viewModel = settingsViewModel,
                     contentPadding = contentPadding,
                     onOpenSystemVpnSettings = onOpenSystemVpnSettings,
+                    onOpenAppRouting = { navController.navigate(AppRoutingDestination) },
                     appVersion = appVersion,
+                )
+            }
+            composable<AppRoutingDestination> {
+                val routingState by appRoutingViewModel.uiState.collectAsStateWithLifecycle()
+                AppRoutingScreen(
+                    state = routingState,
+                    onAction = appRoutingViewModel::onAction,
+                    onBack = navController::popBackStack,
                 )
             }
         }

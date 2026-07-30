@@ -9,7 +9,6 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.test.testTimeSource
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -37,7 +36,11 @@ class HomeViewModelTest {
     @Test
     fun `repository lifecycle is reduced to compact UI statuses`() = runTest {
         val profiles = InMemoryVpnProfileRepository(listOf(profile))
-        val viewModel = HomeViewModel(fakeVpn(profiles), profiles, testTimeSource)
+        val viewModel = HomeViewModel(
+            fakeVpn(profiles),
+            profiles,
+            elapsedRealtimeMillis = { testScheduler.currentTime },
+        )
         collectState(viewModel)
 
         assertEquals(HomeConnectionStatus.Disconnected, viewModel.uiState.value.status)
@@ -64,7 +67,11 @@ class HomeViewModelTest {
     @Test
     fun `session timer runs while connected and resets afterwards`() = runTest {
         val profiles = InMemoryVpnProfileRepository(listOf(profile))
-        val viewModel = HomeViewModel(fakeVpn(profiles), profiles, testTimeSource)
+        val viewModel = HomeViewModel(
+            fakeVpn(profiles),
+            profiles,
+            elapsedRealtimeMillis = { testScheduler.currentTime },
+        )
         collectState(viewModel)
 
         viewModel.connect()
@@ -82,10 +89,42 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun `session timer survives view model recreation`() = runTest {
+        val profiles = InMemoryVpnProfileRepository(listOf(profile))
+        val vpn = fakeVpn(profiles)
+        val first = HomeViewModel(
+            vpn,
+            profiles,
+            elapsedRealtimeMillis = { testScheduler.currentTime },
+        )
+        collectState(first)
+
+        first.connect()
+        advanceTimeBy(5)
+        runCurrent()
+        advanceTimeBy(3_100)
+        runCurrent()
+        assertEquals(3.seconds, first.uiState.value.connectedDuration)
+
+        val recreated = HomeViewModel(
+            vpn,
+            profiles,
+            elapsedRealtimeMillis = { testScheduler.currentTime },
+        )
+        collectState(recreated)
+
+        assertEquals(3.seconds, recreated.uiState.value.connectedDuration)
+    }
+
+    @Test
     fun `selecting a profile is stored in the repository`() = runTest {
         val other = profile.copy(id = VpnProfileId("other"), name = "Other")
         val profiles = InMemoryVpnProfileRepository(listOf(profile, other))
-        val viewModel = HomeViewModel(fakeVpn(profiles), profiles, testTimeSource)
+        val viewModel = HomeViewModel(
+            fakeVpn(profiles),
+            profiles,
+            elapsedRealtimeMillis = { testScheduler.currentTime },
+        )
         collectState(viewModel)
 
         viewModel.onAction(HomeAction.SelectProfile(other.id))
@@ -109,5 +148,6 @@ class HomeViewModelTest {
             reconnectMillis = 1,
             statisticsTickMillis = 1_000,
         ),
+        elapsedRealtimeMillis = { testScheduler.currentTime },
     )
 }

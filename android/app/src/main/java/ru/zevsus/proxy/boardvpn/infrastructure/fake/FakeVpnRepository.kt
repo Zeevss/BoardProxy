@@ -13,6 +13,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import ru.zevsus.proxy.boardvpn.domain.logic.VpnEvent
 import ru.zevsus.proxy.boardvpn.domain.logic.VpnStateReducer
+import ru.zevsus.proxy.boardvpn.domain.model.AppRoutingPolicy
 import ru.zevsus.proxy.boardvpn.domain.model.VpnConnectResult
 import ru.zevsus.proxy.boardvpn.domain.model.VpnFailure
 import ru.zevsus.proxy.boardvpn.domain.model.VpnProfileId
@@ -33,6 +34,7 @@ class FakeVpnRepository(
     private val profiles: VpnProfileRepository,
     private val scope: CoroutineScope,
     private val timing: FakeVpnTiming = FakeVpnTiming(),
+    private val elapsedRealtimeMillis: () -> Long = { System.nanoTime() / 1_000_000 },
 ) : VpnRepository {
     private val mutex = Mutex()
     private val sessionIds = AtomicLong()
@@ -90,6 +92,15 @@ class FakeVpnRepository(
         }
     }
 
+    override suspend fun restart() {
+        val profileId = mutex.withLock {
+            (session.value as? VpnSessionState.Active)?.profileId
+        } ?: return
+
+        disconnect()
+        connect(profileId)
+    }
+
     suspend fun simulateReconnect(
         failure: VpnFailure = VpnFailure.CoreConnectionLost("Simulated network loss"),
     ): Boolean {
@@ -135,15 +146,16 @@ class FakeVpnRepository(
     private suspend fun runSession(sessionId: VpnSessionId) {
         val startupEvents = listOf(
             VpnEvent.TunnelRequested(sessionId),
-            VpnEvent.TunnelEstablished(sessionId),
+            VpnEvent.TunnelEstablished(sessionId, AppRoutingPolicy.AllApps),
             VpnEvent.CoreConnected(sessionId),
-            VpnEvent.TunStarted(sessionId),
         )
 
         for (event in startupEvents) {
             delay(timing.startupStepMillis)
             if (!applyEvent(event)) return
         }
+        delay(timing.startupStepMillis)
+        if (!applyEvent(VpnEvent.TunStarted(sessionId, elapsedRealtimeMillis()))) return
 
         while (true) {
             delay(timing.statisticsTickMillis)

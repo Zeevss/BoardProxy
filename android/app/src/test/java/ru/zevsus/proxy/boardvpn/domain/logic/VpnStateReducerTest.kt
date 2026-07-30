@@ -3,6 +3,7 @@ package ru.zevsus.proxy.boardvpn.domain.logic
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Test
+import ru.zevsus.proxy.boardvpn.domain.model.AppRoutingPolicy
 import ru.zevsus.proxy.boardvpn.domain.model.VpnFailure
 import ru.zevsus.proxy.boardvpn.domain.model.VpnProfileId
 import ru.zevsus.proxy.boardvpn.domain.model.VpnSessionId
@@ -21,12 +22,18 @@ class VpnStateReducerTest {
         assertPhase<VpnSessionPhase.Starting>(state)
         state = reduce(state, VpnEvent.TunnelRequested(sessionId))
         assertPhase<VpnSessionPhase.RequestingTunnel>(state)
-        state = reduce(state, VpnEvent.TunnelEstablished(sessionId))
+        state = reduce(
+            state,
+            VpnEvent.TunnelEstablished(sessionId, AppRoutingPolicy.AllApps),
+        )
         assertPhase<VpnSessionPhase.ConnectingCore>(state)
         state = reduce(state, VpnEvent.CoreConnected(sessionId))
         assertPhase<VpnSessionPhase.StartingTun>(state)
-        state = reduce(state, VpnEvent.TunStarted(sessionId))
+        state = reduce(state, VpnEvent.TunStarted(sessionId, 42_000))
         assertPhase<VpnSessionPhase.Connected>(state)
+        state as VpnSessionState.Active
+        assertEquals(42_000L, state.connectedAtElapsedRealtimeMillis)
+        assertEquals(AppRoutingPolicy.AllApps, state.appliedAppRoutingPolicy)
     }
 
     @Test
@@ -65,7 +72,7 @@ class VpnStateReducerTest {
     fun `stale and invalid events are ignored`() {
         val state = active(VpnSessionPhase.Starting)
 
-        assertSame(state, reduce(state, VpnEvent.TunStarted(sessionId)))
+        assertSame(state, reduce(state, VpnEvent.TunStarted(sessionId, 42_000)))
         assertSame(
             state,
             reduce(

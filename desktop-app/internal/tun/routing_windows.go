@@ -34,6 +34,9 @@ type physNet struct {
 }
 
 func newPlatform() (platform, error) {
+	// Откатываем настройки, если прошлый запуск завершился аварийно.
+	recoverStaleState()
+
 	phys, err := detectPhysical()
 	if err != nil {
 		return nil, err
@@ -124,15 +127,52 @@ func (w *windowsPlatform) applyRouting(ifName string, p Params) error {
 	}
 	w.addedRoute = true
 	w.routeNexthop = p.Gateway
-	// DNS на адаптере.
+	w.writeJournal()
+	return nil
+}
+
+// applyDNS прописывает резолвер на адаптере TUN. Вызывается после старта
+// локального резолвера (см. Controller.ApplyDNS).
+func (w *windowsPlatform) applyDNS(dns string) error {
+	// Журналируем ДО изменения — страховка от аварийного завершения.
+	w.dnsReconfig = true
+	w.writeJournal()
 	if err := run("netsh", "interface", "ipv4", "set", "dnsservers",
-		fmt.Sprintf("name=%s", ifName), "static", p.DNS, "primary"); err != nil {
-		// Не фатально: default-маршрут уже уводит публичные резолверы в туннель.
-		w.prot.dns = defaultDNS
-	} else {
-		w.dnsReconfig = true
+		fmt.Sprintf("name=%s", w.tunName), "static", dns, "primary"); err != nil {
+		w.dnsReconfig = false
+		w.writeJournal()
+		return err
 	}
 	return nil
+}
+
+// writeJournal сохраняет состояние отката на диск (см. journal.go).
+func (w *windowsPlatform) writeJournal() {
+	j := journal{TunName: w.tunName, DefaultRoute: w.addedRoute, DNSService: w.routeNexthop}
+	if w.dnsReconfig {
+		j.DNSBackup = "dhcp"
+	}
+	j.save()
+}
+
+// recoverStaleState откатывает настройки, оставшиеся от аварийного завершения.
+func recoverStaleState() {
+	j := loadJournal()
+	if j == nil {
+		return
+	}
+	if j.TunName != "" {
+		if j.DNSBackup != "" {
+			_ = run("netsh", "interface", "ipv4", "set", "dnsservers",
+				fmt.Sprintf("name=%s", j.TunName), "dhcp")
+		}
+		if j.DefaultRoute {
+			_ = run("netsh", "interface", "ipv4", "delete", "route",
+				"prefix=0.0.0.0/0", fmt.Sprintf("interface=%s", j.TunName),
+				fmt.Sprintf("nexthop=%s", j.DNSService))
+		}
+	}
+	clearJournal()
 }
 
 func (w *windowsPlatform) revertRouting() error {
@@ -152,6 +192,7 @@ func (w *windowsPlatform) revertRouting() error {
 		}
 		w.addedRoute = false
 	}
+	clearJournal()
 	return firstErr
 }
 

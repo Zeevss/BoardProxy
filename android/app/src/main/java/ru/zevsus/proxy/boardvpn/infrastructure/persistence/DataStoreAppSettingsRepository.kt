@@ -8,6 +8,7 @@ import androidx.datastore.dataStoreFile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import ru.zevsus.proxy.boardvpn.domain.model.AppRoutingPolicy
 import ru.zevsus.proxy.boardvpn.domain.model.AppSettings
 import ru.zevsus.proxy.boardvpn.domain.model.ThemeMode
 import ru.zevsus.proxy.boardvpn.domain.repository.AppSettingsRepository
@@ -22,12 +23,12 @@ class DataStoreAppSettingsRepository internal constructor(
         store.updateData { it.copy(themeMode = mode) }
     }
 
-    override suspend fun setDynamicColor(enabled: Boolean) {
-        store.updateData { it.copy(dynamicColor = enabled) }
-    }
-
     override suspend fun setAutoConnectOnLaunch(enabled: Boolean) {
         store.updateData { it.copy(autoConnectOnLaunch = enabled) }
+    }
+
+    override suspend fun setAppRoutingPolicy(policy: AppRoutingPolicy) {
+        store.updateData { it.copy(appRoutingPolicy = policy) }
     }
 
     companion object {

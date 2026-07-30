@@ -245,22 +245,32 @@ Status: implemented for the Home, Profiles and Settings destinations.
 - Keep screens stateless and cover key states with previews and tests.
 - Routes own side effects: snackbars, dialogs, clipboard and permission
   callbacks. Screens receive state plus callbacks only.
+- Reuse `BoardVpnPageHeader`, `BoardVpnSection`, `BoardVpnNavigationRow`,
+  `BoardVpnPill` and the shared card geometry instead of recreating screen
+  chrome in each destination.
 
 The shell is a bottom `NavigationBar` with three type-safe destinations
 (`HomeDestination`, `ProfilesDestination`, `SettingsDestination`) hosted by
 `BoardVpnApp`, which also owns the shared `SnackbarHostState`. Tab switching
 saves and restores per-tab state.
 
-Home is a single shield button: one control that connects when idle and
-disconnects while a session is live, with an animated pulse during
-`Connecting`/`Reconnecting`, a session timer driven by an injectable
-`TimeSource`, live download/latency/upload figures and a profile selector sheet.
+Home uses a single animated shield control. Its surface and icon respond to the
+connection state, while a pulse communicates connection and reconnection work.
+The session stores the monotonic timestamp at which TUN became active, so the
+timer continues from the same value when the Activity/ViewModel is recreated.
+The screen also contains a session timer
+driven by an injectable `TimeSource`, live download/latency/upload cards and a
+profile selector sheet.
 
 Profiles supports select, manual add, rename, keylink replacement, delete with
-confirmation and clipboard import. Settings covers theme mode, Material You,
+confirmation and clipboard import. Settings covers theme mode,
 connect-on-launch, a shortcut to the system VPN screen and version information.
 Network settings (SOCKS port, UDP, local DNS, DNS server, bypass subnets and
-split tunneling) are deliberately absent until they are wired into the runtime.
+bypass routes) are deliberately absent until they are wired into the runtime.
+Settings links to a dedicated application-routing destination. The screen lists
+launcher-visible installed applications without requesting
+`QUERY_ALL_PACKAGES`, supports search and exposes all-apps, bypass-selected and
+proxy-selected-only modes.
 
 ### Stage 5: VPN permission flow
 
@@ -285,6 +295,9 @@ Status: implemented.
   keeps the foreground service and notification; Resume reconnects the stored
   profile. Finish and the regular in-app Disconnect path remove the foreground
   notification and stop the service.
+- Model service ownership with one sealed `ServiceState` instead of several
+  independent booleans. This makes `Running`, `Stopping`, `Paused` and
+  `Resuming` mutually exclusive and keeps command guards close to transitions.
 - Request `POST_NOTIFICATIONS` at connect time on Android 13+; denial does not
   block the VPN, but Android will hide its foreground notification from the
   notification drawer.
@@ -299,10 +312,13 @@ profile selection:
   connected and connection/stop transitions. Starting from the tile is direct
   when VPN consent already exists; otherwise it opens `MainActivity` to request
   notification and VPN permissions.
+- A long press on the Tile resolves `ACTION_QS_TILE_PREFERENCES` to
+  `MainActivity` instead of Android's application-info screen.
 - The static launcher shortcut `toggle_proxy` appears on long press as
-  “Toggle proxy” / “Переключить прокси”. Its explicit action is handled by the
-  single-top `MainActivity`, which disconnects an active session or starts the
-  stored selected profile through the normal permission flow.
+  “Toggle proxy” / “Включить/выключить прокси”. It targets the translucent
+  `ProxyToggleActivity` trampoline, toggles the repository and finishes without
+  opening the main application task. Android's VPN consent dialog is the only
+  UI it can display when consent has not been granted yet.
 - The tile uses Android's standard non-active mode: the system binds it while
   Quick Settings is visible, and it collects the same session flow as the
   screen. This avoids stale `ACTIVE` state after process death and keeps the
@@ -335,15 +351,44 @@ Status: implemented.
 
 ### Stage 9: TUN interface
 
-Status: implemented up to the packet-forwarder boundary.
+Status: implemented, including the infrastructure boundary for per-application
+split tunneling.
 
 - Add explicit address, route, DNS and MTU configuration.
 - Establish the interface through `VpnService.Builder`.
 - Make TUN ownership and closure unambiguous on every failure path.
+- Persist `AppRoutingPolicy` in settings and read a fresh snapshot immediately
+  before each TUN is established.
+- Keep the selected application mode and package set independently from the
+  `allProxy` flag. With `allProxy=true`, `VpnService.Builder` receives no
+  allowed/disallowed application calls, while the user's previous selection is
+  retained for later reuse.
+- Support `OnlySelectedApps` and `ExcludeSelectedApps` when `allProxy=false`.
+  These modes require a non-empty set of valid Android package names; an
+  uninstalled package fails tunnel creation with an explicit error.
+- Apply application routing only to a new interface. Updating the stored policy
+  does not mutate a running VPN. The active session retains the policy used to
+  establish its TUN; when it differs from settings, the routing screen offers
+  an explicit proxy restart that rebuilds the interface with the new policy.
 - Reserve an explicit disabled UDP mode in the tun engine configuration.
-- Until stage 10 supplies tun2socks, fail explicitly after TUN/core startup and
-  clean every resource instead of publishing a false `Connected` state or
-  leaving Android traffic in a black-hole VPN.
+
+The technical API is deliberately direct and does not add a one-method use-case
+class:
+
+```kotlin
+settingsRepository.setAppRoutingPolicy(
+    AppRoutingPolicy(
+        mode = AppRoutingMode.ExcludeSelectedApps,
+        packageNames = setOf("com.example.direct"),
+        allProxy = false,
+    )
+)
+```
+
+A future settings screen only needs to obtain installed package names from
+Android, build this domain value and call the repository. It must present allow
+and exclude as separate modes because `VpnService.Builder` does not permit both
+lists on one interface.
 
 ### Stage 10: TCP/UDP tun2socks
 
@@ -360,11 +405,21 @@ Status: implemented with `hev-socks5-tunnel` pinned at upstream commit
 
 ### Stage 11: reconnect lifecycle
 
+- Status: implemented for core session loss and Android physical-network/DNS
+  changes.
+
 - Keep TUN stable during recoverable BoardProxy reconnects.
 - Add capped exponential backoff with jitter.
 - Cancel all retries immediately on manual disconnect.
 - Distinguish recoverable network failures from configuration failures.
 - Limit full runtime restarts after TUN or tun2socks failure.
+
+`UnderlyingNetworkRoute` observes both the selected non-VPN network and its
+`LinkProperties`. A physical network switch, loss or DNS-address change sends a
+serialized runtime message. The mobile facade calls `Client.Reconnect()`, which
+publishes `reconnecting` and closes only the current mux session. The existing
+core reconnect loop creates freshly protected/bound control sockets while the
+local SOCKS listener, TUN descriptor and packet forwarder remain alive.
 
 ### Stage 12: profile persistence
 
@@ -381,9 +436,10 @@ the Go keylink parser, derives a stable non-secret profile ID, uses the optional
 keylink label as the display name, and never logs or renders the full key.
 
 User preferences live in a second JSON DataStore file, `app_settings.json`,
-behind `AppSettingsRepository`: theme mode, Material You and connect-on-launch.
-Theme changes apply immediately because `MainActivity` collects the settings and
-feeds `BoardVPNTheme`.
+behind `AppSettingsRepository`: theme mode, connect-on-launch and
+the application routing policy. Theme changes apply immediately because
+`MainActivity` collects the settings and feeds `BoardVPNTheme`; routing changes
+apply on the next VPN connection.
 
 `DataStoreVpnProfileRepository` stores one JSON snapshot,
 `filesDir/datastore/vpn_profiles.json`, holding the profile list and the

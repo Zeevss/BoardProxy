@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -67,14 +68,6 @@ fun HomeScreen(
                 .padding(horizontal = 24.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(
-                text = stringResource(R.string.app_name),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp),
-            )
-
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -132,7 +125,7 @@ private fun StatisticsRow(state: HomeUiState) {
 
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceEvenly,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         StatisticColumn(
             label = stringResource(R.string.home_download),
@@ -161,23 +154,33 @@ private fun StatisticsRow(state: HomeUiState) {
 }
 
 @Composable
-private fun StatisticColumn(label: String, value: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        AnimatedContent(
-            targetState = value,
-            transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(180)) },
-            label = "statistic",
-        ) { animatedValue ->
+private fun RowScope.StatisticColumn(label: String, value: String) {
+    Surface(
+        modifier = Modifier.weight(1f),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            AnimatedContent(
+                targetState = value,
+                transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(180)) },
+                label = "statistic",
+            ) { animatedValue ->
+                Text(
+                    text = animatedValue,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                )
+            }
             Text(
-                text = animatedValue,
-                style = MaterialTheme.typography.titleMedium,
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
@@ -190,7 +193,7 @@ private fun ProfileSelectorCard(
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        color = MaterialTheme.colorScheme.surfaceContainer,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
@@ -259,7 +262,7 @@ private val previewProfile = VpnProfile(
 @Preview(showBackground = true)
 @Composable
 private fun HomeDisconnectedPreview() {
-    BoardVPNTheme(dynamicColor = false) {
+    BoardVPNTheme {
         HomeScreen(
             state = HomeUiState(
                 profiles = listOf(previewProfile),
@@ -274,7 +277,7 @@ private fun HomeDisconnectedPreview() {
 @Preview(showBackground = true)
 @Composable
 private fun HomeConnectedPreview() {
-    BoardVPNTheme(themeMode = ThemeMode.Dark, dynamicColor = false) {
+    BoardVPNTheme(themeMode = ThemeMode.Dark) {
         HomeScreen(
             state = HomeUiState(
                 status = HomeConnectionStatus.Connected,

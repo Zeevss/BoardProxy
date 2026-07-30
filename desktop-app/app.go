@@ -306,7 +306,7 @@ func (a *App) applySystemProxy(on bool) {
 	switch {
 	case on && !already:
 		if err := bproxy.SetSystemProxy(loopbackProxyAddr(listen)); err != nil {
-			a.emit("tunnel:log", map[string]string{"level": "WARN", "msg": "системный прокси не включён: " + err.Error()})
+			a.emitLog("WARN", "системный прокси не включён: "+err.Error())
 			return
 		}
 		a.mu.Lock()
@@ -314,7 +314,7 @@ func (a *App) applySystemProxy(on bool) {
 		a.mu.Unlock()
 	case !on && already:
 		if err := bproxy.UnsetSystemProxy(); err != nil {
-			a.emit("tunnel:log", map[string]string{"level": "WARN", "msg": "системный прокси не восстановлен: " + err.Error()})
+			a.emitLog("WARN", "системный прокси не восстановлен: "+err.Error())
 		}
 		a.mu.Lock()
 		a.sysProxyOn = false
@@ -325,7 +325,7 @@ func (a *App) applySystemProxy(on bool) {
 // connectProxy запускает клиента BoardProxy внутри процесса GUI (локальный
 // SOCKS5/HTTP, опционально системный прокси). Прав администратора не требует.
 func (a *App) connectProxy(cfg ConnectConfig) error {
-	logger := slog.New(&eventLogHandler{context: a.runtimeContext})
+	logger := slog.New(&eventLogHandler{app: a})
 	client := bproxy.New(bproxy.Config{
 		Keylink:    cfg.Link,
 		Listen:     cfg.Listen,
@@ -384,11 +384,36 @@ func (a *App) connectProxy(cfg ConnectConfig) error {
 	return nil
 }
 
-// emit шлёт событие во фронтенд, если Wails-контекст уже готов.
+// emit шлёт событие во фронтенд, если Wails-контекст уже готов. Смены статуса
+// дублируются в stdout (метрики намеренно не печатаются — они идут раз в секунду
+// и заглушили бы полезный вывод).
 func (a *App) emit(name string, data any) {
+	if name == "tunnel:status" {
+		if m, ok := data.(map[string]string); ok {
+			line := "[status] " + m["status"]
+			if m["error"] != "" {
+				line += " err=" + m["error"]
+			}
+			printLine(line)
+		}
+	}
 	if ctx := a.runtimeContext(); ctx != nil {
 		wruntime.EventsEmit(ctx, name, data)
 	}
+}
+
+// emitLog шлёт лог во фронтенд и дублирует его в stdout. Через него проходят и
+// логи helper'а (они приходят по сокету).
+func (a *App) emitLog(level, msg string) {
+	printLine("[" + level + "] " + msg)
+	if ctx := a.runtimeContext(); ctx != nil {
+		wruntime.EventsEmit(ctx, "tunnel:log", map[string]string{"level": level, "msg": msg})
+	}
+}
+
+// printLine печатает строку в stdout с меткой времени.
+func printLine(line string) {
+	fmt.Printf("%s %s\n", time.Now().Format("15:04:05.000"), line)
 }
 
 func (a *App) Disconnect() { a.stopActive() }
@@ -486,22 +511,15 @@ func (a *App) UpdateBypassList(patterns []string) error {
 }
 
 type eventLogHandler struct {
-	context func() context.Context
-	attrs   []slog.Attr
-	group   string
+	app   *App
+	attrs []slog.Attr
+	group string
 }
 
 func (h *eventLogHandler) Enabled(context.Context, slog.Level) bool { return true }
 
 func (h *eventLogHandler) Handle(_ context.Context, record slog.Record) error {
-	ctx := h.context()
-	if ctx == nil {
-		return nil
-	}
-	wruntime.EventsEmit(ctx, "tunnel:log", map[string]string{
-		"level": record.Level.String(),
-		"msg":   h.format(record),
-	})
+	h.app.emitLog(record.Level.String(), h.format(record))
 	return nil
 }
 

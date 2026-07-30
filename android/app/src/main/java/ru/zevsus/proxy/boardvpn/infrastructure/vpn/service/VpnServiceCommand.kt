@@ -13,12 +13,14 @@ sealed interface VpnServiceCommand {
 
     data object Pause : VpnServiceCommand
     data object Resume : VpnServiceCommand
+    data object Restart : VpnServiceCommand
     data object Disconnect : VpnServiceCommand
 
     companion object {
         private const val ACTION_CONNECT = "ru.zevsus.proxy.boardvpn.action.CONNECT"
         private const val ACTION_PAUSE = "ru.zevsus.proxy.boardvpn.action.PAUSE"
         private const val ACTION_RESUME = "ru.zevsus.proxy.boardvpn.action.RESUME"
+        private const val ACTION_RESTART = "ru.zevsus.proxy.boardvpn.action.RESTART"
         private const val ACTION_DISCONNECT = "ru.zevsus.proxy.boardvpn.action.DISCONNECT"
         private const val EXTRA_SESSION_ID = "session_id"
         private const val EXTRA_PROFILE_ID = "profile_id"
@@ -48,6 +50,11 @@ sealed interface VpnServiceCommand {
                 action = ACTION_RESUME
             }
 
+        fun restartIntent(context: Context) =
+            Intent(context, BoardVpnService::class.java).apply {
+                action = ACTION_RESTART
+            }
+
         fun fromIntent(intent: Intent?): VpnServiceCommand? = when (intent?.action) {
             ACTION_CONNECT -> {
                 val sessionId = intent.getLongExtra(EXTRA_SESSION_ID, 0)
@@ -60,6 +67,7 @@ sealed interface VpnServiceCommand {
             }
             ACTION_PAUSE -> Pause
             ACTION_RESUME -> Resume
+            ACTION_RESTART -> Restart
             ACTION_DISCONNECT -> Disconnect
             else -> null
         }

@@ -10,6 +10,7 @@ fun SettingsRoute(
     viewModel: SettingsViewModel,
     contentPadding: PaddingValues,
     onOpenSystemVpnSettings: () -> Unit,
+    onOpenAppRouting: () -> Unit,
     appVersion: String,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -17,10 +18,10 @@ fun SettingsRoute(
     SettingsScreen(
         state = state,
         onAction = { action ->
-            if (action is SettingsAction.OpenSystemVpnSettings) {
-                onOpenSystemVpnSettings()
-            } else {
-                viewModel.onAction(action)
+            when (action) {
+                SettingsAction.OpenSystemVpnSettings -> onOpenSystemVpnSettings()
+                SettingsAction.OpenAppRouting -> onOpenAppRouting()
+                else -> viewModel.onAction(action)
             }
         },
         appVersion = appVersion,

@@ -10,9 +10,11 @@ import (
 // fakePlatform фиксирует порядок вызовов и умеет имитировать ошибку настройки.
 type fakePlatform struct {
 	applyErr    error
+	dnsErr      error
 	revertErr   error
 	events      []string
 	appliedName string
+	appliedDNS  string
 }
 
 func (f *fakePlatform) protector() bproxy.SocketProtector { return nil }
@@ -21,6 +23,12 @@ func (f *fakePlatform) applyRouting(ifName string, _ Params) error {
 	f.events = append(f.events, "apply")
 	f.appliedName = ifName
 	return f.applyErr
+}
+
+func (f *fakePlatform) applyDNS(dns string) error {
+	f.events = append(f.events, "dns")
+	f.appliedDNS = dns
+	return f.dnsErr
 }
 
 func (f *fakePlatform) revertRouting() error {
@@ -84,6 +92,64 @@ func TestStartRollsBackEngineOnRoutingFailure(t *testing.T) {
 	}
 	if c.started {
 		t.Fatal("controller must not be marked started after failure")
+	}
+	// Частично применённые настройки обязаны быть откачены.
+	if len(plat.events) != 2 || plat.events[1] != "revert" {
+		t.Fatalf("events = %v, want [apply revert]", plat.events)
+	}
+}
+
+// DNS должен применяться отдельным шагом (после старта локального резолвера),
+// а не внутри Start — иначе система останется без работающего резолва.
+func TestApplyDNSIsSeparateStep(t *testing.T) {
+	plat := &fakePlatform{}
+	c := newTestController(plat, nil, "utun9", new(bool))
+
+	if err := c.Start(Params{ProxyAddr: "127.0.0.1:1080", DNS: "10.89.0.2"}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if len(plat.events) != 1 || plat.events[0] != "apply" {
+		t.Fatalf("Start must not touch DNS, events = %v", plat.events)
+	}
+	if err := c.ApplyDNS("10.89.0.2"); err != nil {
+		t.Fatalf("ApplyDNS: %v", err)
+	}
+	if len(plat.events) != 2 || plat.events[1] != "dns" {
+		t.Fatalf("events = %v, want [apply dns]", plat.events)
+	}
+	if plat.appliedDNS != "10.89.0.2" {
+		t.Fatalf("applied dns = %q, want 10.89.0.2", plat.appliedDNS)
+	}
+}
+
+// Пустой резолвер должен подменяться публичным: оставлять систему с прежним DNS
+// (обычно локальный роутер) при полном туннеле нельзя — он недостижим.
+func TestApplyDNSFallsBackToPublicResolver(t *testing.T) {
+	plat := &fakePlatform{}
+	c := newTestController(plat, nil, "utun9", new(bool))
+	if err := c.Start(Params{ProxyAddr: "127.0.0.1:1080"}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := c.ApplyDNS(""); err != nil {
+		t.Fatalf("ApplyDNS: %v", err)
+	}
+	if plat.appliedDNS == "" {
+		t.Fatal("empty DNS must fall back to a public resolver")
+	}
+	if plat.appliedDNS != FallbackDNS() {
+		t.Fatalf("applied dns = %q, want %q", plat.appliedDNS, FallbackDNS())
+	}
+}
+
+// ApplyDNS без Start (или после Stop) не должен трогать систему.
+func TestApplyDNSNoopWhenNotStarted(t *testing.T) {
+	plat := &fakePlatform{}
+	c := newTestController(plat, nil, "utun9", new(bool))
+	if err := c.ApplyDNS("10.89.0.2"); err != nil {
+		t.Fatalf("ApplyDNS before Start: %v", err)
+	}
+	if len(plat.events) != 0 {
+		t.Fatalf("DNS applied without Start: %v", plat.events)
 	}
 }
 

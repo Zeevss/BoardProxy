@@ -25,6 +25,8 @@ sealed interface VpnSessionState {
         val sessionId: VpnSessionId,
         val profileId: VpnProfileId,
         val phase: VpnSessionPhase,
+        val connectedAtElapsedRealtimeMillis: Long? = null,
+        val appliedAppRoutingPolicy: AppRoutingPolicy? = null,
     ) : VpnSessionState
 
     data class Failed(

@@ -9,6 +9,6 @@
         <intent
             android:action="ru.zevsus.proxy.boardvpn.action.TOGGLE_PROXY"
             android:targetPackage="ru.zevsus.proxy.boardvpn"
-            android:targetClass="ru.zevsus.proxy.boardvpn.app.MainActivity" />
+            android:targetClass="ru.zevsus.proxy.boardvpn.app.ProxyToggleActivity" />
     </shortcut>
 </shortcuts>

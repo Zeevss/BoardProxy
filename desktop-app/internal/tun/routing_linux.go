@@ -41,6 +41,10 @@ type physNet struct {
 }
 
 func newPlatform() (platform, error) {
+	// Если прошлый запуск завершился аварийно, система осталась с нашим DNS и
+	// маршрутами — откатываем их до подъёма нового туннеля.
+	recoverStaleState()
+
 	phys, err := detectPhysical()
 	if err != nil {
 		return nil, err
@@ -118,16 +122,13 @@ func (l *linuxPlatform) applyRouting(ifName string, p Params) error {
 		return err
 	}
 	l.addedDefault = true
-
-	if err := l.setDNS(p.DNS); err != nil {
-		return err
-	}
+	l.writeJournal()
 	return nil
 }
 
-// setDNS переписывает /etc/resolv.conf на наш резолвер, запоминая исходник
+// applyDNS переписывает /etc/resolv.conf на наш резолвер, запоминая исходник
 // (включая случай, когда это симлинк на systemd-resolved).
-func (l *linuxPlatform) setDNS(dns string) error {
+func (l *linuxPlatform) applyDNS(dns string) error {
 	if dest, err := os.Readlink(resolvConfPath); err == nil {
 		l.resolvWasLink = true
 		l.resolvLinkDest = dest
@@ -136,13 +137,51 @@ func (l *linuxPlatform) setDNS(dns string) error {
 		l.resolvBackup = data
 		l.resolvExisted = true
 	}
+	// Журналируем ДО изменения: если процесс умрёт сразу после записи,
+	// откат всё равно возможен при следующем запуске.
+	l.dnsReconfigured = true
+	l.writeJournal()
+
 	_ = os.Remove(resolvConfPath)
 	content := fmt.Sprintf("# BoardProxy TUN\nnameserver %s\n", dns)
 	if err := os.WriteFile(resolvConfPath, []byte(content), 0o644); err != nil {
+		l.dnsReconfigured = false
+		l.writeJournal()
 		return fmt.Errorf("tun: write resolv.conf: %w", err)
 	}
-	l.dnsReconfigured = true
 	return nil
+}
+
+// writeJournal сохраняет состояние отката на диск (страховка от аварийного
+// завершения; см. journal.go).
+func (l *linuxPlatform) writeJournal() {
+	j := journal{TunName: l.tunName, DefaultRoute: l.addedDefault}
+	if l.dnsReconfigured {
+		j.DNSBackup = string(l.resolvBackup)
+		j.ResolvLink = l.resolvLinkDest
+	}
+	j.save()
+}
+
+// recoverStaleState восстанавливает настройки, оставшиеся от аварийно
+// завершившегося запуска.
+func recoverStaleState() {
+	j := loadJournal()
+	if j == nil {
+		return
+	}
+	if j.DNSBackup != "" || j.ResolvLink != "" {
+		_ = os.Remove(resolvConfPath)
+		if j.ResolvLink != "" {
+			_ = os.Symlink(j.ResolvLink, resolvConfPath)
+		} else {
+			_ = os.WriteFile(resolvConfPath, []byte(j.DNSBackup), 0o644)
+		}
+	}
+	if j.DefaultRoute && j.TunName != "" {
+		_ = run("ip", "route", "del", "default", "dev", j.TunName, "metric", "1")
+	}
+	clearJournal()
 }
 
 func (l *linuxPlatform) revertRouting() error {
@@ -168,6 +207,7 @@ func (l *linuxPlatform) revertRouting() error {
 		}
 		l.addedDefault = false
 	}
+	clearJournal()
 	return firstErr
 }
 

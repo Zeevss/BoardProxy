@@ -1,5 +1,6 @@
 package ru.zevsus.proxy.boardvpn.infrastructure.vpn
 
+import android.os.SystemClock
 import android.util.Log
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
@@ -51,6 +52,7 @@ class AndroidVpnRuntime(
                 is Message.CoreMetricsChanged -> handleCoreMetrics(message)
                 is Message.CoreTerminated -> handleCoreTerminated(message)
                 is Message.ForwarderTerminated -> handleForwarderTerminated(message)
+                is Message.UnderlyingNetworkChanged -> handleUnderlyingNetworkChanged(message)
             }
         }
     }
@@ -65,6 +67,10 @@ class AndroidVpnRuntime(
 
     fun permissionRevoked() {
         messages.trySend(Message.PermissionRevoked)
+    }
+
+    fun underlyingNetworkChanged(reason: String) {
+        messages.trySend(Message.UnderlyingNetworkChanged(reason))
     }
 
     fun closeImmediately() {
@@ -99,7 +105,12 @@ class AndroidVpnRuntime(
             )
             return
         }
-        apply(VpnEvent.TunnelEstablished(message.sessionId))
+        apply(
+            VpnEvent.TunnelEstablished(
+                sessionId = message.sessionId,
+                appRoutingPolicy = tunnel.appRoutingPolicy,
+            )
+        )
 
         val termination = CompletableDeferred<Throwable?>()
         try {
@@ -196,7 +207,12 @@ class AndroidVpnRuntime(
                 )
                 current.forwarderStarted = true
                 startForwarderWatcher(current.sessionId)
-                apply(VpnEvent.TunStarted(current.sessionId))
+                apply(
+                    VpnEvent.TunStarted(
+                        sessionId = current.sessionId,
+                        elapsedRealtimeMillis = SystemClock.elapsedRealtime(),
+                    )
+                )
             } catch (error: Throwable) {
                 failAndShutdown(
                     current.sessionId,
@@ -211,6 +227,15 @@ class AndroidVpnRuntime(
             repository.updateStatistics(message.statistics)
             onStatisticsChanged(message.statistics)
         }
+    }
+
+    private fun handleUnderlyingNetworkChanged(message: Message.UnderlyingNetworkChanged) {
+        val current = resources?.takeUnless { it.stopping } ?: return
+        Log.i(
+            TAG,
+            "session=${current.sessionId.value} underlying network changed: ${message.reason}",
+        )
+        current.client.reconnect()
     }
 
     private suspend fun handleCoreTerminated(message: Message.CoreTerminated) {
@@ -366,6 +391,10 @@ class AndroidVpnRuntime(
         data class ForwarderTerminated(
             val sessionId: VpnSessionId,
             val error: Throwable?,
+        ) : Message
+
+        data class UnderlyingNetworkChanged(
+            val reason: String,
         ) : Message
     }
 
