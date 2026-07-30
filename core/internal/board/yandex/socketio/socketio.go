@@ -1,0 +1,299 @@
+package socketio
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/coder/websocket"
+)
+
+// readLimit caps a single websocket frame. Page snapshots (the ack of
+// subscribe-slide-dashboard) can be large, so this is generous.
+const readLimit = 16 << 20
+
+// heartbeatGrace tolerates scheduler and network jitter on top of the
+// Engine.IO-advertised ping interval + timeout. A missing ping beyond this
+// deadline means the underlying TCP path is stale (sleep/interface switch),
+// even when the OS has not reported EOF yet.
+var heartbeatGrace = 5 * time.Second
+
+var (
+	// ErrClosed is returned by Emit once the client is closed.
+	ErrClosed = errors.New("socketio: client closed")
+	// ErrConnClosed is returned when the connection dropped while awaiting an ack.
+	ErrConnClosed = errors.New("socketio: connection closed while awaiting ack")
+)
+
+// Message is a server-initiated Socket.IO event: the event name and its
+// remaining JSON arguments.
+type Message struct {
+	Event string
+	Args  []json.RawMessage
+}
+
+// Client is a minimal Socket.IO (default namespace) connection over websocket.
+type Client struct {
+	conn     *websocket.Conn
+	acks     *ackRegistry
+	incoming chan Message
+
+	writeMu sync.Mutex
+
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	closeOnce        sync.Once
+	closeErr         error
+	done             chan struct{}
+	heartbeatTimeout time.Duration
+}
+
+// Dial connects to a Socket.IO server, forwarding cookie on the handshake
+// (required by Yandex Board, SPEC §5.1), and completes the Engine.IO open plus
+// default-namespace connect before returning.
+func Dial(ctx context.Context, baseURL, cookie string, httpClient *http.Client) (*Client, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse socket url: %w", err)
+	}
+	switch u.Scheme {
+	case "https", "wss":
+		u.Scheme = "wss"
+	case "http", "ws":
+		u.Scheme = "ws"
+	default:
+		return nil, fmt.Errorf("unsupported socket url scheme %q", u.Scheme)
+	}
+	u.Path = "/socket.io/"
+	q := u.Query()
+	q.Set("EIO", "4")
+	q.Set("transport", "websocket")
+	u.RawQuery = q.Encode()
+
+	hdr := http.Header{}
+	if cookie != "" {
+		hdr.Set("Cookie", cookie)
+	}
+	hdr.Set("Origin", "https://boards.yandex.ru")
+
+	conn, _, err := websocket.Dial(ctx, u.String(), &websocket.DialOptions{
+		HTTPClient: httpClient,
+		HTTPHeader: hdr,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ws dial: %w", err)
+	}
+	conn.SetReadLimit(readLimit)
+
+	c := &Client{
+		conn:     conn,
+		acks:     newAckRegistry(),
+		incoming: make(chan Message, 256),
+		done:     make(chan struct{}),
+	}
+	c.ctx, c.cancel = context.WithCancel(context.Background())
+
+	if err := c.handshake(ctx); err != nil {
+		_ = conn.Close(websocket.StatusProtocolError, "handshake failed")
+		return nil, err
+	}
+
+	go c.readLoop()
+	return c, nil
+}
+
+// handshake reads the Engine.IO open packet, sends the default-namespace
+// connect, and waits for its confirmation, answering pings meanwhile.
+func (c *Client) handshake(ctx context.Context) error {
+	raw, err := c.readFrame(ctx)
+	if err != nil {
+		return fmt.Errorf("read open: %w", err)
+	}
+	p := parsePacket(raw)
+	if p.engine != eioOpen {
+		return fmt.Errorf("expected open packet, got %q", string(raw))
+	}
+	timeout, err := parseHeartbeatTimeout(p.body)
+	if err != nil {
+		return err
+	}
+	c.heartbeatTimeout = timeout
+
+	if err := c.writeFrame(ctx, []byte{eioMessage, sioConnect}); err != nil {
+		return fmt.Errorf("send connect: %w", err)
+	}
+	for {
+		raw, err := c.readFrame(ctx)
+		if err != nil {
+			return fmt.Errorf("await connect: %w", err)
+		}
+		p := parsePacket(raw)
+		switch {
+		case p.engine == eioPing:
+			if err := c.writeFrame(ctx, []byte{eioPong}); err != nil {
+				return err
+			}
+		case p.engine == eioMessage && p.sio == sioConnect:
+			return nil
+		case p.engine == eioMessage && p.sio == sioConnectError:
+			return fmt.Errorf("connect error: %s", string(p.body))
+		}
+	}
+}
+
+func parseHeartbeatTimeout(body []byte) (time.Duration, error) {
+	var open struct {
+		PingInterval int64 `json:"pingInterval"`
+		PingTimeout  int64 `json:"pingTimeout"`
+	}
+	if err := json.Unmarshal(body, &open); err != nil {
+		return 0, fmt.Errorf("decode open packet: %w", err)
+	}
+	if open.PingInterval > 0 && open.PingTimeout > 0 {
+		return time.Duration(open.PingInterval+open.PingTimeout)*time.Millisecond + heartbeatGrace, nil
+	}
+	return 0, errors.New("socketio: open packet has invalid heartbeat settings")
+}
+
+// Emit sends an event with an ack and blocks until the server acks, the context
+// is done, or the connection closes. It returns the ack's JSON arguments.
+func (c *Client) Emit(ctx context.Context, event string, arg any) ([]json.RawMessage, error) {
+	payload, err := json.Marshal([]any{event, arg})
+	if err != nil {
+		return nil, fmt.Errorf("marshal event %s: %w", event, err)
+	}
+	id, ch := c.acks.register()
+	if err := c.writeFrame(ctx, encodeEvent(id, payload)); err != nil {
+		c.acks.cancel(id)
+		return nil, err
+	}
+	select {
+	case args := <-ch:
+		if args == nil {
+			return nil, ErrConnClosed
+		}
+		return args, nil
+	case <-ctx.Done():
+		c.acks.cancel(id)
+		return nil, ctx.Err()
+	case <-c.done:
+		c.acks.cancel(id)
+		return nil, ErrClosed
+	}
+}
+
+// Events returns the stream of server-initiated events. It is closed when the
+// client closes.
+func (c *Client) Events() <-chan Message { return c.incoming }
+
+// Close shuts the connection down and waits for the read loop to finish.
+func (c *Client) Close() error {
+	c.fail(ErrClosed)
+	<-c.done
+	return c.closeErr
+}
+
+func (c *Client) readLoop() {
+	var loopErr error
+	defer func() {
+		c.fail(loopErr)
+		close(c.incoming)
+		close(c.done)
+	}()
+	for {
+		raw, err := c.readFrame(c.ctx)
+		if err != nil {
+			loopErr = err
+			return
+		}
+		p := parsePacket(raw)
+		switch p.engine {
+		case eioPing:
+			if err := c.writeFrame(c.ctx, []byte{eioPong}); err != nil {
+				loopErr = err
+				return
+			}
+		case eioClose:
+			loopErr = ErrConnClosed
+			return
+		case eioMessage:
+			c.handleMessage(p)
+		}
+	}
+}
+
+func (c *Client) handleMessage(p packet) {
+	switch p.sio {
+	case sioEvent:
+		var arr []json.RawMessage
+		if err := json.Unmarshal(p.body, &arr); err != nil || len(arr) == 0 {
+			return
+		}
+		var name string
+		_ = json.Unmarshal(arr[0], &name)
+		// If the server expects an ack, answer with an empty one so it does not
+		// wait; we never need to return data on broadcasts.
+		if p.ackID >= 0 {
+			frame := append([]byte{eioMessage, sioAck}, []byte(strconv.Itoa(p.ackID))...)
+			frame = append(frame, '[', ']')
+			_ = c.writeFrame(c.ctx, frame)
+		}
+		select {
+		case c.incoming <- Message{Event: name, Args: arr[1:]}:
+		case <-c.ctx.Done():
+		}
+	case sioAck:
+		var arr []json.RawMessage
+		_ = json.Unmarshal(p.body, &arr)
+		c.acks.resolve(p.ackID, arr)
+	case sioConnectError:
+		c.fail(fmt.Errorf("socketio: connect error: %s", string(p.body)))
+	}
+}
+
+func (c *Client) fail(err error) {
+	c.closeOnce.Do(func() {
+		if err == nil {
+			err = ErrClosed
+		}
+		c.closeErr = err
+		c.cancel()
+		_ = c.conn.Close(websocket.StatusNormalClosure, "")
+		c.acks.failAll()
+	})
+}
+
+// readFrame reads one text websocket message, skipping binary frames.
+func (c *Client) readFrame(ctx context.Context) ([]byte, error) {
+	for {
+		readCtx := ctx
+		cancel := func() {}
+		if c.heartbeatTimeout > 0 {
+			readCtx, cancel = context.WithTimeout(ctx, c.heartbeatTimeout)
+		}
+		typ, data, err := c.conn.Read(readCtx)
+		cancel()
+		if err != nil {
+			if ctx.Err() == nil && errors.Is(readCtx.Err(), context.DeadlineExceeded) {
+				return nil, fmt.Errorf("%w: engine.io heartbeat timeout", ErrConnClosed)
+			}
+			return nil, err
+		}
+		if typ == websocket.MessageText {
+			return data, nil
+		}
+	}
+}
+
+func (c *Client) writeFrame(ctx context.Context, data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.Write(ctx, websocket.MessageText, data)
+}

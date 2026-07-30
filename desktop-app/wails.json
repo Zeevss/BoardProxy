@@ -1,0 +1,14 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "boardproxy",
+  "outputfilename": "boardproxy",
+  "frontend:install": "pnpm install --store-dir .pnpm-store",
+  "frontend:build": "pnpm run build",
+  "frontend:dev:watcher": "pnpm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "build:tags": "webkit2_41",
+  "author": {
+    "name": "BoardProxy",
+    "email": ""
+  }
+}

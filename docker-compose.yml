@@ -1,0 +1,45 @@
+# BoardProxy: сервер (core) + админ-панель (panel).
+#
+# Наружу публикуется ТОЛЬКО порт панели. core живёт во внутренней сети и
+# доступен лишь панели/Caddy — его web-api не имеет опубликованных портов.
+# Настройки — в .env (см. .env.example).
+
+services:
+  core:
+    build: ./core
+    restart: unless-stopped
+    # Пароль и доски передаём ТОЛЬКО через environment (флаги читают их из env
+    # через getenvOr), чтобы секрет не светился в `ps`/`docker inspect` командой.
+    command:
+      - serve
+      - --web-api=0.0.0.0:8080
+      - --db=/data/bproxy.db
+      - --key-file=/data/bproxy.key
+      # Живой клиент присылает heartbeat каждые 30с; 90с — три пропуска.
+      - --idle-timeout=${BPROXY_IDLE_TIMEOUT:-90s}
+      - --stream-idle-timeout=${BPROXY_STREAM_IDLE_TIMEOUT:-2m}
+    environment:
+      BPROXY_WEB_UI_PASSWORD: ${BPROXY_WEB_UI_PASSWORD}
+      # BPROXY_BOARD — одна доска или несколько через запятую (hashA,hashB).
+      BPROXY_BOARD: ${BPROXY_BOARD}
+    volumes:
+      - bproxy-data:/data
+    networks:
+      - internal
+
+  panel:
+    build: ./panel
+    restart: unless-stopped
+    depends_on:
+      - core
+    ports:
+      - "${PANEL_PORT:-8080}:80"
+    networks:
+      - internal
+
+volumes:
+  bproxy-data:
+
+networks:
+  internal:
+    driver: bridge

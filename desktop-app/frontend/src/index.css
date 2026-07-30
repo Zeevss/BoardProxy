@@ -1,0 +1,96 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   Дизайн-токены. Обе темы (light/dark) задаются CSS-переменными,
+   а tailwind.config.js ссылается на них через rgb(var(--c-*)).
+   ============================================================ */
+@layer base {
+  :root,
+  .light {
+    /* Поверхности и текст */
+    --c-bg: 248 250 252; /* slate-50  */
+    --c-surface: 255 255 255; /* white     */
+    --c-surface-2: 241 245 249; /* slate-100 */
+    --c-border: 226 232 240; /* slate-200 */
+    --c-muted: 100 116 139; /* slate-500 */
+    --c-fg: 15 23 42; /* slate-900 */
+
+    /* Акцент — электрик-cyan (сетевой/туннельный вайб) */
+    --c-accent: 6 182 212; /* cyan-500  */
+    --c-accent-fg: 255 255 255;
+    --c-accent-soft: 207 250 254; /* cyan-50   */
+
+    /* Семантические */
+    --c-ok: 22 163 74; /* green-600 */
+    --c-warn: 217 119 6; /* amber-600 */
+    --c-danger: 220 38 38; /* red-600   */
+  }
+
+  .dark {
+    /* Глубокий сине-графитовый фон вместо чистого чёрного — мягче для глаз,
+       больше «объёма» за счёт различимых уровней поверхностей. */
+    --c-bg: 13 17 23; /* deep slate      */
+    --c-surface: 22 27 35; /* card            */
+    --c-surface-2: 30 37 47; /* inset / hover   */
+    --c-border: 39 47 59; /* мягкая граница  */
+    --c-muted: 150 164 184;
+    --c-fg: 233 238 245;
+
+    /* Спокойный бирюзовый акцент — яркий, но не «неоновый». */
+    --c-accent: 45 206 224;
+    --c-accent-fg: 8 15 22;
+    --c-accent-soft: 20 46 56;
+
+    --c-ok: 52 211 153; /* emerald-400 */
+    --c-warn: 251 191 36; /* amber-400   */
+    --c-danger: 244 113 113; /* red-400   */
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    @apply h-full;
+  }
+
+  body {
+    @apply bg-bg text-fg font-sans antialiased;
+    /* Нативный скроллбар под тему */
+    overflow: hidden;
+  }
+
+  /* Тонкий скроллбар */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-surface-2 rounded-full;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-muted/40;
+  }
+}
+
+@layer components {
+  /* Карточка — основной строительный блок */
+  .card {
+    @apply rounded-2xl border border-border bg-surface shadow-soft;
+  }
+
+  /* Заголовок секции */
+  .section-title {
+    @apply text-sm font-semibold text-fg;
+  }
+
+  .label {
+    @apply text-xs font-medium text-muted;
+  }
+}

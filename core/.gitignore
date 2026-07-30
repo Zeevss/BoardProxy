@@ -1,0 +1,17 @@
+bin/
+tmp/
+dist/
+build/
+
+.idea/
+.vscode/
+.claude/
+.opencode/
+.codex/
+
+.env
+
+*.log
+
+.DS_Store
+Thumbs.db

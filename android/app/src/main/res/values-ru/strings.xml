@@ -1,0 +1,75 @@
+<resources>
+    <string name="tab_home">VPN</string>
+    <string name="tab_profiles">Профили</string>
+    <string name="tab_settings">Настройки</string>
+
+    <string name="action_save">Сохранить</string>
+    <string name="action_cancel">Отмена</string>
+    <string name="action_delete">Удалить</string>
+    <string name="action_edit">Изменить</string>
+    <string name="action_disconnect">Отключить</string>
+    <string name="action_pause">Пауза</string>
+    <string name="action_resume">Продолжить</string>
+    <string name="action_finish">Завершить</string>
+
+    <string name="home_no_profile">Профиль не выбран</string>
+    <string name="home_no_profile_hint">Добавьте ключ, чтобы начать</string>
+    <string name="home_change_profile">Сменить</string>
+    <string name="home_select_profile">Выбор профиля</string>
+    <string name="home_manage_profiles">Управление профилями</string>
+    <string name="home_download">Загрузка</string>
+    <string name="home_upload">Отдача</string>
+    <string name="home_latency">Задержка</string>
+    <string name="home_latency_value">%1$d мс</string>
+    <string name="home_status_disconnected">Отключено</string>
+    <string name="home_status_connecting">Подключение…</string>
+    <string name="home_status_connected">Подключено</string>
+    <string name="home_status_reconnecting">Переподключение…</string>
+    <string name="home_status_disconnecting">Отключение…</string>
+    <string name="home_error_profile_not_found">Профиль VPN не найден</string>
+    <string name="home_error_permission_denied">Разрешение на VPN не выдано</string>
+    <string name="home_error_session_failed">Не удалось подключиться</string>
+
+    <string name="profiles_title">Профили</string>
+    <string name="profiles_add">Новый профиль</string>
+    <string name="profiles_edit_title">Изменить профиль</string>
+    <string name="profiles_active">Активный профиль</string>
+    <string name="profiles_import_clipboard">Вставить ключ из буфера</string>
+    <string name="profiles_empty_title">Профилей пока нет</string>
+    <string name="profiles_empty_hint">Вставьте ключ bproxy:// из буфера обмена или добавьте его вручную.</string>
+    <string name="profiles_field_name">Название</string>
+    <string name="profiles_field_key">Ключ</string>
+    <string name="profiles_field_key_hint">bproxy://…</string>
+    <string name="profiles_error_name">Укажите название профиля</string>
+    <string name="profiles_error_key">Это не похоже на ключ BoardProxy</string>
+    <string name="profiles_delete_title">Удалить профиль?</string>
+    <string name="profiles_delete_message">%1$s будет удалён с этого устройства.</string>
+    <string name="profiles_error_clipboard_empty">В буфере обмена нет текста</string>
+    <string name="profiles_error_invalid_keylink">В буфере обмена нет корректного ключа BoardProxy</string>
+    <string name="profiles_imported">Профиль добавлен</string>
+    <string name="profiles_deleted">Профиль удалён</string>
+
+    <string name="settings_title">Настройки</string>
+    <string name="settings_section_appearance">Оформление</string>
+    <string name="settings_section_connection">Подключение</string>
+    <string name="settings_section_about">О приложении</string>
+    <string name="settings_theme">Тема</string>
+    <string name="settings_theme_system">Системная</string>
+    <string name="settings_theme_light">Светлая</string>
+    <string name="settings_theme_dark">Тёмная</string>
+    <string name="settings_dynamic_color">Material You</string>
+    <string name="settings_dynamic_color_hint">Использовать цвета системных обоев</string>
+    <string name="settings_auto_connect">Подключаться при запуске</string>
+    <string name="settings_auto_connect_hint">Запускать выбранный профиль при открытии приложения</string>
+    <string name="settings_system_vpn">Системные настройки VPN</string>
+    <string name="settings_version">Версия %1$s</string>
+    <string name="settings_core">Ядро BoardProxy, встроено</string>
+
+    <string name="vpn_notification_channel">VPN-подключение</string>
+    <string name="vpn_notification_speed">↓ %1$s  •  ↑ %2$s</string>
+    <string name="vpn_notification_paused">Прокси приостановлен</string>
+    <string name="quick_settings_tile_label">BoardVPN</string>
+    <string name="quick_settings_tile_description">BoardVPN: %1$s</string>
+    <string name="shortcut_toggle_proxy_short">Прокси</string>
+    <string name="shortcut_toggle_proxy_long">Переключить прокси</string>
+</resources>

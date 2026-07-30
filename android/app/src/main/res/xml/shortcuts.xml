@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="toggle_proxy"
+        android:enabled="true"
+        android:icon="@drawable/ic_vpn_shield_shortcut"
+        android:shortcutShortLabel="@string/shortcut_toggle_proxy_short"
+        android:shortcutLongLabel="@string/shortcut_toggle_proxy_long">
+        <intent
+            android:action="ru.zevsus.proxy.boardvpn.action.TOGGLE_PROXY"
+            android:targetPackage="ru.zevsus.proxy.boardvpn"
+            android:targetClass="ru.zevsus.proxy.boardvpn.app.MainActivity" />
+    </shortcut>
+</shortcuts>
