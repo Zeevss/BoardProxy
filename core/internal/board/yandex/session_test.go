@@ -3,6 +3,7 @@ package yandex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -96,6 +97,39 @@ func TestSessionReconnectsAndResubscribes(t *testing.T) {
 	// Операции идут по новому соединению без ошибки наверх.
 	if err := s.Put(context.Background(), board.Object{ID: "x", Value: "v"}); err != nil {
 		t.Fatalf("put после реконнекта: %v", err)
+	}
+}
+
+func TestSessionReconnectForeverIgnoresRetryDeadline(t *testing.T) {
+	conn1, conn2 := newFakeConn(), newFakeConn()
+	attempts := 0
+	s := newTestSession(func(context.Context) (socketConn, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, errors.New("temporary outage")
+		}
+		return conn2, nil
+	})
+	s.reconnectForever = true
+	// A normal lane would exhaust this deadline after the first failed dial.
+	// The hub observer must keep retrying and reach the second successful dial.
+	s.reconnectDeadline = time.Nanosecond
+	s.setConnected(conn1)
+	go s.manage()
+	defer s.Close()
+
+	if _, err := s.Subscribe(context.Background(), "hub"); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	conn1.drop()
+
+	select {
+	case <-s.Reconnects():
+	case <-time.After(2 * time.Second):
+		t.Fatal("retry-forever session did not reconnect after its finite deadline")
+	}
+	if attempts < 2 {
+		t.Fatalf("dial attempts = %d, want at least 2", attempts)
 	}
 }
 

@@ -363,6 +363,26 @@ func TestConnRejectsDuplicateLane(t *testing.T) {
 	}
 }
 
+func TestConnClosesWhenLastLaneIsLost(t *testing.T) {
+	c := New(Options{})
+	lane := newFakeLane()
+	if err := c.AddLane(1, lane); err != nil {
+		t.Fatal(err)
+	}
+	if err := lane.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-c.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("bond stayed alive without physical lanes")
+	}
+	if !errors.Is(c.Err(), ErrNoLanes) {
+		t.Fatalf("bond error = %v, want ErrNoLanes", c.Err())
+	}
+}
+
 func eventuallyBond(t *testing.T, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

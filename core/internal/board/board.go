@@ -76,7 +76,7 @@ type Session interface {
 	Delete(ctx context.Context, ids ...string) error
 
 	// Events streams changes on the subscribed page. The channel is closed when
-	// the session is closed.
+	// the session is closed or its transport reaches a terminal failure.
 	Events() <-chan Event
 
 	// Reconnects streams a fresh page snapshot each time the session

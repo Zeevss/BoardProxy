@@ -277,7 +277,12 @@ func startHub(ctx context.Context, cfg config.Config, board string, log *slog.Lo
 	bcfg := cfg
 	bcfg.Board.Hash = board
 
-	hubSess, err := yandex.Join(ctx, boardOptions(bcfg))
+	laneOptions := boardOptions(bcfg)
+	laneOptions.Log = log.With("component", "board", "role", "server-lane", "board", board)
+	hubOptions := laneOptions
+	hubOptions.ReconnectForever = true
+	hubOptions.Log = log.With("component", "board", "role", "hub-control", "board", board)
+	hubSess, err := yandex.Join(ctx, hubOptions)
 	if err != nil {
 		return nil, fmt.Errorf("join board: %w", err)
 	}
@@ -295,7 +300,7 @@ func startHub(ctx context.Context, cfg config.Config, board string, log *slog.Lo
 		HubSession:        hubSess,
 		HubSlide:          hubSlide,
 		Pool:              pool,
-		Dialer:            yandexDialer{boardOptions(bcfg)},
+		Dialer:            yandexDialer{laneOptions},
 		ServerStatic:      serverStatic,
 		Users:             st,
 		Codec:             codec.Z85Codec{},

@@ -161,8 +161,19 @@ func drainAdaptiveLane(parent context.Context, log interface {
 	ctx, cancel := context.WithTimeout(parent, adaptiveDrainTimeout)
 	err := b.DrainLane(ctx, id)
 	cancel()
-	delete(lanes, id)
+	if err == nil || !bondHasLane(b, id) {
+		delete(lanes, id)
+	}
 	log.Info("hub: adaptive lane drained",
 		"bundle", bundleID.String(), "lane", id, "reason", reason,
 		"active_lanes", b.LaneCount(), "err", err)
+}
+
+func bondHasLane(b *bond.Conn, id bond.LaneID) bool {
+	for _, active := range b.LaneIDs() {
+		if active == id {
+			return true
+		}
+	}
+	return false
 }

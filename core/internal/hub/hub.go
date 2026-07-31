@@ -395,6 +395,11 @@ func (s *Server) rendezvousLoop() {
 			return
 		case ev, ok := <-events:
 			if !ok {
+				rvLog(s.cfg.Link.Log).Error(
+					"hub: control session closed unexpectedly; stopping hub",
+					"slide", s.cfg.HubSlide,
+				)
+				s.cancel()
 				return
 			}
 			if ev.Kind != board.Created {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"sync"
 	"time"
@@ -37,6 +38,12 @@ type Options struct {
 	GuestName string
 	// Protector excludes REST/WebSocket sockets from an OS VPN before connect.
 	Protector netprotect.Protector
+	// ReconnectForever keeps retrying until Close. Server hub observers use it
+	// because silently losing the control-plane listener leaves the process
+	// alive but unable to accept new clients.
+	ReconnectForever bool
+	// Log receives reconnect lifecycle diagnostics. Nil uses slog.Default().
+	Log *slog.Logger
 }
 
 // socketConn — минимум, что сессия использует от Socket.IO-клиента. Абстракция
@@ -63,6 +70,10 @@ type Session struct {
 	info        *whiteboardInfo
 	socketURL   string
 	dial        dialFunc
+	log         *slog.Logger
+
+	reconnectForever  bool
+	reconnectDeadline time.Duration
 
 	events     chan board.Event
 	reconnects chan []board.Object
@@ -111,6 +122,10 @@ func Join(ctx context.Context, opts Options) (*Session, error) {
 		reconnects:  make(chan []board.Object, 1),
 		closeCh:     make(chan struct{}),
 		connWait:    make(chan struct{}),
+		log:         opts.Log,
+
+		reconnectForever:  opts.ReconnectForever,
+		reconnectDeadline: reconnectDeadline,
 	}
 	s.dial = s.realDial
 
@@ -380,15 +395,30 @@ func (s *Session) dispatch(msg socketio.Message) {
 // reconnect повторяет redial с экспоненциальным backoff до успеха, закрытия
 // сессии или общего дедлайна. true — переподключились.
 func (s *Session) reconnect() bool {
-	deadline := time.Now().Add(reconnectDeadline)
+	started := time.Now()
+	deadline := started.Add(s.resolvedReconnectDeadline())
 	backoff := reconnectMinBackoff
+	attempt := 0
 	for {
+		attempt++
 		// Первую попытку делаем сразу: транзиентный блип чаще всего лечится
 		// немедленным повтором, backoff нужен только между неудачами.
-		if err := s.redial(); err == nil {
+		err := s.redial()
+		if err == nil {
+			s.logger().Info("board websocket reconnected",
+				"attempts", attempt, "downtime", time.Since(started))
 			return true
 		}
-		if time.Now().After(deadline) {
+		if attempt == 1 || attempt%6 == 0 {
+			s.logger().Warn("board websocket disconnected; reconnecting",
+				"attempt", attempt, "retry_forever", s.reconnectForever, "err", err)
+		} else {
+			s.logger().Debug("board websocket reconnect failed",
+				"attempt", attempt, "next_backoff", backoff, "err", err)
+		}
+		if !s.reconnectForever && time.Now().After(deadline) {
+			s.logger().Error("board websocket reconnect exhausted",
+				"attempts", attempt, "downtime", time.Since(started), "err", err)
 			return false
 		}
 		select {
@@ -400,6 +430,20 @@ func (s *Session) reconnect() bool {
 			backoff = reconnectMaxBackoff
 		}
 	}
+}
+
+func (s *Session) resolvedReconnectDeadline() time.Duration {
+	if s.reconnectDeadline > 0 {
+		return s.reconnectDeadline
+	}
+	return reconnectDeadline
+}
+
+func (s *Session) logger() *slog.Logger {
+	if s.log != nil {
+		return s.log
+	}
+	return slog.Default()
 }
 
 // redial открывает новое соединение, заново подписывается на текущую страницу и

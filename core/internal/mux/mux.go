@@ -399,6 +399,11 @@ func (s *Session) reader() {
 			return
 		case raw, ok := <-recv:
 			if !ok {
+				if provider, ok := s.conn.(interface{ Err() error }); ok {
+					if err := provider.Err(); err != nil {
+						s.closeWithError(err)
+					}
+				}
 				return
 			}
 			for _, f := range decodeBatch(raw) {

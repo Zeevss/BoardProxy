@@ -15,6 +15,7 @@ import (
 	"bproxy-core/internal/codec"
 	"bproxy-core/internal/crypto"
 	"bproxy-core/internal/handshake"
+	"bproxy-core/internal/link"
 	"bproxy-core/internal/mux"
 	"bproxy-core/internal/proto"
 	"bproxy-core/internal/store"
@@ -420,6 +421,37 @@ func TestClaimJoinValidatesOwnerTokenAndLaneLimit(t *testing.T) {
 	}
 }
 
+func TestHubStopsWhenControlSessionTerminates(t *testing.T) {
+	b := memory.NewBoard()
+	hubSession := b.NewSession("hub-observer")
+	serverKP, err := crypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := NewServer(context.Background(), ServerConfig{
+		HubSession:   hubSession,
+		HubSlide:     "hub",
+		Pool:         []string{"page"},
+		Dialer:       memDialer{b},
+		ServerStatic: serverKP,
+		Users:        newFakeUsers(),
+		Codec:        codec.Base64Codec{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+
+	if err := hubSession.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := srv.Accept(ctx); !errors.Is(err, link.ErrClosed) {
+		t.Fatalf("Accept after control-session failure = %v, want link.ErrClosed", err)
+	}
+}
+
 func TestDialBundleReturnsAuthenticatedIdentity(t *testing.T) {
 	h := newTestHub(t, []string{"p1"})
 	client, err := crypto.Generate()
@@ -603,6 +635,51 @@ func TestSecondLaneLossKeepsBundleAlive(t *testing.T) {
 	_ = st.CloseWrite()
 	if got := readAll(t, st, 2*time.Second); got != "still-alive" {
 		t.Fatalf("echo after lane loss = %q", got)
+	}
+}
+
+func TestLastLaneLossClosesMuxForFullReconnect(t *testing.T) {
+	h := newTestHub(t, []string{"p1"})
+	client, err := crypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.users.provision(client.Public())
+	clientSession := h.b.NewSession("client-primary")
+	result, err := DialBundle(context.Background(), ClientConfig{
+		Session:      clientSession,
+		HubSlide:     "hub",
+		Codec:        codec.Base64Codec{},
+		ClientStatic: client,
+		ServerPublic: h.serverKP.Public(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h.srv.mu.Lock()
+	serverLane := h.srv.bundles[result.Bundle.ID].lanes[result.Bundle.LaneID].link
+	h.srv.mu.Unlock()
+
+	// Terminal board failure closes Link.Done, which removes the final bond
+	// lane and must close mux so pkg/bproxy can start a fresh rendezvous.
+	if err := clientSession.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-result.Session.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("mux stayed alive after its last physical lane disappeared")
+	}
+	if !errors.Is(result.Session.Err(), bond.ErrNoLanes) {
+		t.Fatalf("mux error = %v, want bond.ErrNoLanes", result.Session.Err())
+	}
+
+	// memory.Board does not broadcast participant disconnects, so terminate the
+	// peer endpoint explicitly and verify that the server releases its page.
+	_ = serverLane.Close()
+	if err := waitPool(h.srv, 1, 2*time.Second); err != nil {
+		t.Fatalf("server did not release last-lane page: %v", err)
 	}
 }
 

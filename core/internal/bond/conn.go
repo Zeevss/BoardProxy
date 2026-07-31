@@ -22,6 +22,7 @@ const (
 
 var (
 	ErrClosed          = errors.New("bond: closed")
+	ErrNoLanes         = errors.New("bond: no active lanes")
 	ErrDuplicateLane   = errors.New("bond: duplicate lane")
 	ErrMalformedPacket = errors.New("bond: malformed packet")
 	ErrReorderOverflow = errors.New("bond: reorder buffer overflow")
@@ -614,7 +615,13 @@ func (c *Conn) detachLane(id LaneID, lane Lane) {
 		}
 	}
 	c.signalLaneChangedLocked()
+	last := len(c.lanes) == 0 && !c.closing
 	c.laneMu.Unlock()
+	if last {
+		// With no physical path, waiting inside chooseLane leaves mux alive
+		// forever and prevents the outer client reconnect loop from starting.
+		c.fail(ErrNoLanes)
+	}
 }
 
 func (c *Conn) fail(err error) {

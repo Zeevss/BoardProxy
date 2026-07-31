@@ -413,6 +413,9 @@ func (l *Link) logStats() {
 
 func (l *Link) run() {
 	defer l.wg.Done()
+	// A terminal board.Session failure is reported by closing Events. Propagate
+	// it to Done so bond/hub do not leave a dead physical lane registered.
+	defer l.cancel()
 	defer close(l.recvCh)
 	defer close(l.ackCh)
 	events := l.sess.Events()

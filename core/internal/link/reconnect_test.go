@@ -64,3 +64,22 @@ func TestReconnectSnapshotTriggersReconcile(t *testing.T) {
 		t.Fatal("send заблокировался: слоты не освобождены reconcile'ом на реконнекте")
 	}
 }
+
+func TestBoardEventsClosureClosesLink(t *testing.T) {
+	b := memory.NewBoard()
+	base := b.NewSession("A")
+	if _, err := base.Subscribe(context.Background(), "page"); err != nil {
+		t.Fatal(err)
+	}
+	l := New(base, codec.Base64Codec{}, Options{})
+	defer l.Close()
+
+	if err := base.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-l.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("terminal board event closure did not close Link.Done")
+	}
+}

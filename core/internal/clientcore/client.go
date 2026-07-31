@@ -43,6 +43,7 @@ func Dial(ctx context.Context, cfg config.Config, log *slog.Logger) (*mux.Sessio
 		Hash:      cfg.Board.Hash,
 		GuestName: cfg.Board.GuestName,
 		Protector: cfg.Client.Protector,
+		Log:       log.With("component", "board", "role", "client-lane"),
 	}
 	sess, err := yandex.Join(ctx, boardOptions)
 	if err != nil {
