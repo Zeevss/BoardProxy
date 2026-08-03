@@ -12,6 +12,7 @@ MOBILE_TARGETS ?= android/arm64,android/arm,android/amd64
 MOBILE_OUTPUT ?= bin/boardproxy.aar
 MOBILE_ANDROID_API ?= 26
 MOBILE_CGO_LDFLAGS ?= -O2 -g -Wl,-z,max-page-size=16384
+MOBILE_GOFLAGS ?= -buildvcs=false
 
 client-cli:
 	go build -o $(BIN_DIR)/bproxy-cli ./cmd/bproxy
@@ -39,7 +40,7 @@ mobile-check:
 
 mobile-aar:
 	mkdir -p $(dir $(MOBILE_OUTPUT))
-	CGO_LDFLAGS="$(MOBILE_CGO_LDFLAGS)" gomobile bind -target=$(MOBILE_TARGETS) -androidapi=$(MOBILE_ANDROID_API) -javapkg $(MOBILE_JAVA_PKG) -o $(MOBILE_OUTPUT) ./pkg/mobile
+	GOFLAGS="$(MOBILE_GOFLAGS)" CGO_LDFLAGS="$(MOBILE_CGO_LDFLAGS)" gomobile bind -target=$(MOBILE_TARGETS) -androidapi=$(MOBILE_ANDROID_API) -javapkg $(MOBILE_JAVA_PKG) -o $(MOBILE_OUTPUT) ./pkg/mobile
 
 clean:
 	rm -rf bin

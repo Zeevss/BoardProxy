@@ -498,7 +498,7 @@ func (l *Link) handle(ev board.Event) {
 			confirmReceipt(rec)
 			rtt := time.Since(rec.sent)
 			l.lim.onAck(rtt)
-			if rec.size >= sizerMinSampleSize { // см. sizerMinSampleSize
+			if rec.size >= sizerMinSampleSize {
 				l.sizer.onAck(rtt, rec.size)
 			}
 			l.flight.release()
@@ -509,10 +509,15 @@ func (l *Link) handle(ev board.Event) {
 		}
 		frame, err := l.codec.Decode(ev.Object.Value)
 		if err != nil {
-			return // не наш (ErrNotProtocol) или битый — игнорируем
+			// Lane pages are reserved transport storage. Garbage left by a prior
+			// owner or a manual writer must not accumulate into the next snapshot.
+			l.log.Debug("link removing undecodable foreign board object", "object", ev.Object.ID)
+			l.enqueueAck(ev.Object.ID)
+			return
 		}
 		kind, rest, ok := kindOf(frame)
 		if !ok {
+			l.enqueueAck(ev.Object.ID)
 			return
 		}
 		// Обновляем peer-liveness только после проверки автора, sealed-кодека и
@@ -536,11 +541,12 @@ func (l *Link) handle(ev board.Event) {
 		case frameData:
 			// ACK на приёме — ради чистого RTT-сигнала, затем переупорядочивание и
 			// доставка.
-			l.enqueueAck(ev.Object.ID)
 			seq, payload, ok := decodeData(frame)
 			if !ok {
+				l.enqueueAck(ev.Object.ID)
 				return
 			}
+			l.enqueueAck(ev.Object.ID)
 			ready, _ := l.reasm.accept(seq, payload)
 			for _, p := range ready {
 				select {
@@ -563,7 +569,7 @@ func (l *Link) reconcile(snapshot []board.Object) {
 			if rec, ok := l.outstanding.ack(id); ok {
 				l.confirmedBytes.Add(uint64(rec.size))
 				confirmReceipt(rec)
-				l.flight.release() // заacked, пока нас не было; RTT неизвестен, без CC-сэмпла
+				l.flight.release()
 			}
 		}
 	}
@@ -618,6 +624,7 @@ func (l *Link) ackWorker() {
 		if err := l.sess.Delete(l.ctx, ids...); err != nil && l.ctx.Err() == nil {
 			// Потерянный ACK навсегда удержал бы flight-слот у пира. Ошибки
 			// соединения драйвер ретраит сам; оставшаяся ошибка фатальна для link.
+			l.log.Error("link failed to delete acknowledged board objects", "err", err, "objects", len(ids))
 			l.cancel()
 		}
 	}

@@ -57,7 +57,7 @@ func TestDatagramEgressRoundTripAndClose(t *testing.T) {
 	defer cancel()
 	done := make(chan struct{})
 	go func() {
-		serveDatagram(ctx, serverDatagram, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		serveDatagram(ctx, serverDatagram, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{allowLoopbackForTest: true})
 		close(done)
 	}()
 
@@ -80,5 +80,25 @@ func TestDatagramEgressRoundTripAndClose(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("egress UDP socket was not released after association close")
+	}
+}
+
+func TestEgressIPPolicy(t *testing.T) {
+	tests := []struct {
+		ip      string
+		opts    Options
+		allowed bool
+	}{
+		{"127.0.0.1", Options{AllowPrivate: true}, false},
+		{"169.254.169.254", Options{AllowPrivate: true}, false},
+		{"10.0.0.1", Options{}, false},
+		{"10.0.0.1", Options{AllowPrivate: true}, true},
+		{"1.1.1.1", Options{}, true},
+		{"::1", Options{AllowPrivate: true}, false},
+	}
+	for _, tt := range tests {
+		if got := egressIPAllowed(net.ParseIP(tt.ip), tt.opts); got != tt.allowed {
+			t.Errorf("egressIPAllowed(%s) = %v, want %v", tt.ip, got, tt.allowed)
+		}
 	}
 }

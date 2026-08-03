@@ -23,6 +23,24 @@ import (
 
 type memDialer struct{ b *memory.Board }
 
+func TestPerUserSessionClaimsIncludeLiveAndInFlight(t *testing.T) {
+	s := &Server{
+		cfg:        ServerConfig{MaxSessionsPerUser: 2},
+		byUser:     map[int64]map[*mux.Session]bool{7: {&mux.Session{}: true}},
+		userClaims: make(map[int64]int),
+	}
+	if !s.claimUserSession(7) {
+		t.Fatal("first in-flight session should fit the remaining slot")
+	}
+	if s.claimUserSession(7) {
+		t.Fatal("live plus in-flight sessions exceeded the per-user limit")
+	}
+	s.releaseUserSessionClaim(7)
+	if !s.claimUserSession(7) {
+		t.Fatal("released claim did not free the slot")
+	}
+}
+
 func (d memDialer) Join(context.Context) (board.Session, error) {
 	return d.b.NewSession(board.NewID()), nil
 }
@@ -136,6 +154,26 @@ func newTestHubIdle(t *testing.T, pool []string, idle time.Duration) *testHub {
 	}
 	t.Cleanup(func() { srv.Close() })
 	return &testHub{b: b, srv: srv, serverKP: serverKP, users: users}
+}
+
+func TestServerPoolRejectsDuplicatesHubSlideAndEmptyPages(t *testing.T) {
+	b := memory.NewBoard()
+	kp, err := crypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := NewServer(context.Background(), ServerConfig{
+		HubSession: b.NewSession("hub-observer"), HubSlide: "hub",
+		Pool: []string{"", "hub", "lane", "lane"}, Dialer: memDialer{b: b},
+		ServerStatic: kp, Users: newFakeUsers(), Codec: codec.Base64Codec{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	if got := srv.pool.available(); got != 1 {
+		t.Fatalf("sanitized pool size = %d, want 1", got)
+	}
 }
 
 // dial провизионирует свежий ключ клиента и подключается (авторизованный путь).
@@ -260,6 +298,60 @@ func TestHubUnauthorizedClientDenied(t *testing.T) {
 	if got := h.srv.pool.available(); got != 1 {
 		t.Fatalf("pool available = %d, want 1 (denied client must not hold a page)", got)
 	}
+}
+
+func TestLanePageIsCleanedBeforeAssignmentAndAfterLeave(t *testing.T) {
+	h := newTestHub(t, []string{"p1"})
+	stale := h.b.NewSession("previous-user")
+	if _, err := stale.Subscribe(context.Background(), "p1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := stale.Put(context.Background(), board.Object{ID: "stale-before", Value: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = stale.Close()
+
+	client, err := h.dial(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := h.b.NewSession("observer")
+	snapshot, err := observer.Subscribe(context.Background(), "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, obj := range snapshot {
+		if obj.ID == "stale-before" {
+			t.Fatal("previous user's object survived lane assignment cleanup")
+		}
+	}
+
+	intruder := h.b.NewSession("late-writer")
+	if _, err := intruder.Subscribe(context.Background(), "p1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := intruder.Put(context.Background(), board.Object{ID: "stale-after", Value: "late"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = client.Close()
+	if err := waitPool(h.srv, 1, 3*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = observer.Subscribe(context.Background(), "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, obj := range snapshot {
+		if obj.ID == "stale-after" {
+			t.Fatal("departed lane's page was released with stale objects")
+		}
+	}
+	stats := h.srv.Stats()
+	if stats.PageCleanupRuns < 2 || stats.PageCleanupDeleted < 1 || stats.PageCleanupFailures != 0 {
+		t.Fatalf("page cleanup stats = %+v", stats)
+	}
+	_ = intruder.Close()
+	_ = observer.Close()
 }
 
 func TestHubRejectsWrongServerKey(t *testing.T) {

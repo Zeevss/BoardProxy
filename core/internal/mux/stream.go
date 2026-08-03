@@ -113,6 +113,9 @@ func (s *Stream) ID() uint32 { return s.id }
 // It returns io.EOF after the peer's FIN and ErrStreamReset after a RESET. As
 // bytes are consumed it advertises the freed window space back to the peer.
 func (s *Stream) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	s.recvMu.Lock()
 	for len(s.recvBuf) == 0 && s.readErr == nil {
 		s.recvCond.Wait()

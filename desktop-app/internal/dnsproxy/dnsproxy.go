@@ -15,14 +15,25 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
+const (
+	maxConcurrentQueries = 128
+	maxNameEntries       = 4096
+)
+
+type nameEntry struct {
+	host    string
+	expires time.Time
+}
+
 // Proxy обслуживает UDP DNS на listenAddr и форвардит на upstream, ведя кэш
 // IP→домен. Потокобезопасен.
 type Proxy struct {
 	upstream string
 	conn     *net.UDPConn
 
-	mu    sync.RWMutex
-	names map[string]string // ip -> host
+	mu       sync.RWMutex
+	names    map[string]nameEntry // ip -> host with DNS TTL
+	inflight chan struct{}
 
 	closeOnce sync.Once
 }
@@ -41,7 +52,8 @@ func Start(listenAddr, upstream string) (*Proxy, error) {
 	p := &Proxy{
 		upstream: upstream,
 		conn:     conn,
-		names:    make(map[string]string),
+		names:    make(map[string]nameEntry),
+		inflight: make(chan struct{}, maxConcurrentQueries),
 	}
 	go p.serve()
 	return p, nil
@@ -51,7 +63,11 @@ func Start(listenAddr, upstream string) (*Proxy, error) {
 func (p *Proxy) HostForIP(ip string) string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.names[ip]
+	entry := p.names[ip]
+	if entry.expires.IsZero() || time.Now().After(entry.expires) {
+		return ""
+	}
+	return entry.host
 }
 
 // Stop закрывает сокет.
@@ -71,7 +87,15 @@ func (p *Proxy) serve() {
 		}
 		query := make([]byte, n)
 		copy(query, buf[:n])
-		go p.handle(query, client)
+		select {
+		case p.inflight <- struct{}{}:
+			go func() {
+				defer func() { <-p.inflight }()
+				p.handle(query, client)
+			}()
+		default:
+			// UDP permits loss; bound goroutines under a local query flood.
+		}
 	}
 }
 
@@ -125,12 +149,32 @@ func (p *Proxy) record(resp []byte) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	now := time.Now()
+	for ip, entry := range p.names {
+		if now.After(entry.expires) {
+			delete(p.names, ip)
+		}
+	}
 	for _, a := range answers {
+		ttl := time.Duration(a.Header.TTL) * time.Second
+		if ttl <= 0 {
+			ttl = time.Minute
+		}
+		expires := now.Add(ttl)
+		put := func(ip string) {
+			if _, exists := p.names[ip]; !exists && len(p.names) >= maxNameEntries {
+				for oldest := range p.names {
+					delete(p.names, oldest)
+					break
+				}
+			}
+			p.names[ip] = nameEntry{host: name, expires: expires}
+		}
 		switch r := a.Body.(type) {
 		case *dnsmessage.AResource:
-			p.names[net.IP(r.A[:]).String()] = name
+			put(net.IP(r.A[:]).String())
 		case *dnsmessage.AAAAResource:
-			p.names[net.IP(r.AAAA[:]).String()] = name
+			put(net.IP(r.AAAA[:]).String())
 		}
 	}
 }

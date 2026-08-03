@@ -241,6 +241,12 @@ func serveCmd(socket *string) *cobra.Command {
 	f.IntVar(&cfg.Server.MaxLanes, "max-lanes",
 		getenvIntOr("BPROXY_SERVER_MAX_LANES", cfg.Server.MaxLanes),
 		"maximum physical lanes accepted per client bundle (1-16)")
+	f.IntVar(&cfg.Server.MaxSessionsPerUser, "max-sessions-per-user",
+		getenvIntOr("BPROXY_SERVER_MAX_SESSIONS_PER_USER", cfg.Server.MaxSessionsPerUser),
+		"maximum independent logical sessions per provisioned user (0 disables the limit)")
+	f.BoolVar(&cfg.Server.AllowPrivateEgress, "allow-private-egress",
+		getenvBoolOr("BPROXY_ALLOW_PRIVATE_EGRESS", cfg.Server.AllowPrivateEgress),
+		"allow clients to reach RFC1918/ULA destinations (loopback and link-local stay blocked)")
 	f.StringVar(&cfg.LogLevel, "log", getenvOr("BPROXY_LOG", cfg.LogLevel), "log level: debug|info|warn|error")
 	f.StringVar(&cfg.Server.WebAPI, "web-api", getenvOr("WEB_API", ""),
 		"HTTP address (host:port) to also expose the management API on, e.g. 127.0.0.1:8080 (empty = disabled)")
@@ -446,6 +452,18 @@ func getenvIntOr(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func getenvBoolOr(key string, fallback bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return b
 }
 
 // defaultKeyPath резолвит путь к файлу приватного ключа сервера рядом с самим

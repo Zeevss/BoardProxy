@@ -10,6 +10,7 @@ import {
   LogOut,
   RefreshCw,
   Network,
+  ChartNoAxesCombined,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -31,6 +32,7 @@ const NAV = [
   { to: "/", label: "Обзор", icon: LayoutDashboard, end: true },
   { to: "/clients", label: "Клиенты", icon: Users, end: false },
   { to: "/boards", label: "Доски", icon: LayoutPanelTop, end: false },
+  { to: "/statistics", label: "Статистика", icon: ChartNoAxesCombined, end: false },
   { to: "/logs", label: "Логи", icon: ScrollText, end: false },
   { to: "/maintenance", label: "Обслуживание", icon: Wrench, end: false },
 ];

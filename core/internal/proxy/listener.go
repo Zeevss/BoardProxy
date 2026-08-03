@@ -39,6 +39,10 @@ const bypassDialTimeout = 10 * time.Second
 // dnsTimeout ограничивает локальный DNS-резолв при Options.LocalDNS.
 const dnsTimeout = 5 * time.Second
 
+// proxyHandshakeTimeout bounds clients that connect but never finish the
+// SOCKS/HTTP greeting. It is cleared before payload relay begins.
+const proxyHandshakeTimeout = 15 * time.Second
+
 // Dialer открывает стрим до целевого адреса (реализуется *mux.Session).
 type Dialer interface {
 	OpenStream(target string) (*mux.Stream, error)
@@ -240,6 +244,7 @@ func drainWithTimeout(wg *sync.WaitGroup, d time.Duration) {
 
 func handleConn(conn net.Conn, r *router, log *slog.Logger) {
 	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(proxyHandshakeTimeout))
 	br := bufio.NewReader(conn)
 	first, err := br.Peek(1)
 	if err != nil {
@@ -250,6 +255,10 @@ func handleConn(conn net.Conn, r *router, log *slog.Logger) {
 	} else {
 		serveHTTP(conn, br, r, log)
 	}
+}
+
+func clearConnDeadline(conn net.Conn) {
+	_ = conn.SetDeadline(time.Time{})
 }
 
 // bufConn представляет клиентское соединение как relay.Stream: чтение идёт из

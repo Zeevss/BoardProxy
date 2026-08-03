@@ -14,9 +14,12 @@ import (
 	"github.com/coder/websocket"
 )
 
-// readLimit caps a single websocket frame. Page snapshots (the ack of
-// subscribe-slide-dashboard) can be large, so this is generous.
-const readLimit = 16 << 20
+// readLimit caps one decompressed WebSocket message. Real board state packets
+// can exceed 16 MiB; 64 MiB lets the page lifecycle inspect and clean them
+// while retaining a hard memory bound.
+const readLimit = 64 << 20
+
+const writeTimeout = 10 * time.Second
 
 // heartbeatGrace tolerates scheduler and network jitter on top of the
 // Engine.IO-advertised ping interval + timeout. A missing ping beyond this
@@ -29,7 +32,17 @@ var (
 	ErrClosed = errors.New("socketio: client closed")
 	// ErrConnClosed is returned when the connection dropped while awaiting an ack.
 	ErrConnClosed = errors.New("socketio: connection closed while awaiting ack")
+	// ErrEventBacklog forces a controlled reconnect when application events are
+	// no longer being drained. The Engine.IO reader must remain able to pong.
+	ErrEventBacklog = errors.New("socketio: application event backlog overflow")
 )
+
+// IsMessageTooBig identifies a local read-limit failure without leaking the
+// websocket implementation into the board session package.
+func IsMessageTooBig(err error) bool { return errors.Is(err, websocket.ErrMessageTooBig) }
+
+// ReadLimit exposes the configured safety bound for diagnostics.
+func ReadLimit() int64 { return readLimit }
 
 // Message is a server-initiated Socket.IO event: the event name and its
 // remaining JSON arguments.
@@ -193,6 +206,14 @@ func (c *Client) Emit(ctx context.Context, event string, arg any) ([]json.RawMes
 // client closes.
 func (c *Client) Events() <-chan Message { return c.incoming }
 
+// Err returns the terminal reason after the event stream has closed. It is
+// used by the board session to distinguish heartbeat timeouts, peer closes and
+// local shutdowns in transport diagnostics.
+func (c *Client) Err() error {
+	<-c.done
+	return c.closeErr
+}
+
 // Close shuts the connection down and waits for the read loop to finish.
 func (c *Client) Close() error {
 	c.fail(ErrClosed)
@@ -224,17 +245,20 @@ func (c *Client) readLoop() {
 			loopErr = ErrConnClosed
 			return
 		case eioMessage:
-			c.handleMessage(p)
+			if err := c.handleMessage(p); err != nil {
+				loopErr = err
+				return
+			}
 		}
 	}
 }
 
-func (c *Client) handleMessage(p packet) {
+func (c *Client) handleMessage(p packet) error {
 	switch p.sio {
 	case sioEvent:
 		var arr []json.RawMessage
 		if err := json.Unmarshal(p.body, &arr); err != nil || len(arr) == 0 {
-			return
+			return nil
 		}
 		var name string
 		_ = json.Unmarshal(arr[0], &name)
@@ -245,9 +269,16 @@ func (c *Client) handleMessage(p packet) {
 			frame = append(frame, '[', ']')
 			_ = c.writeFrame(c.ctx, frame)
 		}
+		// This goroutine also answers Engine.IO ping frames. Never block it behind
+		// a slow application consumer: once the bounded queue is full, reconnect
+		// and resynchronise explicitly instead of silently starving heartbeat.
 		select {
 		case c.incoming <- Message{Event: name, Args: arr[1:]}:
+			return nil
 		case <-c.ctx.Done():
+			return c.ctx.Err()
+		default:
+			return ErrEventBacklog
 		}
 	case sioAck:
 		var arr []json.RawMessage
@@ -256,6 +287,7 @@ func (c *Client) handleMessage(p packet) {
 	case sioConnectError:
 		c.fail(fmt.Errorf("socketio: connect error: %s", string(p.body)))
 	}
+	return nil
 }
 
 func (c *Client) fail(err error) {
@@ -295,5 +327,7 @@ func (c *Client) readFrame(ctx context.Context) ([]byte, error) {
 func (c *Client) writeFrame(ctx context.Context, data []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return c.conn.Write(ctx, websocket.MessageText, data)
+	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	return c.conn.Write(writeCtx, websocket.MessageText, data)
 }

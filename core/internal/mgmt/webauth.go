@@ -6,8 +6,10 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -26,7 +28,58 @@ type WebAuthConfig struct {
 const (
 	sessionCookie = "bproxy_session"
 	sessionTTL    = 12 * time.Hour
+	maxLoginBody  = 4 << 10
+	loginWindow   = time.Minute
+	loginBurst    = 5
 )
+
+type loginAttempt struct {
+	window time.Time
+	count  int
+}
+
+type loginLimiter struct {
+	mu       sync.Mutex
+	attempts map[string]loginAttempt
+}
+
+func newLoginLimiter() *loginLimiter {
+	return &loginLimiter{attempts: make(map[string]loginAttempt)}
+}
+
+func (l *loginLimiter) allow(remote string, now time.Time) bool {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = remote
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	a := l.attempts[host]
+	if a.window.IsZero() || now.Sub(a.window) >= loginWindow {
+		a = loginAttempt{window: now}
+	}
+	if a.count >= loginBurst {
+		return false
+	}
+	a.count++
+	l.attempts[host] = a
+	// Keep the map bounded even behind a public listener receiving spoof-like
+	// churn through many real source addresses.
+	if len(l.attempts) > 4096 {
+		for key, entry := range l.attempts {
+			if now.Sub(entry.window) >= loginWindow {
+				delete(l.attempts, key)
+			}
+		}
+		for len(l.attempts) > 4096 {
+			for key := range l.attempts {
+				delete(l.attempts, key)
+				break
+			}
+		}
+	}
+	return true
+}
 
 // WebAuth оборачивает управляющий handler аутентификацией web-API. Монтирует
 // открытые POST /login и POST /logout, а на остальные запросы требует валидный
@@ -43,10 +96,16 @@ func WebAuth(cfg WebAuthConfig, next http.Handler) http.Handler {
 		key = sum[:]
 	}
 	open := cfg.Token == "" && cfg.UIPassword == ""
+	limiter := newLoginLimiter()
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/login":
+			if !limiter.allow(r.RemoteAddr, time.Now()) {
+				w.Header().Set("Retry-After", strconv.Itoa(int(loginWindow.Seconds())))
+				http.Error(w, `{"error":"too many login attempts"}`, http.StatusTooManyRequests)
+				return
+			}
 			handleLogin(w, r, cfg.UIPassword, key)
 			return
 		case r.Method == http.MethodPost && r.URL.Path == "/logout":
@@ -69,10 +128,13 @@ func handleLogin(w http.ResponseWriter, r *http.Request, password string, key []
 		http.Error(w, `{"error":"password login disabled"}`, http.StatusNotFound)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)
 	var req struct {
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
 		return
 	}
@@ -80,7 +142,8 @@ func handleLogin(w http.ResponseWriter, r *http.Request, password string, key []
 		http.Error(w, `{"error":"invalid password"}`, http.StatusUnauthorized)
 		return
 	}
-	setSession(w, key)
+	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	setSession(w, key, secure)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -109,7 +172,7 @@ func sessionOK(key []byte, r *http.Request) bool {
 }
 
 // setSession ставит подписанную HttpOnly-cookie со сроком sessionTTL.
-func setSession(w http.ResponseWriter, key []byte) {
+func setSession(w http.ResponseWriter, key []byte, secure bool) {
 	exp := time.Now().Add(sessionTTL)
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
@@ -118,8 +181,7 @@ func setSession(w http.ResponseWriter, key []byte) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  exp,
-		// Secure не ставим: панель может работать за внешним TLS-терминатором
-		// или на loopback по HTTP (см. README).
+		Secure:   secure,
 	})
 }
 

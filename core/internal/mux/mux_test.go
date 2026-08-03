@@ -898,6 +898,40 @@ func TestPeerGoAwayPreservesTerminalReason(t *testing.T) {
 	_ = s.Close()
 }
 
+func TestPeerCannotOpenStreamInLocalIDSpace(t *testing.T) {
+	c := newStubConn(1024)
+	s := New(c, Options{}) // server owns even ids; client peer owns odd ids
+	s.dispatch(frameOut{typ: proto.FrameSyn, stream: 2, payload: encodeSyn(1024, "example:80")})
+	select {
+	case <-s.Done():
+	case <-time.After(time.Second):
+		t.Fatal("wrong-parity SYN did not close the session")
+	}
+	if !errors.Is(s.Err(), ErrProtocolViolation) {
+		t.Fatalf("error = %v, want ErrProtocolViolation", s.Err())
+	}
+}
+
+func TestDatagramDeliveryDropsInsteadOfBlockingMux(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &Session{ctx: ctx}
+	d := newDatagram(1, s)
+	for i := 0; i < datagramRecvQueue; i++ {
+		d.recv <- DatagramPacket{Payload: []byte{byte(i)}}
+	}
+	done := make(chan struct{})
+	go func() {
+		d.deliver(DatagramPacket{Payload: []byte("drop")})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("full datagram queue blocked mux delivery")
+	}
+}
+
 func eventuallyMux(cond func() bool) error {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

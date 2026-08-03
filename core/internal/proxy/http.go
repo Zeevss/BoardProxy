@@ -17,6 +17,7 @@ func serveHTTP(conn net.Conn, br *bufio.Reader, r *router, log *slog.Logger) {
 	if err != nil {
 		return
 	}
+	clearConnDeadline(conn)
 
 	if req.Method == http.MethodConnect {
 		serveConnect(conn, br, req.Host, r, log)

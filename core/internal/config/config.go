@@ -81,19 +81,21 @@ type Server struct {
 	IdleTimeout time.Duration
 	// MaxLanes limits physical pages accepted into one client bundle.
 	MaxLanes int
+	// MaxSessionsPerUser limits independent logical proxy sessions owned by one
+	// provisioned user. Additional lanes of an existing session do not count.
+	MaxSessionsPerUser int
+	// AllowPrivateEgress permits RFC1918/ULA destinations. Loopback, link-local,
+	// multicast and unspecified addresses remain blocked in all modes.
+	AllowPrivateEgress bool
 	// Socket is the unix-socket path for the local management API (clients /
 	// boards). The server listens here; the CLI dials it.
 	Socket string
 	// WebAPI, if set, is a TCP address (host:port) where the SAME management
-	// API also listens over plain HTTP — for remote/scripted access instead of
-	// the local unix socket. Empty (default) disables it. There is no built-in
-	// authentication: binding anything other than a loopback address exposes
-	// full control (client/board CRUD, restart) to whoever can reach it: put
-	// it behind your own auth/reverse proxy, or a token via WebAPIToken.
+	// API also listens over HTTP. Empty disables it. At least WebAPIToken or
+	// WebUIPassword is required; an unauthenticated TCP API is not started.
 	WebAPI string
 	// WebAPIToken, if set, requires "Authorization: Bearer <token>" on every
-	// WebAPI request. Optional — WebAPI works without it (with a startup
-	// warning if bound to a non-loopback address).
+	// WebAPI request. Either this or WebUIPassword must be configured.
 	WebAPIToken string
 	// WebUIPassword, if set, enables password login for the web panel over
 	// WebAPI: POST /login checks this password and issues a signed session
@@ -157,7 +159,9 @@ func Default() Config {
 			AckTimeout:      6 * time.Second,
 			// CoalesceTarget: 0 — без ручного потолка, полностью адаптивно
 			// (см. поле выше).
-			StreamIdleTimeout: 2 * time.Minute,
+			// Long-lived TCP connections may legitimately stay silent. Operators can
+			// opt into an application-idle policy explicitly.
+			StreamIdleTimeout: 0,
 		},
 		Client: Client{
 			Listen:   "127.0.0.1:1080",
@@ -167,10 +171,11 @@ func Default() Config {
 			// Три пропущенных heartbeat-интервала (link шлёт их раз в 30с):
 			// достаточно терпимо к краткому лагу доски, но не удерживает страницу
 			// аварийно завершившегося клиента пять минут.
-			IdleTimeout: 90 * time.Second,
-			MaxLanes:    4,
-			Socket:      "/tmp/bproxy.sock",
-			KeyPath:     "bproxy.key",
+			IdleTimeout:        90 * time.Second,
+			MaxLanes:           4,
+			MaxSessionsPerUser: 4,
+			Socket:             "/tmp/bproxy.sock",
+			KeyPath:            "bproxy.key",
 		},
 		Store: Store{
 			Path: "bproxy.db",

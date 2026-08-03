@@ -29,6 +29,8 @@ var ErrPeerGoAway = errors.New("mux: peer graceful shutdown")
 
 var ErrProtocolViolation = errors.New("mux: protocol violation")
 
+var ErrResourceLimit = errors.New("mux: resource limit reached")
+
 const (
 	defaultMaxPayload      = 2048
 	defaultStreamWindow    = 1 << 20
@@ -39,9 +41,14 @@ const (
 	// much it can have in flight). Sized well above what one coalesced batch
 	// consumes at the bootstrap coalesce target, given frames are typically
 	// ≤32KiB (io.Copy's buffer size).
-	dataQueueCap = 256
-	acceptQueue  = 64
-	orphanLimit  = 4 << 20
+	dataQueueCap     = 256
+	acceptQueue      = 64
+	orphanLimit      = 4 << 20
+	maxOrphanFrames  = 4096
+	maxOrphanStreams = 1024
+	maxAssociations  = 4096
+	maxTargetLength  = 1024
+	maxPeerWindow    = 256 << 20
 	// maxStreamReorderRanges bounds map overhead even for a malicious peer
 	// sending many one-byte sparse ranges inside an otherwise valid window.
 	maxStreamReorderRanges = 4096
@@ -145,6 +152,7 @@ type Session struct {
 	acceptDatagram chan *Datagram
 	orphans        map[uint32][]frameOut
 	orphanBytes    int
+	orphanFrames   int
 
 	// Байты стримов, которые уже закрылись, — чтобы суммарные счётчики не
 	// уменьшались, когда стрим уходит из streams (см. removeStream, Stats).
@@ -267,12 +275,23 @@ func New(conn Conn, opts Options) *Session {
 
 // OpenStream opens a new stream to target and announces it with a SYN.
 func (s *Session) OpenStream(target string) (*Stream, error) {
+	if target == "" || len(target) > maxTargetLength {
+		return nil, ErrProtocolViolation
+	}
 	s.mu.Lock()
 	if s.streams == nil || s.ctx.Err() != nil {
 		s.mu.Unlock()
 		return nil, ErrClosed
 	}
+	if len(s.streams)+len(s.datagrams) >= maxAssociations {
+		s.mu.Unlock()
+		return nil, ErrResourceLimit
+	}
 	id := s.nextID
+	if id == 0 || s.streams[id] != nil || s.datagrams[id] != nil {
+		s.mu.Unlock()
+		return nil, ErrResourceLimit
+	}
 	s.nextID += 2
 	// sendMax starts at our own initial window (the peer is assumed symmetric
 	// until SYN says otherwise); SYN advertises our absolute initial limit.
@@ -296,7 +315,15 @@ func (s *Session) OpenDatagram() (*Datagram, error) {
 		s.mu.Unlock()
 		return nil, ErrClosed
 	}
+	if len(s.streams)+len(s.datagrams) >= maxAssociations {
+		s.mu.Unlock()
+		return nil, ErrResourceLimit
+	}
 	id := s.nextID
+	if id == 0 || s.streams[id] != nil || s.datagrams[id] != nil {
+		s.mu.Unlock()
+		return nil, ErrResourceLimit
+	}
 	s.nextID += 2
 	d := newDatagram(id, s)
 	s.datagrams[id] = d
@@ -506,13 +533,16 @@ func (s *Session) bufferOrphan(f frameOut) bool {
 	}
 	size := encodedLen(f)
 	s.mu.Lock()
-	if s.streams == nil || s.orphanBytes+size > orphanLimit {
+	_, existingStream := s.orphans[f.stream]
+	if s.streams == nil || s.orphanBytes+size > orphanLimit ||
+		s.orphanFrames >= maxOrphanFrames || (!existingStream && len(s.orphans) >= maxOrphanStreams) {
 		s.mu.Unlock()
 		s.closeWithError(ErrProtocolViolation)
 		return false
 	}
 	s.orphans[f.stream] = append(s.orphans[f.stream], f)
 	s.orphanBytes += size
+	s.orphanFrames++
 	s.mu.Unlock()
 	return true
 }
@@ -522,11 +552,18 @@ func (s *Session) takeOrphansLocked(id uint32) []frameOut {
 	delete(s.orphans, id)
 	for _, f := range frames {
 		s.orphanBytes -= encodedLen(f)
+		s.orphanFrames--
 	}
 	return frames
 }
 
 func (s *Session) onSyn(f frameOut) {
+	window, target, ok := decodeSyn(f.payload)
+	if !s.peerOwnedID(f.stream) || !ok || window == 0 || window > maxPeerWindow ||
+		target == "" || len(target) > maxTargetLength {
+		s.closeWithError(ErrProtocolViolation)
+		return
+	}
 	s.mu.Lock()
 	if s.streams == nil {
 		s.mu.Unlock()
@@ -536,9 +573,9 @@ func (s *Session) onSyn(f frameOut) {
 		s.mu.Unlock()
 		return // duplicate SYN, ignore
 	}
-	window, target, ok := decodeSyn(f.payload)
-	if !ok {
+	if len(s.streams)+len(s.datagrams) >= maxAssociations {
 		s.mu.Unlock()
+		_ = s.enqueueControl(frameOut{typ: proto.FrameReset, stream: f.stream})
 		return
 	}
 	// The peer advertised how much it will buffer from us → our send window.
@@ -566,13 +603,26 @@ func (s *Session) onSyn(f frameOut) {
 	select {
 	case s.accept <- st:
 	case <-s.ctx.Done():
+	default:
+		s.removeStream(f.stream)
+		st.onReset()
+		_ = s.enqueueControl(frameOut{typ: proto.FrameReset, stream: f.stream})
 	}
 }
 
 func (s *Session) onDatagramOpen(f frameOut) {
+	if !s.peerOwnedID(f.stream) || len(f.payload) != 0 {
+		s.closeWithError(ErrProtocolViolation)
+		return
+	}
 	s.mu.Lock()
 	if s.datagrams == nil || s.streams[f.stream] != nil || s.datagrams[f.stream] != nil {
 		s.mu.Unlock()
+		return
+	}
+	if len(s.streams)+len(s.datagrams) >= maxAssociations {
+		s.mu.Unlock()
+		_ = s.enqueueControl(frameOut{typ: proto.FrameDatagramClose, stream: f.stream})
 		return
 	}
 	d := newDatagram(f.stream, s)
@@ -597,6 +647,10 @@ func (s *Session) onDatagramOpen(f frameOut) {
 	select {
 	case s.acceptDatagram <- d:
 	case <-s.ctx.Done():
+	default:
+		s.removeDatagram(f.stream)
+		d.shutdown()
+		_ = s.enqueueControl(frameOut{typ: proto.FrameDatagramClose, stream: f.stream})
 	}
 }
 

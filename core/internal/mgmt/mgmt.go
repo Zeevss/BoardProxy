@@ -89,14 +89,22 @@ type LogEntry struct {
 
 // ServerStats — агрегатная статистика для дашборда.
 type ServerStats struct {
-	Clients       int    `json:"clients"`        // всего заведённых клиентов
-	ClientsActive int    `json:"clients_active"` // из них со статусом active
-	ClientsOnline int    `json:"clients_online"` // сейчас на линии (живые сессии по всем хабам)
-	Boards        int    `json:"boards"`         // всего досок
-	BoardsActive  int    `json:"boards_active"`  // из них активных
-	FreePages     int    `json:"free_pages"`     // свободных страниц (сумма по хабам)
-	RxBytes       uint64 `json:"rx_bytes"`       // суммарно получено от клиентов
-	TxBytes       uint64 `json:"tx_bytes"`       // суммарно отправлено клиентам
+	Clients                int    `json:"clients"`        // всего заведённых клиентов
+	ClientsActive          int    `json:"clients_active"` // из них со статусом active
+	ClientsOnline          int    `json:"clients_online"` // сейчас на линии (живые сессии по всем хабам)
+	Boards                 int    `json:"boards"`         // всего досок
+	BoardsActive           int    `json:"boards_active"`  // из них активных
+	FreePages              int    `json:"free_pages"`     // свободных страниц (сумма по хабам)
+	RxBytes                uint64 `json:"rx_bytes"`       // суммарно получено от клиентов
+	TxBytes                uint64 `json:"tx_bytes"`       // суммарно отправлено клиентам
+	OnlineUsers            int    `json:"online_users"`
+	ActiveConnections      int    `json:"active_connections"`
+	ActiveLanes            int    `json:"active_lanes"`
+	ActiveStreams          int    `json:"active_streams"`
+	PageCleanupRuns        uint64 `json:"page_cleanup_runs"`
+	PageCleanupDeleted     uint64 `json:"page_cleanup_deleted"`
+	PageCleanupFailures    uint64 `json:"page_cleanup_failures"`
+	PageCleanupQuarantined uint64 `json:"page_cleanup_quarantined"`
 	// ServingBoards — обслуживаемые сейчас доски (поднятые хабы). Пусто —
 	// board-less старт.
 	ServingBoards []string `json:"serving_boards"`
@@ -104,16 +112,104 @@ type ServerStats struct {
 	HubsUp int `json:"hubs_up"`
 	// PerBoard — разбивка живого состояния по каждому поднятому хабу.
 	PerBoard []BoardStat `json:"per_board"`
+	// Users — трафик и live-нагрузка по каждому заведённому пользователю.
+	Users []UserStat `json:"users"`
+	// Network — raw kernel counters default-route интерфейса core. В Docker это
+	// сторона bproxy bridge внутри network namespace контейнера.
+	Network NetworkStat `json:"network"`
+	// Transport — причины/частота reconnect и стоимость page snapshots.
+	Transport TransportStat `json:"transport"`
 }
 
 // BoardStat — живое состояние одного поднятого хаба (для разбивки на дашборде).
 type BoardStat struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	ClientsOnline int    `json:"clients_online"`
-	FreePages     int    `json:"free_pages"`
-	RxBytes       uint64 `json:"rx_bytes"` // трафик активных сессий этого хаба
-	TxBytes       uint64 `json:"tx_bytes"`
+	ID                     string `json:"id"`
+	Name                   string `json:"name"`
+	ClientsOnline          int    `json:"clients_online"`
+	FreePages              int    `json:"free_pages"`
+	RxBytes                uint64 `json:"rx_bytes"` // трафик активных сессий этого хаба
+	TxBytes                uint64 `json:"tx_bytes"`
+	PageCleanupRuns        uint64 `json:"page_cleanup_runs"`
+	PageCleanupDeleted     uint64 `json:"page_cleanup_deleted"`
+	PageCleanupFailures    uint64 `json:"page_cleanup_failures"`
+	PageCleanupQuarantined uint64 `json:"page_cleanup_quarantined"`
+}
+
+// UserStat combines persisted traffic with the user's currently active mux
+// sessions. It intentionally exposes counts, not stream targets.
+type UserStat struct {
+	ID            int64      `json:"id"`
+	Name          string     `json:"name"`
+	Status        string     `json:"status"`
+	Online        bool       `json:"online"`
+	LastSeen      *time.Time `json:"last_seen,omitempty"`
+	Connections   int        `json:"connections"`
+	Lanes         int        `json:"lanes"`
+	Streams       int        `json:"streams"`
+	RxBytes       uint64     `json:"rx_bytes"`
+	TxBytes       uint64     `json:"tx_bytes"`
+	ActiveRxBytes uint64     `json:"active_rx_bytes"`
+	ActiveTxBytes uint64     `json:"active_tx_bytes"`
+}
+
+// NetworkStat is raw network activity, including WebSocket framing, page
+// snapshots, management traffic and protocol overhead.
+type NetworkStat struct {
+	Available         bool      `json:"available"`
+	Scope             string    `json:"scope"`
+	Interfaces        []string  `json:"interfaces"`
+	StartedAt         time.Time `json:"started_at"`
+	SampledAt         time.Time `json:"sampled_at"`
+	RxBytes           uint64    `json:"rx_bytes"`
+	TxBytes           uint64    `json:"tx_bytes"`
+	RxBytesSinceStart uint64    `json:"rx_bytes_since_start"`
+	TxBytesSinceStart uint64    `json:"tx_bytes_since_start"`
+	RxBytesPerSecond  float64   `json:"rx_bytes_per_second"`
+	TxBytesPerSecond  float64   `json:"tx_bytes_per_second"`
+}
+
+// TransportStat captures reconnect churn that can create raw traffic without
+// corresponding proxy payload.
+type TransportStat struct {
+	StartedAt                    time.Time           `json:"started_at"`
+	DisconnectsTotal             uint64              `json:"disconnects_total"`
+	ReconnectsTotal              uint64              `json:"reconnects_total"`
+	ReconnectAttemptsFailed      uint64              `json:"reconnect_attempts_failed"`
+	CircuitOpenTotal             uint64              `json:"circuit_open_total"`
+	SnapshotObjectsTotal         uint64              `json:"snapshot_objects_total"`
+	SnapshotBytesTotal           uint64              `json:"snapshot_bytes_total"`
+	ReconnectsLastMinute         int                 `json:"reconnects_last_minute"`
+	ReconnectsLastFiveMinutes    int                 `json:"reconnects_last_five_minutes"`
+	SnapshotBytesLastMinute      uint64              `json:"snapshot_bytes_last_minute"`
+	SnapshotBytesLastFiveMinutes uint64              `json:"snapshot_bytes_last_five_minutes"`
+	LastDisconnectAt             *time.Time          `json:"last_disconnect_at,omitempty"`
+	LastDisconnectReason         string              `json:"last_disconnect_reason,omitempty"`
+	LastConnectedForMillis       int64               `json:"last_connected_for_ms"`
+	LastReconnectAt              *time.Time          `json:"last_reconnect_at,omitempty"`
+	LastDowntimeMillis           int64               `json:"last_downtime_ms"`
+	LastSnapshotObjects          int                 `json:"last_snapshot_objects"`
+	LastSnapshotBytes            uint64              `json:"last_snapshot_bytes"`
+	PerRole                      []ReconnectRoleStat `json:"per_role"`
+}
+
+type ReconnectRoleStat struct {
+	Role                    string     `json:"role"`
+	Board                   string     `json:"board"`
+	DisconnectsTotal        uint64     `json:"disconnects_total"`
+	ReconnectsTotal         uint64     `json:"reconnects_total"`
+	ReconnectAttemptsFailed uint64     `json:"reconnect_attempts_failed"`
+	CircuitOpenTotal        uint64     `json:"circuit_open_total"`
+	SnapshotObjectsTotal    uint64     `json:"snapshot_objects_total"`
+	SnapshotBytesTotal      uint64     `json:"snapshot_bytes_total"`
+	ReconnectsLastMinute    int        `json:"reconnects_last_minute"`
+	SnapshotBytesLastMinute uint64     `json:"snapshot_bytes_last_minute"`
+	LastDisconnectAt        *time.Time `json:"last_disconnect_at,omitempty"`
+	LastDisconnectReason    string     `json:"last_disconnect_reason,omitempty"`
+	LastConnectedForMillis  int64      `json:"last_connected_for_ms"`
+	LastReconnectAt         *time.Time `json:"last_reconnect_at,omitempty"`
+	LastDowntimeMillis      int64      `json:"last_downtime_ms"`
+	LastSnapshotObjects     int        `json:"last_snapshot_objects"`
+	LastSnapshotBytes       uint64     `json:"last_snapshot_bytes"`
 }
 
 // ClientInfo — представление пользователя в API.

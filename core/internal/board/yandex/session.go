@@ -22,10 +22,13 @@ const eventBuffer = 1024
 // прозрачно для верхних слоёв: link/mux не видят разрыва, а после re-subscribe
 // получают свежий снапшот на reconcile (см. board.Session.Reconnects).
 const (
-	reconnectMinBackoff = 500 * time.Millisecond
-	reconnectMaxBackoff = 10 * time.Second
-	reconnectDeadline   = 2 * time.Minute
-	redialTimeout       = 30 * time.Second
+	reconnectMinBackoff   = 500 * time.Millisecond
+	reconnectMaxBackoff   = 10 * time.Second
+	reconnectDeadline     = 2 * time.Minute
+	redialTimeout         = 30 * time.Second
+	stableConnectionAge   = 30 * time.Second
+	shortCycleMaxBackoff  = 30 * time.Second
+	oversizedCircuitLimit = 3
 )
 
 // Options configures a Yandex board session.
@@ -44,6 +47,12 @@ type Options struct {
 	ReconnectForever bool
 	// Log receives reconnect lifecycle diagnostics. Nil uses slog.Default().
 	Log *slog.Logger
+	// Role identifies this session in reconnect metrics (for example
+	// "hub-control" or "server-lane").
+	Role string
+	// Metrics, when non-nil, receives reconnect/snapshot counters. A server
+	// shares one collector across all of its board sessions.
+	Metrics *ReconnectMetrics
 }
 
 // socketConn — минимум, что сессия использует от Socket.IO-клиента. Абстракция
@@ -71,6 +80,8 @@ type Session struct {
 	socketURL   string
 	dial        dialFunc
 	log         *slog.Logger
+	role        string
+	metrics     *ReconnectMetrics
 
 	reconnectForever  bool
 	reconnectDeadline time.Duration
@@ -81,17 +92,19 @@ type Session struct {
 	mu   sync.Mutex
 	page string
 
-	closeOnce sync.Once
-	closeCh   chan struct{}
+	closeOnce  sync.Once
+	closeCh    chan struct{}
+	manageDone chan struct{}
 
 	// connMu защищает текущее соединение. sio == nil на время переподключения;
 	// connFail взводится, когда переподключиться так и не удалось. connWait
 	// закрывается и заменяется при каждой смене соединения (или окончательном
 	// провале) — на нём ждут вызовы emit, пока соединения нет.
-	connMu   sync.Mutex
-	sio      socketConn
-	connFail bool
-	connWait chan struct{}
+	connMu      sync.Mutex
+	sio         socketConn
+	connFail    bool
+	connWait    chan struct{}
+	connectedAt time.Time
 }
 
 var _ board.Session = (*Session)(nil)
@@ -99,6 +112,11 @@ var _ board.Session = (*Session)(nil)
 // Join runs the guest join flow (REST auth + Socket.IO connect) and returns a
 // session ready to Subscribe. It does not subscribe to any page yet.
 func Join(ctx context.Context, opts Options) (*Session, error) {
+	// Callers commonly pass a process-lifetime context. Bound the initial REST
+	// and Engine.IO handshake just like reconnect operations so a peer that
+	// accepts TCP and then stalls cannot wedge startup forever.
+	ctx, cancel := context.WithTimeout(ctx, redialTimeout)
+	defer cancel()
 	rest, err := newRESTClient(opts.APIBase, opts.Hash, opts.Protector)
 	if err != nil {
 		return nil, err
@@ -121,8 +139,11 @@ func Join(ctx context.Context, opts Options) (*Session, error) {
 		events:      make(chan board.Event, eventBuffer),
 		reconnects:  make(chan []board.Object, 1),
 		closeCh:     make(chan struct{}),
+		manageDone:  make(chan struct{}),
 		connWait:    make(chan struct{}),
 		log:         opts.Log,
+		role:        opts.Role,
+		metrics:     opts.Metrics,
 
 		reconnectForever:  opts.ReconnectForever,
 		reconnectDeadline: reconnectDeadline,
@@ -133,7 +154,9 @@ func Join(ctx context.Context, opts Options) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("socket.io dial %s: %w", s.socketURL, err)
 	}
-	s.setConnected(sio)
+	if !s.setConnected(sio) {
+		return nil, board.ErrClosed
+	}
 	go s.manage()
 	return s, nil
 }
@@ -264,6 +287,9 @@ func (s *Session) Close() error {
 			err = sio.Close()
 		}
 	})
+	if s.manageDone != nil {
+		<-s.manageDone
+	}
 	return err
 }
 
@@ -326,12 +352,30 @@ func (s *Session) connState() (sio socketConn, failed bool, wait chan struct{}) 
 	return s.sio, s.connFail, s.connWait
 }
 
-func (s *Session) setConnected(sio socketConn) {
+func (s *Session) setConnected(sio socketConn) bool {
 	s.connMu.Lock()
+	select {
+	case <-s.closeCh:
+		s.connMu.Unlock()
+		_ = sio.Close()
+		return false
+	default:
+	}
 	s.sio = sio
+	s.connectedAt = time.Now()
 	close(s.connWait)
 	s.connWait = make(chan struct{})
 	s.connMu.Unlock()
+	return true
+}
+
+func (s *Session) connectedFor() time.Duration {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.connectedAt.IsZero() {
+		return 0
+	}
+	return time.Since(s.connectedAt)
 }
 
 func (s *Session) setDisconnected() {
@@ -354,6 +398,11 @@ func (s *Session) setFailed() {
 // верхних слоёв.
 func (s *Session) manage() {
 	defer close(s.events)
+	if s.manageDone != nil {
+		defer close(s.manageDone)
+	}
+	shortCycles := 0
+	oversizedCycles := 0
 	for {
 		sio, _, _ := s.connState()
 		if sio == nil {
@@ -365,12 +414,92 @@ func (s *Session) manage() {
 		if s.isClosed() {
 			return
 		}
+		reason := socketDisconnectReason(sio)
+		connectedFor := s.connectedFor()
+		if connectedFor >= stableConnectionAge {
+			shortCycles = 0
+			oversizedCycles = 0
+		} else {
+			shortCycles++
+		}
+		if socketio.IsMessageTooBig(socketDisconnectError(sio)) {
+			oversizedCycles++
+		} else {
+			oversizedCycles = 0
+		}
+		s.logger().Warn("board websocket disconnected",
+			"reason", reason, "connected_for", connectedFor,
+			"short_cycle_streak", shortCycles, "oversized_streak", oversizedCycles)
+		s.metrics.recordDisconnect(s.hash, s.metricRole(), reason, connectedFor)
 		s.setDisconnected()
+		if oversizedCycles >= oversizedCircuitLimit {
+			s.logger().Error("board websocket reconnect circuit opened",
+				"reason", reason, "oversized_streak", oversizedCycles,
+				"read_limit_bytes", socketio.ReadLimit())
+			s.metrics.recordCircuitOpen(s.hash, s.metricRole())
+			s.setFailed()
+			return
+		}
+		if delay := shortCycleBackoff(shortCycles); delay > 0 {
+			s.logger().Warn("board websocket short-lived; delaying reconnect",
+				"short_cycle_streak", shortCycles, "delay", delay)
+			if !s.waitReconnect(delay) {
+				return
+			}
+		}
 		if !s.reconnect() {
 			s.setFailed()
 			return
 		}
 	}
+}
+
+type socketErrorProvider interface{ Err() error }
+
+func socketDisconnectError(sio socketConn) error {
+	if p, ok := sio.(socketErrorProvider); ok {
+		return p.Err()
+	}
+	return nil
+}
+
+func socketDisconnectReason(sio socketConn) string {
+	if err := socketDisconnectError(sio); err != nil {
+		return err.Error()
+	}
+	return "socket event stream closed"
+}
+
+func shortCycleBackoff(streak int) time.Duration {
+	if streak <= 0 {
+		return 0
+	}
+	d := reconnectMinBackoff
+	for i := 1; i < streak && d < shortCycleMaxBackoff; i++ {
+		d *= 2
+	}
+	if d > shortCycleMaxBackoff {
+		return shortCycleMaxBackoff
+	}
+	return d
+}
+
+func (s *Session) waitReconnect(delay time.Duration) bool {
+	t := time.NewTimer(delay)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-s.closeCh:
+		return false
+	}
+}
+
+func (s *Session) metricRole() string {
+	if s.role != "" {
+		return s.role
+	}
+	return "unspecified"
 }
 
 // dispatch translates one incoming Socket.IO "dashboard" broadcast into
@@ -403,12 +532,18 @@ func (s *Session) reconnect() bool {
 		attempt++
 		// Первую попытку делаем сразу: транзиентный блип чаще всего лечится
 		// немедленным повтором, backoff нужен только между неудачами.
-		err := s.redial()
+		result, err := s.redial()
 		if err == nil {
+			downtime := time.Since(started)
+			s.metrics.recordReconnect(s.hash, s.metricRole(), downtime,
+				result.snapshotObjects, result.snapshotBytes)
 			s.logger().Info("board websocket reconnected",
-				"attempts", attempt, "downtime", time.Since(started))
+				"attempts", attempt, "downtime", downtime,
+				"snapshot_objects", result.snapshotObjects,
+				"snapshot_bytes", result.snapshotBytes)
 			return true
 		}
+		s.metrics.recordAttemptFailure(s.hash, s.metricRole())
 		if attempt == 1 || attempt%6 == 0 {
 			s.logger().Warn("board websocket disconnected; reconnecting",
 				"attempt", attempt, "retry_forever", s.reconnectForever, "err", err)
@@ -449,32 +584,44 @@ func (s *Session) logger() *slog.Logger {
 // redial открывает новое соединение, заново подписывается на текущую страницу и
 // отдаёт свежий снапшот на reconcile. Подписка идёт напрямую по свежему
 // соединению (не через устойчивый emit), чтобы не ждать самих себя.
-func (s *Session) redial() error {
+type redialResult struct {
+	snapshotObjects int
+	snapshotBytes   uint64
+}
+
+func (s *Session) redial() (redialResult, error) {
 	ctx, cancel := s.opContext()
 	defer cancel()
 
 	sio, err := s.dial(ctx)
 	if err != nil {
-		return err
+		return redialResult{}, err
 	}
 	s.mu.Lock()
 	page := s.page
 	s.mu.Unlock()
 
+	var result redialResult
 	var snapshot []board.Object
 	if page != "" {
 		args, err := sio.Emit(ctx, "dashboard", s.subscribeEnvelope(page))
 		if err != nil {
 			_ = sio.Close()
-			return err
+			return redialResult{}, err
+		}
+		for _, arg := range args {
+			result.snapshotBytes += uint64(len(arg))
 		}
 		snapshot = parseSnapshot(args)
+		result.snapshotObjects = len(snapshot)
 	}
-	s.setConnected(sio)
+	if !s.setConnected(sio) {
+		return redialResult{}, board.ErrClosed
+	}
 	if page != "" {
 		s.deliverReconnect(snapshot)
 	}
-	return nil
+	return result, nil
 }
 
 // deliverReconnect кладёт снапшот в reconnects, оставляя в канале только самый

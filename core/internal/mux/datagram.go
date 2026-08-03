@@ -100,6 +100,10 @@ func (d *Datagram) deliver(p DatagramPacket) {
 	case d.recv <- p:
 	case <-d.done:
 	case <-d.session.ctx.Done():
+	default:
+		// UDP is allowed to drop. Blocking the single mux reader behind one slow
+		// association would otherwise stall every TCP stream and GOAWAY frame in
+		// the session.
 	}
 }
 

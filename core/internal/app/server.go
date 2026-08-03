@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -22,6 +21,7 @@ import (
 	"bproxy-core/internal/link"
 	"bproxy-core/internal/logging"
 	"bproxy-core/internal/mgmt"
+	"bproxy-core/internal/netstats"
 	"bproxy-core/internal/store"
 	"bproxy-core/internal/store/sqlite"
 )
@@ -37,6 +37,10 @@ var ErrRestart = errors.New("app: restart requested")
 
 // serverMetricsInterval — период лога агрегатной нагрузки сервера.
 const serverMetricsInterval = 30 * time.Second
+
+// Five successful reconnects per minute already means the connection is
+// cycling much faster than normal and may repeatedly download page snapshots.
+const reconnectStormPerMinute = 5
 
 // RunServer поднимает сервер: открывает store, резолвит обслуживаемую доску
 // (явный ‑board или первый активный хаб из store), поднимает хаб + egress и
@@ -62,13 +66,15 @@ func RunServer(ctx context.Context, cfg config.Config, log *slog.Logger, logs *l
 	// перезапуск переиспользует весь штатный graceful-shutdown.
 	runCtx, cancelRun := context.WithCancelCause(ctx)
 	defer cancelRun(nil)
+	networkMetrics := netstats.Start(runCtx)
+	reconnectMetrics := yandex.NewReconnectMetrics()
 
 	// Набор досок для обслуживания: активные хабы из store плюс явно заданные в
 	// -board/BPROXY_BOARD (через запятую). Битая доска не валит остальные.
 	boards := resolveBoards(ctx, cfg.Board.Hash, st)
 	set := &hubSet{}
 	for _, board := range boards {
-		srv, err := startHub(runCtx, cfg, board, log, serverStatic, st)
+		srv, err := startHub(runCtx, cfg, board, log, serverStatic, st, reconnectMetrics)
 		if err != nil {
 			log.Warn("skip board: hub failed to start", "board", board, "err", err)
 			continue
@@ -85,6 +91,7 @@ func RunServer(ctx context.Context, cfg config.Config, log *slog.Logger, logs *l
 			"(or start with -b/--board); the management socket is up so you can do that now")
 	}
 
+	stats := statsFunc(st, set, networkMetrics, reconnectMetrics)
 	if cfg.Server.Socket != "" || cfg.Server.WebAPI != "" {
 		var disc mgmt.Disconnector
 		var conns mgmt.ConnectionsProvider
@@ -100,7 +107,7 @@ func RunServer(ctx context.Context, cfg config.Config, log *slog.Logger, logs *l
 			Connections:  conns,
 			Restart:      func() { cancelRun(ErrRestart) },
 			Logs:         logsFunc(logs),
-			Stats:        statsFunc(st, set),
+			Stats:        stats,
 			Backup:       backupFunc(st),
 			Restore:      restoreFunc(cfg.Store.Path, func() { cancelRun(ErrRestart) }),
 		})
@@ -125,15 +132,15 @@ func RunServer(ctx context.Context, cfg config.Config, log *slog.Logger, logs *l
 		wg.Add(1)
 		go func(nh namedHub) {
 			defer wg.Done()
-			if err := egress.Serve(runCtx, nh.srv, log); err != nil &&
+			if err := egress.Serve(runCtx, nh.srv, log, egress.Options{
+				AllowPrivate: cfg.Server.AllowPrivateEgress,
+			}); err != nil &&
 				!errors.Is(err, context.Canceled) {
 				log.Error("egress", "board", nh.board, "err", err)
 			}
 		}(nh)
 	}
-	if !set.empty() {
-		go serverMetricsLoop(runCtx, set, log)
-	}
+	go serverMetricsLoop(runCtx, stats, log)
 	<-runCtx.Done()
 	wg.Wait()
 
@@ -182,19 +189,24 @@ func (h *hubSet) UserConnections(userID int64) []hub.ConnectionInfo {
 // адреса, поэтому при таком сочетании логируем явное предупреждение при
 // старте, а не молчим.
 func startWebAPI(ctx context.Context, cfg config.Config, h http.Handler, log *slog.Logger) {
+	if cfg.Server.WebAPIToken == "" && cfg.Server.WebUIPassword == "" {
+		log.Error("web API disabled: configure --web-api-token or --web-ui-password",
+			"addr", cfg.Server.WebAPI)
+		return
+	}
 	// Аутентификация web-API: bearer-токен (для скриптов) и/или пароль веб-панели
 	// (сессионная cookie). Unix-сокет остаётся без неё — там граница файловые права.
 	h = mgmt.WebAuth(mgmt.WebAuthConfig{
 		Token:      cfg.Server.WebAPIToken,
 		UIPassword: cfg.Server.WebUIPassword,
 	}, h)
-	if cfg.Server.WebAPIToken == "" && cfg.Server.WebUIPassword == "" && !isLoopbackAddr(cfg.Server.WebAPI) {
-		log.Warn("web API bound to a non-loopback address without --web-api-token or --web-ui-password — "+
-			"anyone who can reach it has full control (client/board CRUD, restart)",
-			"addr", cfg.Server.WebAPI)
+	srv := &http.Server{
+		Addr:              cfg.Server.WebAPI,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
-
-	srv := &http.Server{Addr: cfg.Server.WebAPI, Handler: h}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("web api", "err", err)
@@ -208,21 +220,6 @@ func startWebAPI(ctx context.Context, cfg config.Config, h http.Handler, log *sl
 	}()
 	auth := cfg.Server.WebAPIToken != "" || cfg.Server.WebUIPassword != ""
 	log.Info("web api listening", "addr", cfg.Server.WebAPI, "auth", auth)
-}
-
-// isLoopbackAddr сообщает, резолвится ли хост addr ("host:port") в loopback.
-// Пустой/неразбираемый хост (например только ":8080") считается НЕ loopback —
-// это то же самое, что 0.0.0.0, слушает на всех интерфейсах.
-func isLoopbackAddr(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil || host == "" {
-		return false
-	}
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 // resolveBoards возвращает набор досок для обслуживания: объединение активных
@@ -271,16 +268,19 @@ func hubByID(ctx context.Context, st *sqlite.Store, id string) (store.Hub, error
 // startHub присоединяется к доске board, поднимает хаб и регистрирует его в
 // store. board задаётся явно (а не берётся из cfg.Board.Hash) — так один сервер
 // поднимает несколько досок из общего cfg.
-func startHub(ctx context.Context, cfg config.Config, board string, log *slog.Logger, serverStatic crypto.Keypair, st *sqlite.Store) (*hub.Server, error) {
+func startHub(ctx context.Context, cfg config.Config, board string, log *slog.Logger, serverStatic crypto.Keypair, st *sqlite.Store, reconnectMetrics *yandex.ReconnectMetrics) (*hub.Server, error) {
 	// Локальная копия cfg с конкретной доской — boardOptions/resolveHubSlide
 	// читают cfg.Board.Hash.
 	bcfg := cfg
 	bcfg.Board.Hash = board
 
 	laneOptions := boardOptions(bcfg)
+	laneOptions.Role = "server-lane"
+	laneOptions.Metrics = reconnectMetrics
 	laneOptions.Log = log.With("component", "board", "role", "server-lane", "board", board)
 	hubOptions := laneOptions
 	hubOptions.ReconnectForever = true
+	hubOptions.Role = "hub-control"
 	hubOptions.Log = log.With("component", "board", "role", "hub-control", "board", board)
 	hubSess, err := yandex.Join(ctx, hubOptions)
 	if err != nil {
@@ -297,21 +297,22 @@ func startHub(ctx context.Context, cfg config.Config, board string, log *slog.Lo
 		return nil, fmt.Errorf("board has no free pages besides the hub slide")
 	}
 	srv, err := hub.NewServer(ctx, hub.ServerConfig{
-		HubSession:        hubSess,
-		HubSlide:          hubSlide,
-		Pool:              pool,
-		Dialer:            yandexDialer{laneOptions},
-		ServerStatic:      serverStatic,
-		Users:             st,
-		Codec:             codec.Z85Codec{},
-		Link:              linkOptions(bcfg, log),
-		MaxPayload:        cfg.Transport.MaxFramePayload,
-		StreamWindow:      cfg.Transport.StreamWindow,
-		MaxStreamWindow:   cfg.Transport.MaxStreamWindow,
-		CoalesceTarget:    cfg.Transport.CoalesceTarget,
-		StreamIdleTimeout: cfg.Transport.StreamIdleTimeout,
-		IdleTimeout:       cfg.Server.IdleTimeout,
-		MaxLanes:          cfg.Server.MaxLanes,
+		HubSession:         hubSess,
+		HubSlide:           hubSlide,
+		Pool:               pool,
+		Dialer:             yandexDialer{laneOptions},
+		ServerStatic:       serverStatic,
+		Users:              st,
+		Codec:              codec.Z85Codec{},
+		Link:               linkOptions(bcfg, log),
+		MaxPayload:         cfg.Transport.MaxFramePayload,
+		StreamWindow:       cfg.Transport.StreamWindow,
+		MaxStreamWindow:    cfg.Transport.MaxStreamWindow,
+		CoalesceTarget:     cfg.Transport.CoalesceTarget,
+		StreamIdleTimeout:  cfg.Transport.StreamIdleTimeout,
+		IdleTimeout:        cfg.Server.IdleTimeout,
+		MaxLanes:           cfg.Server.MaxLanes,
+		MaxSessionsPerUser: cfg.Server.MaxSessionsPerUser,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start hub: %w", err)
@@ -328,11 +329,9 @@ func startHub(ctx context.Context, cfg config.Config, board string, log *slog.Lo
 	return srv, nil
 }
 
-// serverMetricsLoop периодически логирует агрегатную нагрузку сервера (число
-// клиентов, свободные страницы, суммарный трафик). Персистентный учёт по
-// пользователям (connections.rx/tx_bytes) появится вместе с lifecycle
-// connections — здесь только оперативная видимость.
-func serverMetricsLoop(ctx context.Context, set *hubSet, log *slog.Logger) {
+// serverMetricsLoop logs the same aggregate snapshot exposed by GET /stats and
+// raises an explicit warning when successful reconnects form a storm.
+func serverMetricsLoop(ctx context.Context, stats func() mgmt.ServerStats, log *slog.Logger) {
 	t := time.NewTicker(serverMetricsInterval)
 	defer t.Stop()
 	for {
@@ -340,17 +339,31 @@ func serverMetricsLoop(ctx context.Context, set *hubSet, log *slog.Logger) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			var clients, freePages int
-			var written, received uint64
-			for _, nh := range set.hubs {
-				s := nh.srv.Stats()
-				clients += s.Clients
-				freePages += s.FreePages
-				written += s.Written
-				received += s.Received
+			s := stats()
+			log.Info("server stats",
+				"hubs", s.HubsUp, "online_users", s.OnlineUsers,
+				"connections", s.ActiveConnections, "lanes", s.ActiveLanes,
+				"streams", s.ActiveStreams, "free_pages", s.FreePages,
+				"payload_rx_bytes", s.RxBytes, "payload_tx_bytes", s.TxBytes,
+				"network_scope", s.Network.Scope, "network_interfaces", strings.Join(s.Network.Interfaces, ","),
+				"network_rx_bytes", s.Network.RxBytes, "network_tx_bytes", s.Network.TxBytes,
+				"network_rx_bps", uint64(s.Network.RxBytesPerSecond),
+				"network_tx_bps", uint64(s.Network.TxBytesPerSecond),
+				"reconnects_1m", s.Transport.ReconnectsLastMinute,
+				"snapshot_bytes_1m", s.Transport.SnapshotBytesLastMinute,
+				"reconnect_circuit_open_total", s.Transport.CircuitOpenTotal,
+				"page_cleanup_runs", s.PageCleanupRuns,
+				"page_cleanup_deleted", s.PageCleanupDeleted,
+				"page_cleanup_failures", s.PageCleanupFailures,
+				"page_cleanup_quarantined", s.PageCleanupQuarantined)
+			if s.Transport.ReconnectsLastMinute >= reconnectStormPerMinute {
+				log.Warn("board reconnect storm",
+					"reconnects_1m", s.Transport.ReconnectsLastMinute,
+					"reconnects_5m", s.Transport.ReconnectsLastFiveMinutes,
+					"snapshot_bytes_1m", s.Transport.SnapshotBytesLastMinute,
+					"snapshot_bytes_5m", s.Transport.SnapshotBytesLastFiveMinutes,
+					"last_disconnect_reason", s.Transport.LastDisconnectReason)
 			}
-			log.Info("server stats", "hubs", len(set.hubs), "clients", clients,
-				"free_pages", freePages, "tx_bytes", written, "rx_bytes", received)
 		}
 	}
 }
@@ -379,7 +392,7 @@ func logsFunc(buf *logging.Buffer) func(int) []mgmt.LogEntry {
 // statsFunc собирает агрегатную статистику для дашборда: персистентные счётчики
 // из store (клиенты, доски, суммарный трафик за завершённые сессии) плюс живой
 // снимок хаба (клиенты онлайн, свободные страницы, трафик активных сессий).
-func statsFunc(st *sqlite.Store, set *hubSet) func() mgmt.ServerStats {
+func statsFunc(st *sqlite.Store, set *hubSet, network *netstats.Monitor, reconnects *yandex.ReconnectMetrics) func() mgmt.ServerStats {
 	return func() mgmt.ServerStats {
 		ctx, cancel := context.WithTimeout(context.Background(), storeStatsTimeout)
 		defer cancel()
@@ -392,6 +405,31 @@ func statsFunc(st *sqlite.Store, set *hubSet) func() mgmt.ServerStats {
 				}
 				out.RxBytes += u.RxBytes
 				out.TxBytes += u.TxBytes
+				connections := set.UserConnections(u.ID)
+				us := mgmt.UserStat{
+					ID: u.ID, Name: u.Name, Status: string(u.Status),
+					Connections: len(connections), RxBytes: u.RxBytes, TxBytes: u.TxBytes,
+				}
+				if !u.LastSeen.IsZero() {
+					lastSeen := u.LastSeen
+					us.LastSeen = &lastSeen
+				}
+				for _, conn := range connections {
+					us.ActiveRxBytes += conn.Received
+					us.ActiveTxBytes += conn.Written
+					us.Lanes += len(conn.Lanes)
+					us.Streams += len(conn.Streams)
+				}
+				us.Online = us.Connections > 0
+				if us.Online {
+					out.OnlineUsers++
+				}
+				us.RxBytes += us.ActiveRxBytes
+				us.TxBytes += us.ActiveTxBytes
+				out.ActiveConnections += us.Connections
+				out.ActiveLanes += us.Lanes
+				out.ActiveStreams += us.Streams
+				out.Users = append(out.Users, us)
 			}
 		}
 		if hubs, err := st.ListHubs(ctx); err == nil {
@@ -408,20 +446,83 @@ func statsFunc(st *sqlite.Store, set *hubSet) func() mgmt.ServerStats {
 			out.ServingBoards = append(out.ServingBoards, nh.board)
 			out.ClientsOnline += s.Clients
 			out.FreePages += s.FreePages
+			out.PageCleanupRuns += s.PageCleanupRuns
+			out.PageCleanupDeleted += s.PageCleanupDeleted
+			out.PageCleanupFailures += s.PageCleanupFailures
+			out.PageCleanupQuarantined += s.PageCleanupQuarantined
 			// Трафик активных сессий ещё не осел в store — добавляем его к своду.
 			out.RxBytes += s.Received
 			out.TxBytes += s.Written
 			out.PerBoard = append(out.PerBoard, mgmt.BoardStat{
-				ID:            nh.board,
-				Name:          nh.name,
-				ClientsOnline: s.Clients,
-				FreePages:     s.FreePages,
-				RxBytes:       s.Received,
-				TxBytes:       s.Written,
+				ID:                     nh.board,
+				Name:                   nh.name,
+				ClientsOnline:          s.Clients,
+				FreePages:              s.FreePages,
+				RxBytes:                s.Received,
+				TxBytes:                s.Written,
+				PageCleanupRuns:        s.PageCleanupRuns,
+				PageCleanupDeleted:     s.PageCleanupDeleted,
+				PageCleanupFailures:    s.PageCleanupFailures,
+				PageCleanupQuarantined: s.PageCleanupQuarantined,
 			})
 		}
+		if network != nil {
+			out.Network = networkStat(network.Snapshot())
+		}
+		out.Transport = transportStat(reconnects.Snapshot())
 		return out
 	}
+}
+
+func networkStat(s netstats.Snapshot) mgmt.NetworkStat {
+	return mgmt.NetworkStat{
+		Available: s.Available, Scope: s.Scope, Interfaces: s.Interfaces,
+		StartedAt: s.StartedAt, SampledAt: s.SampledAt,
+		RxBytes: s.RXBytes, TxBytes: s.TXBytes,
+		RxBytesSinceStart: s.RXBytesSinceStart, TxBytesSinceStart: s.TXBytesSinceStart,
+		RxBytesPerSecond: s.RXBytesPerSecond, TxBytesPerSecond: s.TXBytesPerSecond,
+	}
+}
+
+func transportStat(s yandex.ReconnectMetricsSnapshot) mgmt.TransportStat {
+	out := mgmt.TransportStat{
+		StartedAt:        s.StartedAt,
+		DisconnectsTotal: s.DisconnectsTotal, ReconnectsTotal: s.ReconnectsTotal,
+		ReconnectAttemptsFailed: s.ReconnectAttemptsFailed,
+		CircuitOpenTotal:        s.CircuitOpenTotal,
+		SnapshotObjectsTotal:    s.SnapshotObjectsTotal, SnapshotBytesTotal: s.SnapshotBytesTotal,
+		ReconnectsLastMinute:         s.ReconnectsLastMinute,
+		ReconnectsLastFiveMinutes:    s.ReconnectsLastFiveMinutes,
+		SnapshotBytesLastMinute:      s.SnapshotBytesLastMinute,
+		SnapshotBytesLastFiveMinutes: s.SnapshotBytesLastFiveMinutes,
+		LastDisconnectAt:             timePointer(s.LastDisconnectAt), LastDisconnectReason: s.LastDisconnectReason,
+		LastConnectedForMillis: s.LastConnectedFor.Milliseconds(),
+		LastReconnectAt:        timePointer(s.LastReconnectAt), LastDowntimeMillis: s.LastDowntime.Milliseconds(),
+		LastSnapshotObjects: s.LastSnapshotObjects, LastSnapshotBytes: s.LastSnapshotBytes,
+	}
+	for _, r := range s.PerRole {
+		out.PerRole = append(out.PerRole, mgmt.ReconnectRoleStat{
+			Role: r.Role, Board: r.Board,
+			DisconnectsTotal: r.DisconnectsTotal, ReconnectsTotal: r.ReconnectsTotal,
+			ReconnectAttemptsFailed: r.ReconnectAttemptsFailed,
+			CircuitOpenTotal:        r.CircuitOpenTotal,
+			SnapshotObjectsTotal:    r.SnapshotObjectsTotal, SnapshotBytesTotal: r.SnapshotBytesTotal,
+			ReconnectsLastMinute:    r.ReconnectsLastMinute,
+			SnapshotBytesLastMinute: r.SnapshotBytesLastMinute,
+			LastDisconnectAt:        timePointer(r.LastDisconnectAt), LastDisconnectReason: r.LastDisconnectReason,
+			LastConnectedForMillis: r.LastConnectedFor.Milliseconds(),
+			LastReconnectAt:        timePointer(r.LastReconnectAt), LastDowntimeMillis: r.LastDowntime.Milliseconds(),
+			LastSnapshotObjects: r.LastSnapshotObjects, LastSnapshotBytes: r.LastSnapshotBytes,
+		})
+	}
+	return out
+}
+
+func timePointer(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }
 
 // backupFunc отдаёт консистентный снимок БД потоком. Снимок делается во
@@ -472,9 +573,9 @@ func (t *tempFileReader) Close() error {
 // файла происходит в applyPendingRestore при следующем старте, до открытия
 // store, чтобы не гонять запись по уже открытому файлу.
 func restoreFunc(dbPath string, restart func()) func(context.Context, io.Reader) error {
-	return func(_ context.Context, r io.Reader) error {
+	return func(ctx context.Context, r io.Reader) error {
 		staging := dbPath + ".import"
-		f, err := os.Create(staging)
+		f, err := os.OpenFile(staging, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 		if err != nil {
 			return fmt.Errorf("create staging: %w", err)
 		}
@@ -483,9 +584,18 @@ func restoreFunc(dbPath string, restart func()) func(context.Context, io.Reader)
 			_ = os.Remove(staging)
 			return fmt.Errorf("write staging: %w", err)
 		}
+		if err := f.Sync(); err != nil {
+			_ = f.Close()
+			_ = os.Remove(staging)
+			return fmt.Errorf("sync staging: %w", err)
+		}
 		if err := f.Close(); err != nil {
 			_ = os.Remove(staging)
 			return fmt.Errorf("close staging: %w", err)
+		}
+		if err := sqlite.Validate(ctx, staging); err != nil {
+			_ = os.Remove(staging)
+			return fmt.Errorf("validate staging: %w", err)
 		}
 		if restart != nil {
 			restart()

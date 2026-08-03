@@ -41,6 +41,7 @@ func serveSOCKS5(conn net.Conn, br *bufio.Reader, r *router, log *slog.Logger) {
 		_ = socksReply(conn, socksRepCmdNotSup)
 		return
 	}
+	clearConnDeadline(conn)
 
 	if cmd == socksCmdUDP {
 		serveSOCKS5UDP(conn, br, r, log)
@@ -196,6 +197,10 @@ func serveSOCKS5UDP(control net.Conn, br *bufio.Reader, r *router, log *slog.Log
 
 	var clientMu sync.RWMutex
 	var clientAddr *net.UDPAddr
+	var expectedIP net.IP
+	if remote, ok := control.RemoteAddr().(*net.TCPAddr); ok {
+		expectedIP = remote.IP
+	}
 	go func() {
 		for {
 			packet, err := d.Receive(context.Background())
@@ -221,6 +226,9 @@ func serveSOCKS5UDP(control net.Conn, br *bufio.Reader, r *router, log *slog.Log
 		n, source, err := udp.ReadFromUDP(buf)
 		if err != nil {
 			return
+		}
+		if expectedIP != nil && !source.IP.Equal(expectedIP) {
+			continue
 		}
 		clientMu.Lock()
 		if clientAddr == nil {

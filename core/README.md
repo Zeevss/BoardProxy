@@ -89,6 +89,8 @@ Bond переигрывает только неподтверждённые Pack
   проснувшись на первый id, неблокирующе добирает всё, что уже накопилось (до
   потолка), и удаляет их одним wire-вызовом вместо одного `Delete` на объект —
   без искусственной задержки, при отсутствии очереди батч вырождается в один id.
+- **Live sanitation:** страница lane является служебной; объекты, которые не
+  декодируются текущим sealed-кодеком, удаляются как мусор прошлого владельца.
 - **Коалесинг data-кадров:** отправитель (`internal/mux`) объединяет несколько
   data-кадров (round-robin по стримам) в один board-объект, целясь в
   адаптивный целевой размер (не статическая константа — см. следующий пункт).
@@ -172,6 +174,9 @@ Engine.IO `pingInterval` и `pingTimeout` из handshake образуют read-w
 если после сна или смены Wi-Fi/мобильной сети старый TCP socket остался
 формально `ESTABLISHED`, но ping больше не приходит, клиент сам закрывает его и
 немедленно запускает тот же reconnect. Ждать системного TCP timeout не нужно.
+Короткоживущие socket-циклы получают отдельный экспоненциальный backoff, который
+не сбрасывается одним успешным dial. Три последовательных `message too big`
+открывают circuit и завершают lane; лимит одного WebSocket-сообщения — 64 MiB.
 Обычный lane пытается восстановить websocket до двух минут. После исчерпания
 этого бюджета terminal-сигнал проходит через `link -> bond -> mux`; потеря
 последнего lane закрывает логическую сессию, и управляемый клиент `pkg/bproxy`
@@ -184,6 +189,43 @@ SOCKS/HTTP listener живёт дольше отдельных mux-сессий 
 а после ASSIGN автоматически используют новую сессию. Это позволяет Android
 TUN engine не перезапускать вместе с транспортом.
 Локальная остановка отдельно сообщает `stopping`, затем `disconnected`.
+
+### Наблюдаемость сервера
+
+`GET /stats` разделяет два принципиально разных вида трафика:
+
+- `rx_bytes`/`tx_bytes` — полезные байты proxy payload, накопленные по
+  пользователям (store + активные mux-сессии);
+- `network.*` — raw kernel RX/TX: WebSocket framing, REST, полные snapshots при
+  reconnect, ACK/control и payload вместе. При запуске через штатный
+  `docker-compose.yml` читаются read-only счётчики всего bridge `bproxy0`; при
+  обычном запуске бинарника — default-route интерфейс его network namespace.
+
+Там же `transport` хранит disconnect/reconnect, неудачные попытки, причину
+последнего обрыва, длительность предыдущего socket, downtime и wire-размер
+snapshot после повторной подписки. `users` даёт трафик и живые
+connections/lanes/streams по каждому пользователю без раскрытия target-адресов.
+Также публикуются `circuit_open_total` и счётчики очистки страниц
+`page_cleanup_*`, включая число помещённых в карантин страниц.
+Панель опрашивает этот снимок раз в 5 секунд и строит локальный граф скорости;
+история графика начинается при открытии вкладки и не хранится в SQLite.
+
+Периодический `server stats` лог содержит те же основные сигналы:
+`payload_*`, `network_*`, `reconnects_1m`, `snapshot_bytes_1m`. Каждый обрыв
+WebSocket отдельно логирует `reason`, `connected_for` и short-cycle streak,
+успешный reconnect —
+`attempts`, `downtime`, `snapshot_objects` и `snapshot_bytes`.
+
+После обновления существующего Compose deployment внутреннюю сеть нужно один
+раз пересоздать, чтобы Docker назначил bridge стабильное имя `bproxy0`:
+
+```sh
+docker compose down
+docker compose up -d --build
+```
+
+Volume с raw-счётчиками монтирует только
+`/sys/class/net/bproxy0/statistics` read-only; Docker socket core не получает.
 
 ## Сборка
 
@@ -211,6 +253,10 @@ gomobile init
 ANDROID_NDK_HOME=/path/to/android-ndk make mobile-aar \
   MOBILE_OUTPUT=../android/app/libs/boardproxy.aar
 ```
+
+Makefile передаёт `GOFLAGS=-buildvcs=false`: `gomobile` собирает пакет во
+временном каталоге без корректного Git worktree, поэтому VCS stamping там не
+должен участвовать в воспроизводимости AAR.
 
 Без установленного NDK границу можно проверить командой `make mobile-check`:
 она выполняет Android cross-build и генерирует Java API через `gobind`. Полная
@@ -292,8 +338,10 @@ graceful-shutdown (клиенты получают GOAWAY). `clients rm <id>` о
 `--db`/`BPROXY_DB` (путь к файлу SQLite, по умолчанию `~/.config/bproxy/bproxy.db`),
 `--key-file`/`BPROXY_KEY_FILE` (путь к файлу приватного ключа сервера, по
 умолчанию `bproxy.key` рядом с бинарником; создаётся при первом старте), `--socket`/
-`BPROXY_SOCKET`, `--web-api`/`WEB_API`, `--web-api-token`/`BPROXY_WEB_API_TOKEN`
-(см. «Web API» ниже), `--api`, `--hub`, `--log`.
+`BPROXY_SOCKET`, `--web-api`/`WEB_API`, `--web-api-token`/`BPROXY_WEB_API_TOKEN`,
+`--max-sessions-per-user`/`BPROXY_SERVER_MAX_SESSIONS_PER_USER`,
+`--allow-private-egress`/`BPROXY_ALLOW_PRIVATE_EGRESS` (см. «Web API» ниже),
+`--api`, `--hub`, `--log`.
 
 Флаги `connect`:
 - `--link`/`BPROXY_KEYLINK` — строка подключения (доска берётся из неё). Обязателен, если не задан через конфиг.
@@ -339,17 +387,14 @@ keylink = "bproxy://…#label"
 `WEB_API` (адрес вида `127.0.0.1:8080`); по умолчанию выключен.
 
 ```sh
-WEB_API=127.0.0.1:8080 ./bin/bproxy serve -b <boardHash>
+WEB_API=127.0.0.1:8080 BPROXY_WEB_UI_PASSWORD='<password>' ./bin/bproxy serve -b <boardHash>
 # или
-./bin/bproxy serve -b <boardHash> --web-api 127.0.0.1:8080
+./bin/bproxy serve -b <boardHash> --web-api 127.0.0.1:8080 --web-api-token '<token>'
 ```
 
-**Встроенной аутентификации по умолчанию нет.** Если адрес не loopback
-(например `0.0.0.0:8080`) и не задан `--web-api-token`, сервер при старте пишет
-явное предупреждение в лог: биндинг на внешний интерфейс без токена отдаёт
-полный контроль (создание/отключение клиентов, добавление хабов, рестарт)
-любому, кто дотянется до порта. Токен включает проверку заголовка
-`Authorization: Bearer <token>` на каждый запрос:
+Web API не запускается без `--web-api-token` или `--web-ui-password`, даже на
+loopback. Это важно, потому что egress клиента работает из сетевого namespace
+сервера. Токен проверяется в заголовке `Authorization: Bearer <token>`:
 
 ```sh
 ./bin/bproxy serve -b <boardHash> --web-api 0.0.0.0:8080 --web-api-token "$(openssl rand -hex 32)"

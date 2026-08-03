@@ -7,6 +7,20 @@ export function formatBytes(n: number): string {
   return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
+export function formatRate(n: number): string {
+  return `${formatBytes(n)}/с`;
+}
+
+export function formatDuration(ms: number): string {
+  if (!ms) return "0 с";
+  if (ms < 1000) return `${Math.round(ms)} мс`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)} с`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  return `${minutes} мин ${rest} с`;
+}
+
 // formatDate — дата/время в локали ru, короткий вид.
 export function formatDate(iso?: string | null): string {
   if (!iso) return "—";

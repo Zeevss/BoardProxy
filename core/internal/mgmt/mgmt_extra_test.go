@@ -69,12 +69,17 @@ func TestStatsEndpoint(t *testing.T) {
 		Store: newFakeStore(),
 		Stats: func() ServerStats {
 			return ServerStats{
-				Clients: 3, ClientsOnline: 1, Boards: 2, RxBytes: 10, TxBytes: 20, HubsUp: 2,
+				Clients: 3, ClientsOnline: 1, OnlineUsers: 1, ActiveConnections: 1,
+				ActiveLanes: 2, ActiveStreams: 4, Boards: 2, RxBytes: 10, TxBytes: 20, HubsUp: 2,
+				PageCleanupRuns: 3, PageCleanupDeleted: 9, PageCleanupQuarantined: 1,
 				ServingBoards: []string{"a", "b"},
 				PerBoard: []BoardStat{
 					{ID: "a", Name: "A", ClientsOnline: 1, RxBytes: 10},
 					{ID: "b", Name: "B"},
 				},
+				Users:     []UserStat{{ID: 7, Name: "alice", Online: true, RxBytes: 10}},
+				Network:   NetworkStat{Available: true, Scope: "host_bridge", Interfaces: []string{"bproxy0"}, RxBytes: 100},
+				Transport: TransportStat{ReconnectsTotal: 5, SnapshotBytesTotal: 2048, CircuitOpenTotal: 1},
 			}
 		},
 	})
@@ -94,6 +99,10 @@ func TestStatsEndpoint(t *testing.T) {
 	}
 	if len(st.PerBoard) != 2 || st.PerBoard[0].ID != "a" || st.PerBoard[0].ClientsOnline != 1 {
 		t.Fatalf("per_board = %+v", st.PerBoard)
+	}
+	if len(st.Users) != 1 || st.Users[0].Name != "alice" || st.Network.Scope != "host_bridge" ||
+		st.Transport.ReconnectsTotal != 5 || st.Transport.CircuitOpenTotal != 1 || st.PageCleanupQuarantined != 1 {
+		t.Fatalf("extended stats = %+v", st)
 	}
 }
 

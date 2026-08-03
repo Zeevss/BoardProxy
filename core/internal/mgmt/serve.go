@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"time"
 )
 
 // Serve поднимает управляющий HTTP-API на unix-сокете socketPath и обслуживает
@@ -18,7 +19,16 @@ func Serve(ctx context.Context, socketPath string, h http.Handler) error {
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Handler: h}
+	if err := os.Chmod(socketPath, 0o600); err != nil {
+		_ = ln.Close()
+		return err
+	}
+	srv := &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()

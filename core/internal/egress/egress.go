@@ -32,10 +32,19 @@ const tcpKeepAlivePeriod = 60 * time.Second
 
 const udpBufferSize = 65535
 
+const maxUDPRemotes = 1024
+
+type Options struct {
+	// AllowPrivate permits RFC1918 and IPv6 ULA targets. Loopback, link-local,
+	// multicast and unspecified addresses are always denied.
+	AllowPrivate         bool
+	allowLoopbackForTest bool
+}
+
 // Serve принимает клиентские сессии от хаба и обслуживает их стримы, пока ctx не
 // отменён или сервер не закрыт. Не возвращается, пока не завершатся все уже
 // принятые сессии.
-func Serve(ctx context.Context, srv *hub.Server, log *slog.Logger) error {
+func Serve(ctx context.Context, srv *hub.Server, log *slog.Logger, opts Options) error {
 	var wg sync.WaitGroup
 	defer drainWithTimeout(&wg, shutdownDrainTimeout)
 	for {
@@ -46,12 +55,12 @@ func Serve(ctx context.Context, srv *hub.Server, log *slog.Logger) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			serveSession(ctx, m, log)
+			serveSession(ctx, m, log, opts)
 		}()
 	}
 }
 
-func serveSession(ctx context.Context, m *mux.Session, log *slog.Logger) {
+func serveSession(ctx context.Context, m *mux.Session, log *slog.Logger, opts Options) {
 	defer m.Close()
 	sessionCtx, cancelSession := context.WithCancel(ctx)
 	defer cancelSession()
@@ -75,7 +84,7 @@ func serveSession(ctx context.Context, m *mux.Session, log *slog.Logger) {
 			handlers.Add(1)
 			go func(st *mux.Stream) {
 				defer handlers.Done()
-				serveStream(sessionCtx, st, log)
+				serveStream(sessionCtx, st, log, opts)
 			}(st)
 		}
 	}()
@@ -89,7 +98,7 @@ func serveSession(ctx context.Context, m *mux.Session, log *slog.Logger) {
 			handlers.Add(1)
 			go func(d *mux.Datagram) {
 				defer handlers.Done()
-				serveDatagram(sessionCtx, d, log)
+				serveDatagram(sessionCtx, d, log, opts)
 			}(d)
 		}
 	}()
@@ -112,10 +121,16 @@ func drainWithTimeout(wg *sync.WaitGroup, d time.Duration) {
 	}
 }
 
-func serveStream(ctx context.Context, st *mux.Stream, log *slog.Logger) {
+func serveStream(ctx context.Context, st *mux.Stream, log *slog.Logger, opts Options) {
 	target := st.Target()
+	resolved, err := resolveTCPAddr(ctx, target, opts)
+	if err != nil {
+		log.Warn("egress target rejected", "target", target, "err", err)
+		_ = st.Reset()
+		return
+	}
 	dialer := net.Dialer{Timeout: dialTimeout}
-	conn, err := dialer.DialContext(ctx, "tcp", target)
+	conn, err := dialer.DialContext(ctx, "tcp", resolved)
 	if err != nil {
 		log.Debug("egress dial failed", "target", target, "err", err)
 		_ = st.Reset()
@@ -134,7 +149,7 @@ func serveStream(ctx context.Context, st *mux.Stream, log *slog.Logger) {
 	_ = st.Close()
 }
 
-func serveDatagram(ctx context.Context, d *mux.Datagram, log *slog.Logger) {
+func serveDatagram(ctx context.Context, d *mux.Datagram, log *slog.Logger, opts Options) {
 	conn, err := net.ListenUDP("udp", nil)
 	if err != nil {
 		log.Debug("egress udp socket failed", "err", err)
@@ -147,6 +162,8 @@ func serveDatagram(ctx context.Context, d *mux.Datagram, log *slog.Logger) {
 	defer stopClose()
 
 	readDone := make(chan struct{})
+	var remotesMu sync.RWMutex
+	remotes := make(map[string]struct{})
 	go func() {
 		defer close(readDone)
 		buf := make([]byte, udpBufferSize)
@@ -154,6 +171,12 @@ func serveDatagram(ctx context.Context, d *mux.Datagram, log *slog.Logger) {
 			n, source, err := conn.ReadFromUDP(buf)
 			if err != nil {
 				return
+			}
+			remotesMu.RLock()
+			_, allowed := remotes[source.String()]
+			remotesMu.RUnlock()
+			if !allowed {
+				continue
 			}
 			if err := d.Send(source.String(), buf[:n]); err != nil {
 				return
@@ -166,11 +189,19 @@ func serveDatagram(ctx context.Context, d *mux.Datagram, log *slog.Logger) {
 		if err != nil {
 			break
 		}
-		target, err := resolveUDPAddr(ctx, packet.Target)
+		target, err := resolveUDPAddr(ctx, packet.Target, opts)
 		if err != nil {
 			log.Debug("egress udp resolve failed", "target", packet.Target, "err", err)
 			continue
 		}
+		remotesMu.Lock()
+		if _, exists := remotes[target.String()]; !exists && len(remotes) >= maxUDPRemotes {
+			remotesMu.Unlock()
+			log.Debug("egress udp remote limit reached", "target", packet.Target)
+			continue
+		}
+		remotes[target.String()] = struct{}{}
+		remotesMu.Unlock()
 		if _, err := conn.WriteToUDP(packet.Payload, target); err != nil {
 			log.Debug("egress udp write failed", "target", packet.Target, "err", err)
 			break
@@ -180,7 +211,7 @@ func serveDatagram(ctx context.Context, d *mux.Datagram, log *slog.Logger) {
 	<-readDone
 }
 
-func resolveUDPAddr(ctx context.Context, target string) (*net.UDPAddr, error) {
+func resolveUDPAddr(ctx context.Context, target string, opts Options) (*net.UDPAddr, error) {
 	host, port, err := net.SplitHostPort(target)
 	if err != nil {
 		return nil, err
@@ -190,14 +221,55 @@ func resolveUDPAddr(ctx context.Context, target string) (*net.UDPAddr, error) {
 		return nil, err
 	}
 	if ip := net.ParseIP(host); ip != nil {
+		if !egressIPAllowed(ip, opts) {
+			return nil, fmt.Errorf("egress: destination address is not allowed")
+		}
 		return &net.UDPAddr{IP: ip, Port: portNumber}, nil
 	}
 	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 	if err != nil {
 		return nil, err
 	}
-	if len(ips) == 0 {
-		return nil, fmt.Errorf("egress: no UDP addresses for %q", host)
+	for _, ip := range ips {
+		parsed := net.IP(ip.AsSlice())
+		if egressIPAllowed(parsed, opts) {
+			return &net.UDPAddr{IP: parsed, Port: portNumber}, nil
+		}
 	}
-	return &net.UDPAddr{IP: net.IP(ips[0].AsSlice()), Port: portNumber}, nil
+	return nil, fmt.Errorf("egress: target %q resolved only to disallowed addresses", host)
+}
+
+func resolveTCPAddr(ctx context.Context, target string, opts Options) (string, error) {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return "", fmt.Errorf("egress: invalid target: %w", err)
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if !egressIPAllowed(ip, opts) {
+			return "", fmt.Errorf("egress: destination address is not allowed")
+		}
+		return net.JoinHostPort(ip.String(), port), nil
+	}
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return "", err
+	}
+	for _, ip := range ips {
+		parsed := net.IP(ip.AsSlice())
+		if egressIPAllowed(parsed, opts) {
+			return net.JoinHostPort(parsed.String(), port), nil
+		}
+	}
+	return "", fmt.Errorf("egress: target %q resolved only to disallowed addresses", host)
+}
+
+func egressIPAllowed(ip net.IP, opts Options) bool {
+	if ip != nil && ip.IsLoopback() && opts.allowLoopbackForTest {
+		return true
+	}
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsLoopback() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return false
+	}
+	return opts.AllowPrivate || !ip.IsPrivate()
 }

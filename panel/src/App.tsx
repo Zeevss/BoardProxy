@@ -11,6 +11,7 @@ import { Clients } from "@/routes/Clients";
 import { Boards } from "@/routes/Boards";
 import { Logs } from "@/routes/Logs";
 import { Maintenance } from "@/routes/Maintenance";
+import { Statistics } from "@/routes/Statistics";
 
 const queryClient = new QueryClient({
   queryCache: new QueryCache({
@@ -40,6 +41,7 @@ export default function App() {
               <Route index element={<Dashboard />} />
               <Route path="clients" element={<Clients />} />
               <Route path="boards" element={<Boards />} />
+              <Route path="statistics" element={<Statistics />} />
               <Route path="logs" element={<Logs />} />
               <Route path="maintenance" element={<Maintenance />} />
             </Route>

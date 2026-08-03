@@ -110,6 +110,81 @@ export interface BoardStat {
   free_pages: number;
   rx_bytes: number;
   tx_bytes: number;
+  page_cleanup_runs: number;
+  page_cleanup_deleted: number;
+  page_cleanup_failures: number;
+  page_cleanup_quarantined: number;
+}
+
+export interface UserStat {
+  id: number;
+  name: string;
+  status: "active" | "disabled";
+  online: boolean;
+  last_seen?: string | null;
+  connections: number;
+  lanes: number;
+  streams: number;
+  rx_bytes: number;
+  tx_bytes: number;
+  active_rx_bytes: number;
+  active_tx_bytes: number;
+}
+
+export interface NetworkStat {
+  available: boolean;
+  scope: string;
+  interfaces: string[] | null;
+  started_at: string;
+  sampled_at: string;
+  rx_bytes: number;
+  tx_bytes: number;
+  rx_bytes_since_start: number;
+  tx_bytes_since_start: number;
+  rx_bytes_per_second: number;
+  tx_bytes_per_second: number;
+}
+
+export interface ReconnectRoleStat {
+  role: string;
+  board: string;
+  disconnects_total: number;
+  reconnects_total: number;
+  reconnect_attempts_failed: number;
+  circuit_open_total: number;
+  snapshot_objects_total: number;
+  snapshot_bytes_total: number;
+  reconnects_last_minute: number;
+  snapshot_bytes_last_minute: number;
+  last_disconnect_at?: string | null;
+  last_disconnect_reason?: string;
+  last_connected_for_ms: number;
+  last_reconnect_at?: string | null;
+  last_downtime_ms: number;
+  last_snapshot_objects: number;
+  last_snapshot_bytes: number;
+}
+
+export interface TransportStat {
+  started_at: string;
+  disconnects_total: number;
+  reconnects_total: number;
+  reconnect_attempts_failed: number;
+  circuit_open_total: number;
+  snapshot_objects_total: number;
+  snapshot_bytes_total: number;
+  reconnects_last_minute: number;
+  reconnects_last_five_minutes: number;
+  snapshot_bytes_last_minute: number;
+  snapshot_bytes_last_five_minutes: number;
+  last_disconnect_at?: string | null;
+  last_disconnect_reason?: string;
+  last_connected_for_ms: number;
+  last_reconnect_at?: string | null;
+  last_downtime_ms: number;
+  last_snapshot_objects: number;
+  last_snapshot_bytes: number;
+  per_role: ReconnectRoleStat[] | null;
 }
 
 export interface ServerStats {
@@ -121,9 +196,20 @@ export interface ServerStats {
   free_pages: number;
   rx_bytes: number;
   tx_bytes: number;
+  online_users: number;
+  active_connections: number;
+  active_lanes: number;
+  active_streams: number;
+  page_cleanup_runs: number;
+  page_cleanup_deleted: number;
+  page_cleanup_failures: number;
+  page_cleanup_quarantined: number;
   serving_boards: string[] | null;
   hubs_up: number;
   per_board: BoardStat[] | null;
+  users: UserStat[] | null;
+  network: NetworkStat;
+  transport: TransportStat;
 }
 
 // ---- Методы ----

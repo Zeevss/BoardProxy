@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"bproxy-core/internal/board"
 	"bproxy-core/internal/board/yandex/socketio"
+	"github.com/coder/websocket"
 )
 
 // fakeConn — управляемая замена *socketio.Client для тестов реконнекта.
@@ -18,6 +20,7 @@ type fakeConn struct {
 	ack       []json.RawMessage
 	closeOnce sync.Once
 	closed    chan struct{}
+	terminal  error
 }
 
 func newFakeConn() *fakeConn {
@@ -44,10 +47,23 @@ func (c *fakeConn) Close() error {
 	return nil
 }
 
+func (c *fakeConn) Err() error {
+	<-c.closed
+	if c.terminal != nil {
+		return c.terminal
+	}
+	return socketio.ErrConnClosed
+}
+
 // drop имитирует обрыв websocket'а: канал событий закрывается (manage выходит из
 // range), а Emit начинает возвращать ErrConnClosed.
 func (c *fakeConn) drop() {
+	c.dropWithError(nil)
+}
+
+func (c *fakeConn) dropWithError(err error) {
 	c.closeOnce.Do(func() {
+		c.terminal = err
 		close(c.closed)
 		close(c.events)
 	})
@@ -62,6 +78,7 @@ func newTestSession(dial dialFunc) *Session {
 		events:      make(chan board.Event, 16),
 		reconnects:  make(chan []board.Object, 1),
 		closeCh:     make(chan struct{}),
+		manageDone:  make(chan struct{}),
 		connWait:    make(chan struct{}),
 	}
 	s.dial = dial
@@ -76,6 +93,9 @@ func TestSessionReconnectsAndResubscribes(t *testing.T) {
 	s := newTestSession(func(context.Context) (socketConn, error) {
 		return <-dials, nil
 	})
+	s.hash = "board-a"
+	s.role = "server-lane"
+	s.metrics = NewReconnectMetrics()
 	s.setConnected(conn1)
 	go s.manage()
 	defer s.Close()
@@ -97,6 +117,10 @@ func TestSessionReconnectsAndResubscribes(t *testing.T) {
 	// Операции идут по новому соединению без ошибки наверх.
 	if err := s.Put(context.Background(), board.Object{ID: "x", Value: "v"}); err != nil {
 		t.Fatalf("put после реконнекта: %v", err)
+	}
+	metrics := s.metrics.Snapshot()
+	if metrics.DisconnectsTotal != 1 || metrics.ReconnectsTotal != 1 || metrics.SnapshotBytesTotal == 0 {
+		t.Fatalf("reconnect metrics = %+v", metrics)
 	}
 }
 
@@ -216,5 +240,86 @@ func TestSessionCloseStopsReconnect(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Events() не закрылся после Close")
+	}
+}
+
+func TestSessionCloseRejectsRedialThatFinishesAfterClose(t *testing.T) {
+	conn1, conn2 := newFakeConn(), newFakeConn()
+	dialStarted := make(chan struct{})
+	releaseDial := make(chan struct{})
+	s := newTestSession(func(context.Context) (socketConn, error) {
+		close(dialStarted)
+		<-releaseDial // deliberately ignore cancellation to hit the install race
+		return conn2, nil
+	})
+	s.setConnected(conn1)
+	go s.manage()
+	conn1.drop()
+
+	select {
+	case <-dialStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("redial did not start")
+	}
+	closed := make(chan struct{})
+	go func() {
+		_ = s.Close()
+		close(closed)
+	}()
+	close(releaseDial)
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not wait for redial manager")
+	}
+	select {
+	case <-conn2.closed:
+	default:
+		t.Fatal("socket completed after Close was not rejected and closed")
+	}
+}
+
+func TestOversizedShortConnectionsOpenCircuit(t *testing.T) {
+	conn1, conn2, conn3 := newFakeConn(), newFakeConn(), newFakeConn()
+	dials := make(chan *fakeConn, 2)
+	dials <- conn2
+	dials <- conn3
+	s := newTestSession(func(context.Context) (socketConn, error) { return <-dials, nil })
+	s.hash = "board-a"
+	s.role = "server-lane"
+	s.metrics = NewReconnectMetrics()
+	s.setConnected(conn1)
+	// Set a page before the first drop so every successful redial publishes the
+	// snapshot synchronization event used below.
+	s.mu.Lock()
+	s.page = "page"
+	s.mu.Unlock()
+	go s.manage()
+	defer s.Close()
+
+	tooBig := fmt.Errorf("read failed: %w", websocket.ErrMessageTooBig)
+	conn1.dropWithError(tooBig)
+	waitReconnect := func() {
+		t.Helper()
+		select {
+		case <-s.Reconnects():
+		case <-time.After(3 * time.Second):
+			t.Fatal("reconnect did not complete")
+		}
+	}
+	waitReconnect()
+	conn2.dropWithError(tooBig)
+	waitReconnect()
+	conn3.dropWithError(tooBig)
+	select {
+	case _, ok := <-s.Events():
+		if ok {
+			t.Fatal("unexpected event")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("oversized reconnect circuit did not terminate session")
+	}
+	if got := s.metrics.Snapshot().CircuitOpenTotal; got != 1 {
+		t.Fatalf("circuit_open_total = %d, want 1", got)
 	}
 }

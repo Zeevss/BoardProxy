@@ -2,6 +2,7 @@ package socketio
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,19 @@ import (
 
 	"github.com/coder/websocket"
 )
+
+func TestApplicationBacklogDoesNotBlockEngineReader(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := &Client{incoming: make(chan Message, 1), ctx: ctx, cancel: cancel, acks: newAckRegistry()}
+	p := packet{sio: sioEvent, ackID: -1, body: []byte(`["event",{}]`)}
+	if err := c.handleMessage(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.handleMessage(p); !errors.Is(err, ErrEventBacklog) {
+		t.Fatalf("second event error = %v, want ErrEventBacklog", err)
+	}
+}
 
 func TestParseHeartbeatTimeout(t *testing.T) {
 	oldGrace := heartbeatGrace
@@ -65,5 +79,8 @@ func TestMissingHeartbeatClosesConnection(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("stale websocket was not closed after heartbeat timeout")
+	}
+	if err := client.Err(); err == nil || !strings.Contains(err.Error(), "heartbeat timeout") {
+		t.Fatalf("terminal error = %v, want heartbeat timeout", err)
 	}
 }

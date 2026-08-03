@@ -79,6 +79,9 @@ func (c *restClient) call(ctx context.Context, action string, payload any, out a
 	if err != nil {
 		return fmt.Errorf("%s read body: %w", action, err)
 	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("%s response: HTTP %s (body: %.256s)", action, resp.Status, body)
+	}
 	if out != nil {
 		if err := json.Unmarshal(bytes.TrimSpace(body), out); err != nil {
 			return fmt.Errorf("%s decode response: %w (body: %.256s)", action, err, body)

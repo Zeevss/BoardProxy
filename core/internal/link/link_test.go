@@ -245,6 +245,35 @@ func TestLastActivityIgnoresOwnAndInvalidEvents(t *testing.T) {
 	}
 }
 
+func TestLinkRemovesForeignGarbageFromReservedPage(t *testing.T) {
+	b := memory.NewBoard()
+	ctx := context.Background()
+	owner, foreign := b.NewSession("owner"), b.NewSession("foreign")
+	if _, err := owner.Subscribe(ctx, "page"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := foreign.Subscribe(ctx, "page"); err != nil {
+		t.Fatal(err)
+	}
+	l := New(owner, codec.Base64Codec{}, Options{})
+	defer l.Close()
+	defer foreign.Close()
+	if err := foreign.Put(ctx, board.Object{ID: "garbage", Value: "not-protocol"}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case ev := <-foreign.Events():
+			if ev.Kind == board.Deleted && ev.Object.ID == "garbage" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("foreign garbage was not removed from reserved lane page")
+		}
+	}
+}
+
 // TestTargetBatchSizeRespondsToTraffic is an end-to-end check that Send/ack
 // traffic actually reaches the sizer wired into Link — i.e. TargetBatchSize()
 // moves away from its initial value under sustained traffic, proving samples

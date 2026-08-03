@@ -33,6 +33,35 @@ type Store struct {
 	db *sql.DB
 }
 
+// Validate verifies an uploaded database before it can replace the live store.
+// It checks both SQLite integrity and the minimal BoardProxy schema without
+// running migrations or modifying the candidate file.
+func Validate(ctx context.Context, path string) error {
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		return fmt.Errorf("sqlite: validate open: %w", err)
+	}
+	defer db.Close()
+	var integrity string
+	if err := db.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&integrity); err != nil {
+		return fmt.Errorf("sqlite: integrity check: %w", err)
+	}
+	if integrity != "ok" {
+		return fmt.Errorf("sqlite: integrity check failed: %s", integrity)
+	}
+	for _, table := range []string{"users", "hubs"} {
+		var count int
+		if err := db.QueryRowContext(ctx,
+			`SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil {
+			return fmt.Errorf("sqlite: validate schema: %w", err)
+		}
+		if count != 1 {
+			return fmt.Errorf("sqlite: required table %q is missing", table)
+		}
+	}
+	return nil
+}
+
 // Open открывает (создавая при отсутствии) файл БД по пути path и применяет
 // схему. Недостающие родительские каталоги создаются. Пустого файла достаточно:
 // схема идемпотентна (CREATE TABLE IF NOT EXISTS), так что новый файл сразу

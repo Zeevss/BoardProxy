@@ -2,8 +2,10 @@ package hub
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"bproxy-core/internal/board"
@@ -20,6 +22,18 @@ import (
 const idleCheckInterval = 30 * time.Second
 
 const absoluteMaxBundleLanes = 16
+
+const (
+	maxConcurrentHello = 16
+	hubCleanupTimeout  = 5 * time.Second
+)
+
+const (
+	pageCleanupPasses  = 6
+	pageCleanupDelay   = 150 * time.Millisecond
+	pageCleanupBatch   = 128
+	pageCleanupTimeout = 30 * time.Second
+)
 
 // Dialer создаёт новые гостевые сессии доски. Серверу нужна отдельная сессия
 // (сокет) на каждую активную клиентскую страницу — по модели «одна сессия = один
@@ -75,6 +89,9 @@ type ServerConfig struct {
 	IdleTimeout time.Duration
 	// MaxLanes limits pages in one logical bundle. Zero means four.
 	MaxLanes int
+	// MaxSessionsPerUser limits independent mux sessions per provisioned user.
+	// Additional lanes joining an existing bundle do not count. Zero disables it.
+	MaxSessionsPerUser int
 }
 
 // Server — хаб: observer на hub-слайде, раздаёт страницы и поднимает серверную
@@ -100,6 +117,9 @@ type Server struct {
 	// processing — helloID, которые сейчас обрабатываются, для дедупликации
 	// повторно доставленных доской HELLO-событий.
 	processing map[string]bool
+	userClaims map[int64]int
+	helloSem   chan struct{}
+	hubCleanup chan string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -109,6 +129,11 @@ type Server struct {
 	// (AddUserTraffic) успел записаться в store до того, как вызывающий его
 	// закроет (см. app.RunServer, где store.Close() идёт после srv.Close()).
 	connWG sync.WaitGroup
+
+	pageCleanupRuns        atomic.Uint64
+	pageCleanupDeleted     atomic.Uint64
+	pageCleanupFailures    atomic.Uint64
+	pageCleanupQuarantined atomic.Uint64
 }
 
 type liveBundle struct {
@@ -134,6 +159,15 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		return nil, err
 	}
 	sctx, cancel := context.WithCancel(ctx)
+	pool := make([]string, 0, len(cfg.Pool))
+	seenPages := make(map[string]bool, len(cfg.Pool))
+	for _, page := range cfg.Pool {
+		if page == "" || page == cfg.HubSlide || seenPages[page] {
+			continue
+		}
+		seenPages[page] = true
+		pool = append(pool, page)
+	}
 	maxLanes := cfg.MaxLanes
 	if maxLanes <= 0 {
 		maxLanes = 4
@@ -143,7 +177,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 	}
 	s := &Server{
 		cfg:             cfg,
-		pool:            newPagePool(cfg.Pool),
+		pool:            newPagePool(pool),
 		maxLanes:        maxLanes,
 		accept:          make(chan *mux.Session, 16),
 		clients:         make(map[*mux.Session]*liveBundle),
@@ -153,11 +187,15 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		bundleClaims:    make(map[bond.BundleID]bool),
 		joinClaims:      make(map[bond.BundleID]bool),
 		processing:      make(map[string]bool),
+		userClaims:      make(map[int64]int),
+		helloSem:        make(chan struct{}, maxConcurrentHello),
+		hubCleanup:      make(chan string, 1024),
 		ctx:             sctx,
 		cancel:          cancel,
 	}
-	s.wg.Add(1)
+	s.wg.Add(2)
 	go s.rendezvousLoop()
+	go s.hubCleanupLoop()
 	// HELLO мог появиться, пока сервер был остановлен, но клиент ещё ждёт ответ.
 	// Subscribe возвращает его только в snapshot, не в Events — обрабатываем оба
 	// источника одним путём. Клиент удаляет HELLO при собственном timeout.
@@ -210,10 +248,14 @@ func (s *Server) Close() error {
 
 // ServerStats — агрегат нагрузки сервера для метрик.
 type ServerStats struct {
-	Clients   int    // активных клиентских сессий
-	FreePages int    // свободных страниц в пуле
-	Written   uint64 // всего байт отправлено клиентам (client downloads)
-	Received  uint64 // всего байт получено от клиентов (client uploads)
+	Clients                int    // активных клиентских сессий
+	FreePages              int    // свободных страниц в пуле
+	Written                uint64 // всего байт отправлено клиентам (client downloads)
+	Received               uint64 // всего байт получено от клиентов (client uploads)
+	PageCleanupRuns        uint64
+	PageCleanupDeleted     uint64
+	PageCleanupFailures    uint64
+	PageCleanupQuarantined uint64
 }
 
 // Stats собирает агрегат нагрузки по всем активным клиентским сессиям.
@@ -225,7 +267,13 @@ func (s *Server) Stats() ServerStats {
 	}
 	s.mu.Unlock()
 
-	st := ServerStats{Clients: len(sessions), FreePages: s.pool.available()}
+	st := ServerStats{
+		Clients: len(sessions), FreePages: s.pool.available(),
+		PageCleanupRuns:        s.pageCleanupRuns.Load(),
+		PageCleanupDeleted:     s.pageCleanupDeleted.Load(),
+		PageCleanupFailures:    s.pageCleanupFailures.Load(),
+		PageCleanupQuarantined: s.pageCleanupQuarantined.Load(),
+	}
 	for _, m := range sessions {
 		ms := m.Stats()
 		st.Written += ms.Written
@@ -346,6 +394,32 @@ func (s *Server) releaseHello(id string) {
 	s.mu.Unlock()
 }
 
+func (s *Server) claimUserSession(userID int64) bool {
+	if s.cfg.MaxSessionsPerUser <= 0 {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.byUser[userID])+s.userClaims[userID] >= s.cfg.MaxSessionsPerUser {
+		return false
+	}
+	s.userClaims[userID]++
+	return true
+}
+
+func (s *Server) releaseUserSessionClaim(userID int64) {
+	if s.cfg.MaxSessionsPerUser <= 0 {
+		return
+	}
+	s.mu.Lock()
+	if s.userClaims[userID] <= 1 {
+		delete(s.userClaims, userID)
+	} else {
+		s.userClaims[userID]--
+	}
+	s.mu.Unlock()
+}
+
 func (s *Server) claimNewBundle(id bond.BundleID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -416,10 +490,12 @@ func (s *Server) processHubObject(obj board.Object) {
 	}
 	frame, err := s.cfg.Codec.Decode(obj.Value)
 	if err != nil {
+		s.enqueueHubCleanup(obj.ID)
 		return
 	}
 	m, ok := decodeRV(frame)
 	if !ok || m.kind != rvHello {
+		s.enqueueHubCleanup(obj.ID)
 		return
 	}
 	// Дедупликация: snapshot и live events, а также сама доска, могут доставить
@@ -427,11 +503,146 @@ func (s *Server) processHubObject(obj board.Object) {
 	if !s.claimHello(obj.ID) {
 		return
 	}
+	select {
+	case s.helloSem <- struct{}{}:
+	case <-s.ctx.Done():
+		s.releaseHello(obj.ID)
+		return
+	default:
+		// Keep the rendezvous reader bounded under a HELLO flood. The client owns
+		// timeout/retry and removes its HELLO; a later event/reconnect can retry.
+		s.releaseHello(obj.ID)
+		s.enqueueHubCleanup(obj.ID)
+		return
+	}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer func() { <-s.helloSem }()
 		s.handleHello(m.nonce, m.body, obj.ID)
 	}()
+}
+
+func (s *Server) enqueueHubCleanup(id string) {
+	if id == "" {
+		return
+	}
+	select {
+	case s.hubCleanup <- id:
+	default:
+		rvLog(s.cfg.Link.Log).Warn("hub: cleanup queue full", "object", id)
+	}
+}
+
+func (s *Server) hubCleanupLoop() {
+	defer s.wg.Done()
+	for {
+		select {
+		case id := <-s.hubCleanup:
+			s.deleteHubObject(id)
+		case <-s.ctx.Done():
+			return
+		}
+	}
+}
+
+func (s *Server) deleteHubObject(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), hubCleanupTimeout)
+	defer cancel()
+	if err := s.cfg.HubSession.Delete(ctx, id); err != nil && s.ctx.Err() == nil {
+		rvLog(s.cfg.Link.Log).Warn("hub: failed to remove rendezvous object", "object", id, "err", err)
+	}
+}
+
+// scrubPage removes every object before a page changes owner. Two consecutive
+// empty snapshots are required so a late write from the previous participant
+// cannot slip between cleanup and returning the page to the allocator.
+func scrubPage(ctx context.Context, sess board.Session, page string, initial []board.Object) (int, error) {
+	deleted := 0
+	emptyPasses := 0
+	snapshot := initial
+	for pass := 0; pass < pageCleanupPasses; pass++ {
+		if pass > 0 {
+			t := time.NewTimer(pageCleanupDelay)
+			select {
+			case <-t.C:
+			case <-ctx.Done():
+				t.Stop()
+				return deleted, ctx.Err()
+			}
+			var err error
+			snapshot, err = sess.Subscribe(ctx, page)
+			if err != nil {
+				return deleted, err
+			}
+		}
+		if len(snapshot) == 0 {
+			emptyPasses++
+			if emptyPasses == 2 {
+				return deleted, nil
+			}
+			continue
+		}
+		emptyPasses = 0
+		for start := 0; start < len(snapshot); start += pageCleanupBatch {
+			end := min(start+pageCleanupBatch, len(snapshot))
+			ids := make([]string, 0, end-start)
+			for _, obj := range snapshot[start:end] {
+				if obj.ID != "" {
+					ids = append(ids, obj.ID)
+				}
+			}
+			if len(ids) > 0 {
+				if err := sess.Delete(ctx, ids...); err != nil {
+					return deleted, err
+				}
+				deleted += len(ids)
+			}
+		}
+	}
+	return deleted, fmt.Errorf("page remained non-empty after %d cleanup passes", pageCleanupPasses)
+}
+
+func (s *Server) recordPageCleanup(deleted int, err error) {
+	s.pageCleanupRuns.Add(1)
+	s.pageCleanupDeleted.Add(uint64(deleted))
+	if err != nil {
+		s.pageCleanupFailures.Add(1)
+	}
+}
+
+// releasePage closes the ownership gap with a fresh board participant. A page
+// is returned to the allocator only after it remains empty; a failed cleanup
+// quarantines it in the busy set instead of exposing the next user to stale
+// ciphertext or a still-writing previous client.
+func (s *Server) releasePage(page string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), pageCleanupTimeout)
+	defer cancel()
+	sess, err := s.cfg.Dialer.Join(ctx)
+	if err != nil {
+		s.recordPageCleanup(0, err)
+		s.pageCleanupQuarantined.Add(1)
+		rvLog(s.cfg.Link.Log).Error("hub: page cleanup join failed; page quarantined",
+			"page", page, "err", err)
+		return false
+	}
+	defer sess.Close()
+	snapshot, err := sess.Subscribe(ctx, page)
+	deleted := 0
+	if err == nil {
+		deleted, err = scrubPage(ctx, sess, page, snapshot)
+	}
+	s.recordPageCleanup(deleted, err)
+	if err != nil {
+		s.pageCleanupQuarantined.Add(1)
+		rvLog(s.cfg.Link.Log).Error("hub: page cleanup failed; page quarantined",
+			"page", page, "deleted_objects", deleted, "err", err)
+		return false
+	}
+	s.pool.release(page)
+	rvLog(s.cfg.Link.Log).Info("hub: page cleaned and released",
+		"page", page, "deleted_objects", deleted, "free_pages", s.pool.available())
+	return true
 }
 
 // handleHello проводит рукопожатие с клиентом, авторизует его и, если всё
@@ -442,7 +653,7 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 	// удаления объекта), чтобы между снятием метки и удалением не проскочил
 	// повторно доставленный дубль.
 	defer s.releaseHello(helloID)
-	defer s.cfg.HubSession.Delete(s.ctx, helloID)
+	defer s.deleteHubObject(helloID)
 	log := rvLog(s.cfg.Link.Log)
 	hello, ok := decodeHello(msg1)
 	if !ok {
@@ -526,6 +737,15 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 			return
 		}
 	}
+	if !isJoin {
+		if !s.claimUserSession(user.ID) {
+			log.Warn("hub: per-user session limit reached", "user", user.Name,
+				"limit", s.cfg.MaxSessionsPerUser)
+			s.putRV(encodeDenied(nonce))
+			return
+		}
+		defer s.releaseUserSessionClaim(user.ID)
+	}
 
 	page, ok := s.pool.acquire()
 	if !ok {
@@ -549,7 +769,7 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 		})
 		if !valid {
 			log.Warn("hub: failed to encode bundle assignment", "bundle", bundleID.String())
-			s.pool.release(page)
+			s.releasePage(page)
 			s.putRV(encodeDenied(nonce))
 			return
 		}
@@ -557,14 +777,14 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 	keys, msg2, err := resp.Accept(responsePayload)
 	if err != nil {
 		log.Warn("hub: не удалось завершить рукопожатие", "err", err)
-		s.pool.release(page)
+		s.releasePage(page)
 		s.putRV(encodeDenied(nonce))
 		return
 	}
 	sealed, err := crypto.NewSealed(s.cfg.Codec, keys.Send, keys.Recv)
 	if err != nil {
 		log.Warn("hub: не удалось собрать sealed-кодек", "err", err)
-		s.pool.release(page)
+		s.releasePage(page)
 		s.putRV(encodeDenied(nonce))
 		return
 	}
@@ -572,7 +792,7 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 	sess, err := s.cfg.Dialer.Join(s.ctx)
 	if err != nil {
 		log.Warn("hub: не удалось поднять серверную сессию доски", "err", err, "user", user.Name)
-		s.pool.release(page)
+		s.releasePage(page)
 		s.putRV(encodeDenied(nonce))
 		return
 	}
@@ -581,10 +801,28 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 	if err != nil {
 		log.Warn("hub: не удалось подписаться на страницу", "err", err, "page", page)
 		_ = sess.Close()
-		s.pool.release(page)
+		s.releasePage(page)
 		s.putRV(encodeDenied(nonce))
 		return
 	}
+	deleted, err := scrubPage(s.ctx, sess, page, snapshot)
+	s.recordPageCleanup(deleted, err)
+	if err != nil {
+		log.Error("hub: page cleanup before assignment failed", "err", err,
+			"page", page, "deleted_objects", deleted)
+		_ = sess.Close()
+		s.releasePage(page)
+		s.putRV(encodeDenied(nonce))
+		return
+	}
+	if deleted > 0 {
+		log.Info("hub: stale page objects removed before assignment",
+			"page", page, "deleted_objects", deleted)
+	}
+	// Ownership starts from an intentionally empty page. Reconcile remains in
+	// the setup path for reconnect snapshots, but there is no prior-user state
+	// to replay into this new encrypted link.
+	snapshot = nil
 
 	l := link.New(sess, sealed, laneLinkOptions(s.cfg.Link, bundleID, bundleLane))
 	var (
@@ -603,7 +841,7 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 			log.Warn("hub: failed to attach bundle lane", "err", err,
 				"bundle", bundleID.String(), "lane", bundleLane)
 			_ = l.Close()
-			s.pool.release(page)
+			s.releasePage(page)
 			s.putRV(encodeDenied(nonce))
 			return
 		}
@@ -658,12 +896,25 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 		} else {
 			_ = m.Close()
 		}
-		s.pool.release(page)
+		s.releasePage(page)
 		s.putRV(encodeDenied(nonce))
 		return
 	}
 
 	lane := &liveLane{id: bundleLane, page: page, link: l}
+	// Publish ASSIGN before committing the lane to the live indexes. A failed
+	// hub write must roll back immediately instead of reserving a page for a
+	// client that never received its assignment.
+	if err := s.putRV(encodeAssign(nonce, version, hello.legacy, msg2)); err != nil {
+		log.Warn("hub: failed to publish assignment", "user", user.Name, "page", page, "err", err)
+		if isJoin {
+			bundleConn.RemoveLane(bundleLane)
+		} else {
+			_ = m.Close()
+		}
+		s.releasePage(page)
+		return
+	}
 	s.mu.Lock()
 	if s.clients == nil { // сервер уже закрывается
 		s.mu.Unlock()
@@ -672,14 +923,14 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 		} else {
 			_ = m.Close()
 		}
-		s.pool.release(page)
+		s.releasePage(page)
 		return
 	}
 	if isJoin {
 		if s.bundles[bundleID] != bundle || s.clients[m] != bundle {
 			s.mu.Unlock()
 			bundleConn.RemoveLane(bundleLane)
-			s.pool.release(page)
+			s.releasePage(page)
 			s.putRV(encodeDenied(nonce))
 			return
 		}
@@ -697,10 +948,6 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 		}
 	}
 	s.mu.Unlock()
-
-	// Серверная страница готова — объявляем назначение (msg2 с ключами и
-	// зашифрованным id страницы внутри).
-	s.putRV(encodeAssign(nonce, version, hello.legacy, msg2))
 
 	// Every lane owns and releases its own page. Losing one lane only removes it
 	// from the bond; the mux remains alive while another lane exists.
@@ -782,11 +1029,11 @@ func (s *Server) watchLane(bundle *liveBundle, lane *liveLane) {
 	} else {
 		_ = lane.link.Close()
 	}
-	s.pool.release(lane.page)
+	released := s.releasePage(lane.page)
 	rvLog(s.cfg.Link.Log).Info("hub: client lane released",
 		"user", bundle.userID, "page", lane.page, "lane", lane.id,
 		"reason", reason, "remaining_lanes", bundleLaneCount(s, bundle),
-		"free_pages", s.pool.available())
+		"released", released, "free_pages", s.pool.available())
 	if last {
 		_ = bundle.mux.Close()
 	}
@@ -855,10 +1102,10 @@ func (s *Server) DisconnectUser(_ context.Context, userID int64) int {
 }
 
 // putRV кладёт rendezvous-объект на hub-страницу.
-func (s *Server) putRV(body []byte) {
+func (s *Server) putRV(body []byte) error {
 	value, err := s.cfg.Codec.Encode(body)
 	if err != nil {
-		return
+		return err
 	}
-	_ = s.cfg.HubSession.Put(s.ctx, board.Object{ID: board.NewID(), Value: value})
+	return s.cfg.HubSession.Put(s.ctx, board.Object{ID: board.NewID(), Value: value})
 }

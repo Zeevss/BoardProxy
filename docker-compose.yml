@@ -17,13 +17,19 @@ services:
       - --key-file=/data/bproxy.key
       # Живой клиент присылает heartbeat каждые 30с; 90с — три пропуска.
       - --idle-timeout=${BPROXY_IDLE_TIMEOUT:-90s}
-      - --stream-idle-timeout=${BPROXY_STREAM_IDLE_TIMEOUT:-2m}
+      - --stream-idle-timeout=${BPROXY_STREAM_IDLE_TIMEOUT:-0s}
     environment:
       BPROXY_WEB_UI_PASSWORD: ${BPROXY_WEB_UI_PASSWORD}
       # BPROXY_BOARD — одна доска или несколько через запятую (hashA,hashB).
       BPROXY_BOARD: ${BPROXY_BOARD}
+      BPROXY_SERVER_MAX_SESSIONS_PER_USER: ${BPROXY_SERVER_MAX_SESSIONS_PER_USER:-4}
+      BPROXY_ALLOW_PRIVATE_EGRESS: ${BPROXY_ALLOW_PRIVATE_EGRESS:-false}
+      # Raw RX/TX всего Linux bridge (core + panel), read-only counters below.
+      BPROXY_NETWORK_STATS_DIR: /host-net-stats
+      BPROXY_NETWORK_INTERFACE: bproxy0
     volumes:
       - bproxy-data:/data
+      - /sys/class/net/bproxy0/statistics:/host-net-stats:ro
     networks:
       - internal
 
@@ -43,3 +49,7 @@ volumes:
 networks:
   internal:
     driver: bridge
+    # Стабильное имя позволяет безопасно смонтировать только два read-only
+    # счётчика bridge, без Docker socket и доступа ко всему host /sys.
+    driver_opts:
+      com.docker.network.bridge.name: bproxy0

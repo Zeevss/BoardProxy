@@ -18,6 +18,7 @@ const (
 	defaultMaxUnackedBytes = 64 << 20
 	defaultMaxReorderBytes = 64 << 20
 	defaultTargetBatchSize = 3 << 20
+	maxSparsePacketIDs     = 65536
 )
 
 var (
@@ -455,8 +456,8 @@ func (c *Conn) accept(seq uint64, payload []byte) bool {
 	if _, duplicate := c.seen[seq]; duplicate {
 		return true
 	}
-	const trackedSize = 16 // approximate sparse-map budget per PacketID
-	if seq > c.recvNext && c.seenBytes+trackedSize > c.maxReorder {
+	const trackedSize = 64 // conservative map-entry and allocator budget
+	if seq > c.recvNext && (len(c.seen) >= maxSparsePacketIDs || c.seenBytes+trackedSize > c.maxReorder) {
 		c.fail(ErrReorderOverflow)
 		return false
 	}
