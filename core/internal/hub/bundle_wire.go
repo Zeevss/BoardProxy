@@ -63,19 +63,23 @@ func decodeBundleRequest(b []byte) (bundleRequest, bool) {
 }
 
 type bundleAssignment struct {
-	id    bond.BundleID
-	lane  bond.LaneID
-	epoch bond.Epoch
-	token bond.JoinToken
-	page  string
+	id       bond.BundleID
+	lane     bond.LaneID
+	epoch    bond.Epoch
+	token    bond.JoinToken
+	maxLanes uint8
+	page     string
 }
 
-func encodeBundleAssignment(a bundleAssignment) ([]byte, bool) {
+func encodeBundleAssignment(a bundleAssignment, version byte) ([]byte, bool) {
 	if a.id.IsZero() || a.lane == 0 || a.epoch == 0 || a.token.IsZero() ||
-		a.page == "" || len(a.page) > math.MaxUint16 {
+		a.page == "" || len(a.page) > math.MaxUint16 || (version >= 5 && a.maxLanes == 0) {
 		return nil, false
 	}
-	const fixed = bond.BundleIDSize + 4 + 4 + bond.JoinTokenSize + 2
+	fixed := bond.BundleIDSize + 4 + 4 + bond.JoinTokenSize + 2
+	if version >= 5 {
+		fixed++
+	}
 	b := make([]byte, fixed+len(a.page))
 	off := 0
 	copy(b[off:], a.id[:])
@@ -86,14 +90,21 @@ func encodeBundleAssignment(a bundleAssignment) ([]byte, bool) {
 	off += 4
 	copy(b[off:], a.token[:])
 	off += bond.JoinTokenSize
+	if version >= 5 {
+		b[off] = a.maxLanes
+		off++
+	}
 	binary.BigEndian.PutUint16(b[off:], uint16(len(a.page)))
 	off += 2
 	copy(b[off:], a.page)
 	return b, true
 }
 
-func decodeBundleAssignment(b []byte) (bundleAssignment, bool) {
-	const fixed = bond.BundleIDSize + 4 + 4 + bond.JoinTokenSize + 2
+func decodeBundleAssignment(b []byte, version byte) (bundleAssignment, bool) {
+	fixed := bond.BundleIDSize + 4 + 4 + bond.JoinTokenSize + 2
+	if version >= 5 {
+		fixed++
+	}
 	if len(b) < fixed {
 		return bundleAssignment{}, false
 	}
@@ -107,9 +118,14 @@ func decodeBundleAssignment(b []byte) (bundleAssignment, bool) {
 	off += 4
 	copy(a.token[:], b[off:off+bond.JoinTokenSize])
 	off += bond.JoinTokenSize
+	if version >= 5 {
+		a.maxLanes = b[off]
+		off++
+	}
 	pageLen := int(binary.BigEndian.Uint16(b[off:]))
 	off += 2
 	if a.id.IsZero() || a.lane == 0 || a.epoch == 0 || a.token.IsZero() ||
+		(version >= 5 && a.maxLanes == 0) ||
 		pageLen == 0 || len(b) != off+pageLen {
 		return bundleAssignment{}, false
 	}

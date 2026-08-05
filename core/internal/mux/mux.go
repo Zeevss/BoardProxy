@@ -41,8 +41,11 @@ const (
 	// much it can have in flight). Sized well above what one coalesced batch
 	// consumes at the bootstrap coalesce target, given frames are typically
 	// ≤32KiB (io.Copy's buffer size).
-	dataQueueCap     = 256
-	acceptQueue      = 64
+	dataQueueCap = 256
+	// Accept queues are sized to the total association limit so a short burst of
+	// SYNs is absorbed without resetting valid streams merely because the egress
+	// accept goroutine has not been scheduled yet.
+	acceptQueue      = maxAssociations
 	orphanLimit      = 4 << 20
 	maxOrphanFrames  = 4096
 	maxOrphanStreams = 1024

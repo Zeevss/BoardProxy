@@ -291,9 +291,10 @@ connect для REST, WebSocket, direct bypass и DNS, чтобы full-tunnel rou
 Protocol v3 добавил negotiated rendezvous и идентичность логического
 подключения: `BundleID`, `LaneID`, `Epoch` и секрет `JOIN_LANE`. Текущий wire
 v4 добавляет unordered bond delivery, DATA StreamOffset, FIN FinalOffset и
-абсолютный MAX_STREAM_DATA. Production-клиент поднимает два lane и продолжает
-через один, если второй недоступен или потерян. Сервер продолжает принимать
-legacy v2 и ordered bonded v3; новый v4 клиент требует сначала обновить сервер.
+абсолютный MAX_STREAM_DATA. V5 добавляет в аутентифицированный assignment
+серверный предел lanes для конкретной доски: клиент больше не угадывает его
+локальным хардкодом. Negotiation сохраняет v4-формат при соединении с узлом,
+который ещё не обновлён.
 Этапы многоканального транспорта и его инварианты описаны в
 [`V3_BONDING.md`](V3_BONDING.md).
 

@@ -119,6 +119,12 @@ func TestHubs(t *testing.T) {
 	if h.Status != store.HubActive {
 		t.Fatalf("UpsertHub: status = %q, хочу %q", h.Status, store.HubActive)
 	}
+	if h.MaxLanes != 8 {
+		t.Fatalf("UpsertHub: max lanes = %d, хочу 8", h.MaxLanes)
+	}
+	if err := s.SetHubMaxLanes(ctx, "board-1", 8); err != nil {
+		t.Fatalf("SetHubMaxLanes: %v", err)
+	}
 	if h.CreatedAt.IsZero() {
 		t.Fatal("UpsertHub: CreatedAt не заполнен")
 	}
@@ -129,6 +135,9 @@ func TestHubs(t *testing.T) {
 	}
 	if h2.Name != "My Board Renamed" || h2.HubSlide != "slide-hub-2" {
 		t.Fatalf("UpsertHub(update) = %+v, поля не обновились", h2)
+	}
+	if h2.MaxLanes != 8 {
+		t.Fatalf("UpsertHub(update) сбросил max lanes: %d", h2.MaxLanes)
 	}
 	if !h2.CreatedAt.Equal(h.CreatedAt) {
 		t.Fatalf("UpsertHub(update): CreatedAt изменился (%v -> %v), хотя не должен", h.CreatedAt, h2.CreatedAt)

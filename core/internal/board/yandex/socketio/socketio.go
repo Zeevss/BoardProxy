@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -20,6 +21,11 @@ import (
 const readLimit = 64 << 20
 
 const writeTimeout = 10 * time.Second
+
+const (
+	eventQueueCapacity = 4096
+	eventQueueMaxBytes = 256 << 20
+)
 
 // heartbeatGrace tolerates scheduler and network jitter on top of the
 // Engine.IO-advertised ping interval + timeout. A missing ping beyond this
@@ -51,11 +57,19 @@ type Message struct {
 	Args  []json.RawMessage
 }
 
+type queuedMessage struct {
+	message Message
+	bytes   int64
+}
+
 // Client is a minimal Socket.IO (default namespace) connection over websocket.
 type Client struct {
-	conn     *websocket.Conn
-	acks     *ackRegistry
-	incoming chan Message
+	conn         *websocket.Conn
+	acks         *ackRegistry
+	incoming     chan Message
+	events       chan queuedMessage
+	eventBytes   atomic.Int64
+	dispatchDone chan struct{}
 
 	writeMu sync.Mutex
 
@@ -106,10 +120,12 @@ func Dial(ctx context.Context, baseURL, cookie string, httpClient *http.Client) 
 	conn.SetReadLimit(readLimit)
 
 	c := &Client{
-		conn:     conn,
-		acks:     newAckRegistry(),
-		incoming: make(chan Message, 256),
-		done:     make(chan struct{}),
+		conn:         conn,
+		acks:         newAckRegistry(),
+		incoming:     make(chan Message, 256),
+		events:       make(chan queuedMessage, eventQueueCapacity),
+		dispatchDone: make(chan struct{}),
+		done:         make(chan struct{}),
 	}
 	c.ctx, c.cancel = context.WithCancel(context.Background())
 
@@ -118,6 +134,7 @@ func Dial(ctx context.Context, baseURL, cookie string, httpClient *http.Client) 
 		return nil, err
 	}
 
+	go c.dispatchLoop()
 	go c.readLoop()
 	return c, nil
 }
@@ -225,7 +242,8 @@ func (c *Client) readLoop() {
 	var loopErr error
 	defer func() {
 		c.fail(loopErr)
-		close(c.incoming)
+		close(c.events)
+		<-c.dispatchDone
 		close(c.done)
 	}()
 	for {
@@ -269,17 +287,8 @@ func (c *Client) handleMessage(p packet) error {
 			frame = append(frame, '[', ']')
 			_ = c.writeFrame(c.ctx, frame)
 		}
-		// This goroutine also answers Engine.IO ping frames. Never block it behind
-		// a slow application consumer: once the bounded queue is full, reconnect
-		// and resynchronise explicitly instead of silently starving heartbeat.
-		select {
-		case c.incoming <- Message{Event: name, Args: arr[1:]}:
-			return nil
-		case <-c.ctx.Done():
-			return c.ctx.Err()
-		default:
-			return ErrEventBacklog
-		}
+		message := Message{Event: name, Args: arr[1:]}
+		return c.enqueueEvent(message)
 	case sioAck:
 		var arr []json.RawMessage
 		_ = json.Unmarshal(p.body, &arr)
@@ -288,6 +297,49 @@ func (c *Client) handleMessage(p packet) error {
 		c.fail(fmt.Errorf("socketio: connect error: %s", string(p.body)))
 	}
 	return nil
+}
+
+func (c *Client) enqueueEvent(message Message) error {
+	size := int64(len(message.Event))
+	for _, arg := range message.Args {
+		size += int64(len(arg))
+	}
+	if c.eventBytes.Add(size) > eventQueueMaxBytes {
+		c.eventBytes.Add(-size)
+		return ErrEventBacklog
+	}
+	select {
+	case c.events <- queuedMessage{message: message, bytes: size}:
+		return nil
+	case <-c.ctx.Done():
+		c.eventBytes.Add(-size)
+		return c.ctx.Err()
+	default:
+		c.eventBytes.Add(-size)
+		return ErrEventBacklog
+	}
+}
+
+func (c *Client) dispatchLoop() {
+	defer close(c.dispatchDone)
+	defer close(c.incoming)
+	for {
+		select {
+		case queued, ok := <-c.events:
+			if !ok {
+				return
+			}
+			select {
+			case c.incoming <- queued.message:
+				c.eventBytes.Add(-queued.bytes)
+			case <-c.ctx.Done():
+				c.eventBytes.Add(-queued.bytes)
+				return
+			}
+		case <-c.ctx.Done():
+			return
+		}
+	}
 }
 
 func (c *Client) fail(err error) {

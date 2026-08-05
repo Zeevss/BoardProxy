@@ -14,5 +14,6 @@ CREATE TABLE IF NOT EXISTS hubs (
     name        TEXT NOT NULL,
     hub_slide   TEXT NOT NULL,
     status      TEXT NOT NULL CHECK (status IN ('active','disabled')) DEFAULT 'active',
+	max_lanes   INTEGER NOT NULL DEFAULT 8,
     created_at  TEXT NOT NULL
 );

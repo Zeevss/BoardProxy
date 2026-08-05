@@ -83,6 +83,7 @@ func (d *daemon) serve(conn net.Conn) {
 			}
 		case helperipc.CmdStop:
 			d.stopSession()
+			d.sender.send(helperipc.Event{Type: helperipc.EventStatus, Status: string(bproxy.StatusDisconnected)})
 		case helperipc.CmdBypass:
 			d.updateBypass(cmd.Bypass)
 		case helperipc.CmdShutdown:
@@ -94,10 +95,12 @@ func (d *daemon) serve(conn net.Conn) {
 
 // session — одно активное подключение (клиент + TUN + DNS-форвардер).
 type session struct {
-	controller *tun.Controller
-	client     *bproxy.Client
-	cancel     context.CancelFunc
-	done       chan struct{}
+	controller   *tun.Controller
+	client       *bproxy.Client
+	ctx          context.Context
+	cancel       context.CancelFunc
+	done         chan struct{}
+	teardownOnce sync.Once
 
 	mu  sync.Mutex
 	dns *dnsproxy.Proxy
@@ -139,7 +142,7 @@ func (d *daemon) startSession(cfg helperipc.SessionConfig) {
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sess := &session{controller: controller, client: client, cancel: cancel, done: make(chan struct{})}
+	sess := &session{controller: controller, client: client, ctx: ctx, cancel: cancel, done: make(chan struct{})}
 
 	var tunOnce sync.Once
 	client.OnStatus(func(status bproxy.Status, statusErr error) {
@@ -158,19 +161,31 @@ func (d *daemon) startSession(cfg helperipc.SessionConfig) {
 		d.sender.send(helperipc.Event{Type: helperipc.EventMetrics, Metrics: helperipc.MetricsJSON(m, sess.resolver())})
 	})
 
-	go func() {
-		_ = client.Run(ctx)
-		sess.teardown()
-		close(sess.done)
-	}()
-
 	d.mu.Lock()
 	d.sess = sess
 	d.mu.Unlock()
+
+	go func() {
+		_ = client.Run(ctx)
+		sess.teardown()
+		d.mu.Lock()
+		if d.sess == sess {
+			d.sess = nil
+		}
+		d.mu.Unlock()
+		d.sender.send(helperipc.Event{Type: helperipc.EventStatus, Status: string(bproxy.StatusDisconnected)})
+		close(sess.done)
+	}()
+
 }
 
 // raiseTunnel поднимает TUN и локальный DNS-форвардер после подключения к доске.
 func raiseTunnel(sess *session, cfg helperipc.SessionConfig, tunAddr string, logger *slog.Logger, s *sender, cancel context.CancelFunc) {
+	select {
+	case <-sess.ctx.Done():
+		return
+	default:
+	}
 	logger.Info("поднятие TUN…")
 	// На Windows tun2socks грузит wintun.dll из каталога exe — распаковываем её
 	// рядом с бинарём (встроена в exe; no-op на других ОС).
@@ -194,6 +209,12 @@ func raiseTunnel(sess *session, cfg helperipc.SessionConfig, tunAddr string, log
 		cancel()
 		return
 	}
+	select {
+	case <-sess.ctx.Done():
+		sess.teardown()
+		return
+	default:
+	}
 	// Локальный резолвер поднимаем ДО того, как пропишем его системе: иначе между
 	// сменой настроек DNS и стартом форвардера система остаётся без резолва.
 	// Прописать резолвер нужно в любом случае: прежний системный DNS обычно
@@ -206,8 +227,16 @@ func raiseTunnel(sess *session, cfg helperipc.SessionConfig, tunAddr string, log
 			"resolver", resolver, "err", err)
 	} else {
 		sess.mu.Lock()
-		sess.dns = dns
+		if sess.ctx.Err() == nil {
+			sess.dns = dns
+		} else {
+			dns.Stop()
+		}
 		sess.mu.Unlock()
+	}
+	if sess.ctx.Err() != nil {
+		sess.teardown()
+		return
 	}
 	if err := sess.controller.ApplyDNS(resolver); err != nil {
 		logger.Warn("системный DNS не изменён", "err", err)
@@ -218,13 +247,17 @@ func raiseTunnel(sess *session, cfg helperipc.SessionConfig, tunAddr string, log
 }
 
 func (s *session) teardown() {
-	if s.controller != nil {
-		_ = s.controller.Stop()
-	}
-	s.mu.Lock()
-	dns := s.dns
-	s.mu.Unlock()
-	dns.Stop()
+	s.teardownOnce.Do(func() {
+		if s.controller != nil {
+			_ = s.controller.Stop()
+		}
+		s.mu.Lock()
+		dns := s.dns
+		s.mu.Unlock()
+		if dns != nil {
+			dns.Stop()
+		}
+	})
 }
 
 func (d *daemon) stopSession() {
@@ -236,6 +269,9 @@ func (d *daemon) stopSession() {
 		return
 	}
 	sess.cancel()
+	// Системные маршруты/DNS откатываем немедленно; завершение сетевого core
+	// больше не является условием восстановления хоста.
+	sess.teardown()
 	sess.client.Stop()
 	<-sess.done
 }

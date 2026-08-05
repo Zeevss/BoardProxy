@@ -8,11 +8,12 @@
 package proto
 
 // Version is the newest BoardProxy wire protocol version.
-const Version = 4
+const Version = 5
 
 // MinVersion is the oldest version accepted by the current server. V2 remains
 // available for legacy one-page clients; v3 is the first ordered bonded wire,
-// while v4 adds unordered bond delivery and per-stream offsets.
+// while v4 adds unordered bond delivery and per-stream offsets. V5 adds the
+// server-advertised maximum lane count to the authenticated rendezvous reply.
 const MinVersion = 2
 
 // ControlStreamID is the reserved stream id of the system channel that carries

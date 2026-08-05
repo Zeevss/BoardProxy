@@ -29,7 +29,7 @@ const DEFAULTS = {
   listenAddr: "127.0.0.1",
   systemProxy: true,
   tunMode: false,
-  maxLanes: 4,
+  maxLanes: 8,
   // Паттерны bypass — регулярные выражения (RE2, как на Go-стороне), матчатся
   // по имени хоста без порта.
   bypassList: ["^localhost$", "^127\\.0\\.0\\.1$", "^::1$", "\\.local$"],

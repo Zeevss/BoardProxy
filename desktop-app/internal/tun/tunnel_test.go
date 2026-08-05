@@ -177,6 +177,20 @@ func TestStopIsIdempotentAndSafeWithoutStart(t *testing.T) {
 	}
 }
 
+func TestStartAfterStopCannotRecreateTunnel(t *testing.T) {
+	plat := &fakePlatform{}
+	c := newTestController(plat, nil, "utun9", new(bool))
+	if err := c.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := c.Start(Params{ProxyAddr: "127.0.0.1:1080"}); err == nil {
+		t.Fatal("Start after Stop must fail")
+	}
+	if len(plat.events) != 0 {
+		t.Fatalf("stopped controller touched system: %v", plat.events)
+	}
+}
+
 func TestEngineStartFailurePropagates(t *testing.T) {
 	startErr := errors.New("device busy")
 	plat := &fakePlatform{}

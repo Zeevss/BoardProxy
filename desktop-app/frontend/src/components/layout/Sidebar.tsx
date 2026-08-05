@@ -41,6 +41,7 @@ export function Sidebar({
   onNavigate: (s: Screen) => void;
 }) {
   const status = useTunnelStore((s) => s.status);
+	const disconnect = useTunnelStore((s) => s.disconnect);
   const meta = STATUS_META[status];
 
   return (
@@ -80,10 +81,14 @@ export function Sidebar({
 
       {/* Статус внизу */}
       <div className="border-t border-border px-3 py-4 min-[900px]:px-5">
-        <div className="flex items-center justify-center gap-2.5 min-[900px]:justify-start">
+		<button type="button"
+		  onClick={() => status !== "disconnected" && void disconnect()}
+		  disabled={status === "disconnected"}
+		  className="flex w-full items-center justify-center gap-2.5 rounded-lg py-1 text-left disabled:cursor-default min-[900px]:justify-start"
+		  title={status === "disconnected" ? undefined : "Остановить и откатить подключение"}>
           <StatusDot tone={meta.tone} pulse={meta.pulse} />
           <span className="hidden text-xs font-medium text-fg min-[900px]:inline">{meta.label}</span>
-        </div>
+		</button>
       </div>
     </aside>
   );

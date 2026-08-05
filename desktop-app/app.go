@@ -416,7 +416,19 @@ func printLine(line string) {
 	fmt.Printf("%s %s\n", time.Now().Format("15:04:05.000"), line)
 }
 
-func (a *App) Disconnect() { a.stopActive() }
+func (a *App) Disconnect() {
+	a.emit("tunnel:status", map[string]string{"status": string(bproxy.StatusStopping)})
+	a.stopActive()
+}
+
+func (a *App) onTunStopped(helper *helperSession) {
+	a.markDisconnected()
+	a.mu.Lock()
+	if a.helper == helper && a.mode == "tun" {
+		a.mode = ""
+	}
+	a.mu.Unlock()
+}
 
 // stopActive останавливает текущее подключение (proxy или tun-туннель). В режиме
 // TUN helper-процесс остаётся жив для повторного использования (диалог прав —
@@ -448,6 +460,9 @@ func (a *App) stopActive() <-chan struct{} {
 		if done != nil {
 			return done
 		}
+	}
+	if helper != nil {
+		return helper.stopTunnel()
 	}
 	return closedChan()
 }

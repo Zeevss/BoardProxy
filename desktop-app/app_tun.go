@@ -38,7 +38,9 @@ type helperSession struct {
 	conn        net.Conn
 	status      string
 	metrics     MetricsDTO
-	active      bool          // поднят ли туннель прямо сейчас
+	active      bool // поднят ли туннель прямо сейчас
+	stopping    bool
+	startCancel chan struct{} // отменяет start, ожидающий подключения helper'а
 	sessionDone chan struct{} // завершение текущего tunnel-подключения
 	procDone    chan struct{} // смерть helper-процесса/соединения
 	finished    bool
@@ -125,6 +127,14 @@ func (s *helperSession) acceptAuth() {
 	conn, err := s.ln.Accept()
 	_ = os.Remove(s.cfgPath)
 	if err != nil {
+		s.mu.Lock()
+		stopping := s.stopping
+		s.mu.Unlock()
+		if stopping {
+			s.app.emit("tunnel:status", map[string]string{"status": string(bproxy.StatusDisconnected)})
+			s.finish()
+			return
+		}
 		s.app.emit("tunnel:status", map[string]string{
 			"status": string(bproxy.StatusError),
 			"error":  "helper не подключился (возможно, отказано в повышении прав)",
@@ -165,7 +175,13 @@ func (s *helperSession) acceptAuth() {
 // команду start.
 func (s *helperSession) startTunnel(cfg ConnectConfig) {
 	s.mu.Lock()
+	if s.startCancel != nil {
+		close(s.startCancel)
+	}
+	startCancel := make(chan struct{})
+	s.startCancel = startCancel
 	s.active = true
+	s.stopping = false
 	s.sessionDone = make(chan struct{})
 	s.status = string(bproxy.StatusConnecting)
 	s.mu.Unlock()
@@ -173,8 +189,15 @@ func (s *helperSession) startTunnel(cfg ConnectConfig) {
 	go func() {
 		select {
 		case <-s.ready:
+		case <-startCancel:
+			return
 		case <-s.procDone:
 			return
+		}
+		select {
+		case <-startCancel:
+			return
+		default:
 		}
 		sc := helperipc.SessionConfig{
 			Keylink:  cfg.Link,
@@ -196,14 +219,31 @@ func (s *helperSession) startTunnel(cfg ConnectConfig) {
 func (s *helperSession) stopTunnel() <-chan struct{} {
 	s.mu.Lock()
 	if !s.active {
+		done := s.sessionDone
 		s.mu.Unlock()
+		if done != nil {
+			return done
+		}
 		return closedChan()
 	}
 	s.active = false
+	s.stopping = true
+	if s.startCancel != nil {
+		close(s.startCancel)
+		s.startCancel = nil
+	}
 	done := s.sessionDone
+	conn := s.conn
 	s.mu.Unlock()
 
-	_ = s.writeCommand(helperipc.Command{Type: helperipc.CmdStop})
+	if conn != nil {
+		_ = s.writeCommand(helperipc.Command{Type: helperipc.CmdStop})
+	} else {
+		_ = s.ln.Close()
+		if s.cmd.Process != nil {
+			_ = s.cmd.Process.Kill()
+		}
+	}
 	// Сторож: если helper не подтвердит остановку, разблокируем ожидание.
 	go func() {
 		select {
@@ -275,6 +315,11 @@ func (s *helperSession) handleEvent(ev helperipc.Event) {
 			s.app.onConnected()
 		case string(bproxy.StatusDisconnected):
 			s.closeSessionDone()
+			s.app.onTunStopped(s)
+		case string(bproxy.StatusError):
+			// Ошибка подключения или поднятия TUN завершает эту попытку и
+			// инициирует откат controller без дополнительного клика.
+			go s.stopTunnel()
 		}
 	case helperipc.EventLog:
 		s.app.emitLog(ev.Level, ev.Msg)

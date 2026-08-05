@@ -160,7 +160,7 @@ func connectCmd() *cobra.Command {
 	f.BoolVar(&systemProxy, "system-proxy", false, "set the OS system proxy while running, restore on exit")
 	f.BoolVar(&enableUDP, "udp", false, "enable SOCKS5 UDP ASSOCIATE tunneling")
 	f.IntVar(&maxLanes, "max-lanes", getenvIntOr("BPROXY_MAX_LANES", maxLanes),
-		"maximum physical lanes per connection (1-16)")
+		"maximum physical lanes per connection (1-32)")
 	f.StringSliceVar(&bypassList, "bypass", nil, "comma-separated Go regexps; matching hosts go direct, bypassing the tunnel")
 	return cmd
 }
@@ -240,7 +240,7 @@ func serveCmd(socket *string) *cobra.Command {
 		"reset an individual stream after no traffic for this duration (0 disables)")
 	f.IntVar(&cfg.Server.MaxLanes, "max-lanes",
 		getenvIntOr("BPROXY_SERVER_MAX_LANES", cfg.Server.MaxLanes),
-		"maximum physical lanes accepted per client bundle (1-16)")
+		"maximum physical lanes accepted per client bundle (1-32)")
 	f.IntVar(&cfg.Server.MaxSessionsPerUser, "max-sessions-per-user",
 		getenvIntOr("BPROXY_SERVER_MAX_SESSIONS_PER_USER", cfg.Server.MaxSessionsPerUser),
 		"maximum independent logical sessions per provisioned user (0 disables the limit)")

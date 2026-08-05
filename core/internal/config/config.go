@@ -165,14 +165,14 @@ func Default() Config {
 		},
 		Client: Client{
 			Listen:   "127.0.0.1:1080",
-			MaxLanes: 4,
+			MaxLanes: 8,
 		},
 		Server: Server{
 			// Три пропущенных heartbeat-интервала (link шлёт их раз в 30с):
 			// достаточно терпимо к краткому лагу доски, но не удерживает страницу
 			// аварийно завершившегося клиента пять минут.
 			IdleTimeout:        90 * time.Second,
-			MaxLanes:           4,
+			MaxLanes:           8,
 			MaxSessionsPerUser: 4,
 			Socket:             "/tmp/bproxy.sock",
 			KeyPath:            "bproxy.key",

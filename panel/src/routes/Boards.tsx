@@ -52,7 +52,7 @@ export function Boards() {
     refetchInterval: 8000,
   });
   const [createOpen, setCreateOpen] = React.useState(false);
-  const [renaming, setRenaming] = React.useState<BoardInfo | null>(null);
+  const [editing, setEditing] = React.useState<BoardInfo | null>(null);
   const [deleting, setDeleting] = React.useState<BoardInfo | null>(null);
   const invalidate = () => qc.invalidateQueries({ queryKey: ["boards"] });
 
@@ -79,16 +79,17 @@ export function Boards() {
               <TableHead>Имя</TableHead>
               <TableHead>Hub-слайд</TableHead>
               <TableHead>Статус</TableHead>
+              <TableHead>Макс. lanes</TableHead>
               <TableHead>Добавлена</TableHead>
               <TableHead className="w-8" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <SkeletonRows cols={6} />
+              <SkeletonRows cols={7} />
             ) : !data?.length ? (
               <TableRow>
-                <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
+                <TableCell colSpan={7} className="py-10 text-center text-muted-foreground">
                   Досок пока нет
                 </TableCell>
               </TableRow>
@@ -107,11 +108,12 @@ export function Boards() {
                       <Badge variant="muted">отключена</Badge>
                     )}
                   </TableCell>
+                  <TableCell>{b.max_lanes}</TableCell>
                   <TableCell className="text-muted-foreground">{formatDate(b.created_at)}</TableCell>
                   <TableCell>
                     <RowMenu
                       board={b}
-                      onRename={() => setRenaming(b)}
+                      onRename={() => setEditing(b)}
                       onDelete={() => setDeleting(b)}
                       onChanged={invalidate}
                     />
@@ -124,7 +126,7 @@ export function Boards() {
       </Card>
 
       <CreateDialog open={createOpen} onOpenChange={setCreateOpen} onDone={invalidate} />
-      <RenameDialog board={renaming} onClose={() => setRenaming(null)} onDone={invalidate} />
+      <SettingsDialog board={editing} onClose={() => setEditing(null)} onDone={invalidate} />
       <DeleteDialog board={deleting} onClose={() => setDeleting(null)} onDone={invalidate} />
     </div>
   );
@@ -156,7 +158,7 @@ function RowMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={onRename}>Переименовать</DropdownMenuItem>
+        <DropdownMenuItem onClick={onRename}>Настройки</DropdownMenuItem>
         <DropdownMenuItem onClick={() => toggle.mutate()}>
           {board.status === "active" ? "Отключить" : "Включить"}
         </DropdownMenuItem>
@@ -228,8 +230,9 @@ function CreateDialog({
 }) {
   const [id, setId] = React.useState("");
   const [name, setName] = React.useState("");
+  const [maxLanes, setMaxLanes] = React.useState(8);
   const create = useMutation({
-    mutationFn: () => api.createBoard(id.trim(), name.trim()),
+    mutationFn: () => api.createBoard(id.trim(), name.trim(), maxLanes),
     onSuccess: () => {
       onOpenChange(false);
       setId("");
@@ -271,11 +274,16 @@ function CreateDialog({
             />
           </div>
           <div className="space-y-2">
+            <Label htmlFor="board-max-lanes">Максимум lanes</Label>
+            <Input id="board-max-lanes" type="number" min={1} max={32} value={maxLanes}
+              onChange={(e) => setMaxLanes(Number(e.target.value))} />
+          </div>
+          <div className="space-y-2">
             <Label htmlFor="board-name">Имя (необязательно)</Label>
             <Input id="board-name" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <DialogFooter>
-            <Button type="submit" disabled={!id.trim() || create.isPending}>
+            <Button type="submit" disabled={!id.trim() || maxLanes < 1 || maxLanes > 32 || create.isPending}>
               {create.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
               Добавить
             </Button>
@@ -286,7 +294,7 @@ function CreateDialog({
   );
 }
 
-function RenameDialog({
+function SettingsDialog({
   board,
   onClose,
   onDone,
@@ -296,15 +304,22 @@ function RenameDialog({
   onDone: () => void;
 }) {
   const [name, setName] = React.useState("");
+  const [maxLanes, setMaxLanes] = React.useState(8);
   React.useEffect(() => {
-    if (board) setName(board.name);
+    if (board) {
+      setName(board.name);
+      setMaxLanes(board.max_lanes || 8);
+    }
   }, [board]);
 
-  const rename = useMutation({
-    mutationFn: () => api.updateBoard(board!.id, { name: name.trim() }),
+  const update = useMutation({
+    mutationFn: () => api.updateBoard(board!.id, { name: name.trim(), max_lanes: maxLanes }),
     onSuccess: () => {
       onClose();
       onDone();
+      toast.success("Настройки сохранены", {
+        description: "Новый лимит lanes применится после перезапуска сервера.",
+      });
     },
     onError: (e: Error) => toast.error("Ошибка", { description: e.message }),
   });
@@ -313,18 +328,43 @@ function RenameDialog({
     <Dialog open={!!board} onOpenChange={(v) => !v && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Переименовать доску</DialogTitle>
+          <DialogTitle>Настройки доски</DialogTitle>
+          <DialogDescription>
+            Лимит lanes применяется после перезапуска сервера.
+          </DialogDescription>
         </DialogHeader>
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (name.trim()) rename.mutate();
+            if (name.trim() && maxLanes >= 1 && maxLanes <= 32) update.mutate();
           }}
           className="space-y-4"
         >
-          <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} />
+          <div className="space-y-2">
+            <Label htmlFor="edit-board-name">Имя</Label>
+            <Input
+              id="edit-board-name"
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="edit-board-max-lanes">Максимум lanes</Label>
+            <Input
+              id="edit-board-max-lanes"
+              type="number"
+              min={1}
+              max={32}
+              value={maxLanes}
+              onChange={(e) => setMaxLanes(Number(e.target.value))}
+            />
+          </div>
           <DialogFooter>
-            <Button type="submit" disabled={!name.trim() || rename.isPending}>
+            <Button
+              type="submit"
+              disabled={!name.trim() || maxLanes < 1 || maxLanes > 32 || update.isPending}
+            >
               Сохранить
             </Button>
           </DialogFooter>

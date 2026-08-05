@@ -68,6 +68,7 @@ export interface BoardInfo {
   name: string;
   hub_slide: string;
   status: "active" | "disabled";
+  max_lanes: number;
   created_at: string;
 }
 
@@ -231,9 +232,9 @@ export const api = {
   clientConnections: (id: number) => request<ConnectionInfo[]>(`/clients/${id}/connections`),
 
   listBoards: () => request<BoardInfo[]>("/boards"),
-  createBoard: (id: string, name: string) =>
-    request<BoardInfo>("/boards", { method: "POST", body: JSON.stringify({ id, name }) }),
-  updateBoard: (id: string, patch: { name?: string; status?: string }) =>
+  createBoard: (id: string, name: string, maxLanes: number) =>
+	request<BoardInfo>("/boards", { method: "POST", body: JSON.stringify({ id, name, max_lanes: maxLanes }) }),
+  updateBoard: (id: string, patch: { name?: string; status?: string; max_lanes?: number }) =>
     request<BoardInfo>(`/boards/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteBoard: (id: string) => request<void>(`/boards/${id}`, { method: "DELETE" }),
 

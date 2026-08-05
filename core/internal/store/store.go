@@ -59,6 +59,7 @@ type Hub struct {
 	Name      string
 	HubSlide  string
 	Status    HubStatus
+	MaxLanes  int
 	CreatedAt time.Time
 }
 
@@ -101,6 +102,9 @@ type Store interface {
 	SetHubStatus(ctx context.Context, id string, status HubStatus) error
 	// SetHubName переименовывает хаб (для управления), не трогая hub_slide.
 	SetHubName(ctx context.Context, id string, name string) error
+	// SetHubMaxLanes задаёт серверный предел физических lanes для подключений
+	// этой доски. Изменение применяется после перезапуска хаба.
+	SetHubMaxLanes(ctx context.Context, id string, maxLanes int) error
 	// DeleteHub безвозвратно удаляет запись хаба (в отличие от
 	// SetHubStatus(disabled)). ErrNotFound, если такого нет.
 	DeleteHub(ctx context.Context, id string) error

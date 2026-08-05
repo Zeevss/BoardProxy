@@ -118,8 +118,8 @@ type Config struct {
 	Protector SocketProtector
 	// EnableUDP enables SOCKS5 UDP ASSOCIATE and the mux datagram transport.
 	EnableUDP bool
-	// MaxLanes limits adaptive expansion of one logical connection. Zero uses
-	// the core default.
+	// MaxLanes is the fallback adaptive limit for protocol v3/v4 servers. V5+
+	// receives the authoritative per-board limit in the encrypted handshake.
 	MaxLanes int
 }
 

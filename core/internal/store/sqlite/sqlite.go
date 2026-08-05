@@ -94,7 +94,38 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("sqlite: migrate: %w", err)
 	}
+	if err := migrateHubMaxLanes(ctx, db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sqlite: migrate hubs: %w", err)
+	}
 	return &Store{db: db}, nil
+}
+
+func migrateHubMaxLanes(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(hubs)`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "max_lanes" {
+			rows.Close()
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	_, err = db.ExecContext(ctx, `ALTER TABLE hubs ADD COLUMN max_lanes INTEGER NOT NULL DEFAULT 8`)
+	return err
 }
 
 // migrateUserTrafficColumns добавляет rx_bytes/tx_bytes в уже существующие БД,
@@ -273,12 +304,12 @@ func (s *Store) UpsertHub(ctx context.Context, id, name, hubSlide string) (store
 
 func (s *Store) hubByID(ctx context.Context, id string) (store.Hub, error) {
 	return scanHub(s.db.QueryRowContext(ctx,
-		`SELECT id, name, hub_slide, status, created_at FROM hubs WHERE id = ?`, id))
+		`SELECT id, name, hub_slide, status, max_lanes, created_at FROM hubs WHERE id = ?`, id))
 }
 
 func (s *Store) ListHubs(ctx context.Context) ([]store.Hub, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, hub_slide, status, created_at FROM hubs ORDER BY created_at`)
+		`SELECT id, name, hub_slide, status, max_lanes, created_at FROM hubs ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: list hubs: %w", err)
 	}
@@ -305,6 +336,11 @@ func (s *Store) SetHubStatus(ctx context.Context, id string, status store.HubSta
 func (s *Store) SetHubName(ctx context.Context, id string, name string) error {
 	return s.updateStatus(ctx, "set hub name",
 		`UPDATE hubs SET name = ? WHERE id = ?`, name, id)
+}
+
+func (s *Store) SetHubMaxLanes(ctx context.Context, id string, maxLanes int) error {
+	return s.updateStatus(ctx, "set hub max lanes",
+		`UPDATE hubs SET max_lanes = ? WHERE id = ?`, maxLanes, id)
 }
 
 // DeleteHub безвозвратно удаляет запись хаба.
@@ -359,7 +395,7 @@ func scanHub(sc scanner) (store.Hub, error) {
 		status    string
 		createdAt string
 	)
-	if err := sc.Scan(&h.ID, &h.Name, &h.HubSlide, &status, &createdAt); err != nil {
+	if err := sc.Scan(&h.ID, &h.Name, &h.HubSlide, &status, &h.MaxLanes, &createdAt); err != nil {
 		return store.Hub{}, err
 	}
 	h.Status = store.HubStatus(status)

@@ -15,13 +15,22 @@ import (
 func TestApplicationBacklogDoesNotBlockEngineReader(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c := &Client{incoming: make(chan Message, 1), ctx: ctx, cancel: cancel, acks: newAckRegistry()}
+	c := &Client{
+		incoming: make(chan Message),
+		events:   make(chan queuedMessage, 2),
+		ctx:      ctx,
+		cancel:   cancel,
+		acks:     newAckRegistry(),
+	}
 	p := packet{sio: sioEvent, ackID: -1, body: []byte(`["event",{}]`)}
 	if err := c.handleMessage(p); err != nil {
 		t.Fatal(err)
 	}
+	if err := c.handleMessage(p); err != nil {
+		t.Fatalf("second queued event = %v", err)
+	}
 	if err := c.handleMessage(p); !errors.Is(err, ErrEventBacklog) {
-		t.Fatalf("second event error = %v, want ErrEventBacklog", err)
+		t.Fatalf("third event error = %v, want ErrEventBacklog", err)
 	}
 }
 

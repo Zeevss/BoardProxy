@@ -120,6 +120,16 @@ func (f *fakeStore) SetHubName(_ context.Context, id string, name string) error 
 	f.hubs[id] = h
 	return nil
 }
+
+func (f *fakeStore) SetHubMaxLanes(_ context.Context, id string, maxLanes int) error {
+	h, ok := f.hubs[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	h.MaxLanes = maxLanes
+	f.hubs[id] = h
+	return nil
+}
 func (f *fakeStore) DeleteHub(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -153,6 +163,7 @@ func (f *fakeConnections) UserConnections(userID int64) []hub.ConnectionInfo {
 }
 
 func strPtr(s string) *string { return &s }
+func intPtr(v int) *int       { return &v }
 
 // fakeDisconnector фиксирует вызовы DisconnectUser.
 type fakeDisconnector struct {
@@ -414,15 +425,18 @@ func TestUpdateBoardRenameAndStatusPlusGetBoard(t *testing.T) {
 		t.Fatal("GetBoard(неизвестный) должен вернуть ошибку")
 	}
 
-	got, err = c.UpdateBoard(ctx, "b1", UpdateBoardRequest{Name: strPtr("Renamed"), Status: strPtr(string(store.HubDisabled))})
+	got, err = c.UpdateBoard(ctx, "b1", UpdateBoardRequest{Name: strPtr("Renamed"), Status: strPtr(string(store.HubDisabled)), MaxLanes: intPtr(8)})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if got.Name != "Renamed" || got.Status != string(store.HubDisabled) {
+	if got.Name != "Renamed" || got.Status != string(store.HubDisabled) || got.MaxLanes != 8 {
 		t.Fatalf("после update = %+v", got)
 	}
 	if _, err := c.UpdateBoard(ctx, "b1", UpdateBoardRequest{Status: strPtr("bogus")}); err == nil {
 		t.Fatal("невалидный статус должен быть ошибкой")
+	}
+	if _, err := c.UpdateBoard(ctx, "b1", UpdateBoardRequest{MaxLanes: intPtr(33)}); err == nil {
+		t.Fatal("невалидный max_lanes должен быть ошибкой")
 	}
 }
 

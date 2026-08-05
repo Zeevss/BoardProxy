@@ -97,9 +97,9 @@ pingTimeout` считается обрывом даже без TCP EOF — эт�
 Это сохраняет mux-стримы. GOAWAY, окончательный провал board reconnect или
 рестарт процесса уже создают новую hub/mux-сессию.
 
-Текущий wire protocol v4 использует unordered bond и per-stream offsets.
-Сервер также принимает legacy v2 и ordered bonded v3; при обновлении сначала
-разворачивается сервер, затем пересобираются CLI/AAR-клиенты.
+Текущий wire protocol v5 использует unordered bond и per-stream offsets, а в
+зашифрованном rendezvous assignment передаёт серверный `max_lanes` конкретной
+доски. Формат v4 сохранён для negotiated fallback при поэтапном обновлении.
 
 ## 4. Panel и management API
 
@@ -110,6 +110,8 @@ cookie-сессии, `App.tsx` задаёт маршруты. Экраны:
 - `Statistics` — raw RX/TX Docker bridge, скорость полезного payload, live
   connections/lanes/streams, reconnect и размер повторно загруженных snapshots,
   трафик по пользователям и доскам;
+- `Boards` — состояние досок и серверный предел lanes; новый предел применяется
+  после graceful restart хаба и сообщается клиентам при рукопожатии;
 - `Clients` + `ClientConnections` — пользователи, keylink, живые страницы и
   стримы;
 - `Boards` — регистрация и статус досок (изменение применяется после restart);

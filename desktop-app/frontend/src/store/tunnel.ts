@@ -29,7 +29,7 @@ interface TunnelState {
   logFilter: LogLevel | null;
 
   connect: () => Promise<void>;
-  disconnect: () => void;
+  disconnect: () => Promise<void>;
   toggle: () => void;
   /** Перезапуск с текущими настройками (смена режима TUN на лету). */
   reconnect: () => Promise<void>;
@@ -127,9 +127,15 @@ export const useTunnelStore = create<TunnelState>((set, get) => ({
     if (isActiveStatus(get().status)) backend.setSystemProxyEnabled(enabled);
   },
 
-  disconnect: () => {
-    backend.disconnect();
+  disconnect: async () => {
+    set({ status: "stopping" });
     get().pushLog("info", "Остановка туннеля...");
+    try {
+      await backend.disconnect();
+    } catch (e) {
+      set({ status: "error" });
+      get().pushLog("error", e instanceof Error ? e.message : String(e));
+    }
   },
 
   toggle: () => {
@@ -139,7 +145,7 @@ export const useTunnelStore = create<TunnelState>((set, get) => ({
       s === "connecting" ||
       s === "reconnecting" ||
       s === "stopping"
-    ) get().disconnect();
+    ) void get().disconnect();
     else get().connect();
   },
 

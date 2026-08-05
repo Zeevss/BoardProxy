@@ -273,6 +273,13 @@ func startHub(ctx context.Context, cfg config.Config, board string, log *slog.Lo
 	// читают cfg.Board.Hash.
 	bcfg := cfg
 	bcfg.Board.Hash = board
+	// Для уже известной доски лимит из панели имеет приоритет над глобальным
+	// дефолтом. Значение фиксируется на время жизни hub и меняется рестартом.
+	storedHub, hubLookupErr := hubByID(ctx, st, board)
+	hubWasStored := hubLookupErr == nil
+	if hubWasStored && storedHub.MaxLanes >= 1 && storedHub.MaxLanes <= 32 {
+		bcfg.Server.MaxLanes = storedHub.MaxLanes
+	}
 
 	laneOptions := boardOptions(bcfg)
 	laneOptions.Role = "server-lane"
@@ -311,7 +318,7 @@ func startHub(ctx context.Context, cfg config.Config, board string, log *slog.Lo
 		CoalesceTarget:     cfg.Transport.CoalesceTarget,
 		StreamIdleTimeout:  cfg.Transport.StreamIdleTimeout,
 		IdleTimeout:        cfg.Server.IdleTimeout,
-		MaxLanes:           cfg.Server.MaxLanes,
+		MaxLanes:           bcfg.Server.MaxLanes,
 		MaxSessionsPerUser: cfg.Server.MaxSessionsPerUser,
 	})
 	if err != nil {
@@ -320,11 +327,15 @@ func startHub(ctx context.Context, cfg config.Config, board string, log *slog.Lo
 	// Регистрируем обслуживаемую доску (чтобы boards ls её показывал).
 	if _, err := st.UpsertHub(ctx, board, board, hubSlide); err != nil {
 		log.Warn("register hub", "err", err)
+	} else if !hubWasStored {
+		if err := st.SetHubMaxLanes(ctx, board, bcfg.Server.MaxLanes); err != nil {
+			log.Warn("persist hub max lanes", "err", err)
+		}
 	}
 	log.Info("server ready", "board", board, "hub", hubSlide, "pages", len(pool),
 		"window", link.ResolveRecvWindow(cfg.Transport.Window), "max_frame_payload", cfg.Transport.MaxFramePayload,
 		"stream_window", cfg.Transport.StreamWindow, "max_stream_window", cfg.Transport.MaxStreamWindow,
-		"max_lanes", cfg.Server.MaxLanes, "coalesce_target", "adaptive", "coalesce_ceiling", cfg.Transport.CoalesceTarget,
+		"max_lanes", bcfg.Server.MaxLanes, "coalesce_target", "adaptive", "coalesce_ceiling", cfg.Transport.CoalesceTarget,
 		"stream_idle_timeout", cfg.Transport.StreamIdleTimeout)
 	return srv, nil
 }

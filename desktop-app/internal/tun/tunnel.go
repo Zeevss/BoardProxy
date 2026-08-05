@@ -139,6 +139,9 @@ func (c *Controller) Start(p Params) error {
 	if c.started {
 		return errors.New("tun: already started")
 	}
+	if c.stopped {
+		return errors.New("tun: controller already stopped")
+	}
 
 	eng, ifName, err := c.startFn(p.TunName, p.ProxyAddr, p.MTU)
 	if err != nil {

@@ -21,7 +21,7 @@ import (
 // idleCheckInterval — как часто проверять простой клиентской страницы.
 const idleCheckInterval = 30 * time.Second
 
-const absoluteMaxBundleLanes = 16
+const absoluteMaxBundleLanes = 32
 
 const (
 	maxConcurrentHello = 16
@@ -87,7 +87,7 @@ type ServerConfig struct {
 	// поэтому проверка отличает тихое соединение от оборванного даже при наличии
 	// зависших открытых стримов. 0 отключает проверку.
 	IdleTimeout time.Duration
-	// MaxLanes limits pages in one logical bundle. Zero means four.
+	// MaxLanes limits pages in one logical bundle. Zero means eight.
 	MaxLanes int
 	// MaxSessionsPerUser limits independent mux sessions per provisioned user.
 	// Additional lanes joining an existing bundle do not count. Zero disables it.
@@ -170,7 +170,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 	}
 	maxLanes := cfg.MaxLanes
 	if maxLanes <= 0 {
-		maxLanes = 4
+		maxLanes = 8
 	}
 	if maxLanes > absoluteMaxBundleLanes {
 		maxLanes = absoluteMaxBundleLanes
@@ -761,12 +761,13 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 	if version >= 3 {
 		var valid bool
 		responsePayload, valid = encodeBundleAssignment(bundleAssignment{
-			id:    bundleID,
-			lane:  bundleLane,
-			epoch: bundleEpoch,
-			token: bundleToken,
-			page:  page,
-		})
+			id:       bundleID,
+			lane:     bundleLane,
+			epoch:    bundleEpoch,
+			token:    bundleToken,
+			maxLanes: uint8(s.maxLanes),
+			page:     page,
+		}, version)
 		if !valid {
 			log.Warn("hub: failed to encode bundle assignment", "bundle", bundleID.String())
 			s.releasePage(page)

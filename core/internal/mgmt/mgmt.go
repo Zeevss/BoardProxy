@@ -33,6 +33,7 @@ type Store interface {
 	ListHubs(ctx context.Context) ([]store.Hub, error)
 	SetHubStatus(ctx context.Context, id string, status store.HubStatus) error
 	SetHubName(ctx context.Context, id string, name string) error
+	SetHubMaxLanes(ctx context.Context, id string, maxLanes int) error
 	DeleteHub(ctx context.Context, id string) error
 }
 
@@ -283,20 +284,23 @@ type BoardInfo struct {
 	Name      string    `json:"name"`
 	HubSlide  string    `json:"hub_slide"`
 	Status    string    `json:"status"`
+	MaxLanes  int       `json:"max_lanes"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
 // CreateBoardRequest — тело POST /boards.
 type CreateBoardRequest struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	MaxLanes int    `json:"max_lanes"`
 }
 
 // UpdateBoardRequest — тело PATCH /boards/{id}. Поля опциональны и
 // применяются только если заданы.
 type UpdateBoardRequest struct {
-	Name   *string `json:"name,omitempty"`
-	Status *string `json:"status,omitempty"`
+	Name     *string `json:"name,omitempty"`
+	Status   *string `json:"status,omitempty"`
+	MaxLanes *int    `json:"max_lanes,omitempty"`
 }
 
 // Handler собирает HTTP-роутинг управляющего API.
@@ -622,11 +626,23 @@ func (h *handler) createBoard(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, errors.New("id required"))
 		return
 	}
+	if req.MaxLanes == 0 {
+		req.MaxLanes = 8
+	}
+	if req.MaxLanes < 1 || req.MaxLanes > 32 {
+		httpError(w, http.StatusBadRequest, errors.New("max_lanes must be between 1 and 32"))
+		return
+	}
 	hb, err := h.cfg.Store.UpsertHub(r.Context(), req.ID, req.Name, "")
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err)
 		return
 	}
+	if err := h.cfg.Store.SetHubMaxLanes(r.Context(), req.ID, req.MaxLanes); err != nil {
+		httpError(w, statusForStore(err), err)
+		return
+	}
+	hb.MaxLanes = req.MaxLanes
 	writeJSON(w, http.StatusCreated, toBoardInfo(hb))
 }
 
@@ -674,6 +690,16 @@ func (h *handler) updateBoard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := h.cfg.Store.SetHubStatus(r.Context(), id, status); err != nil {
+			httpError(w, statusForStore(err), err)
+			return
+		}
+	}
+	if req.MaxLanes != nil {
+		if *req.MaxLanes < 1 || *req.MaxLanes > 32 {
+			httpError(w, http.StatusBadRequest, errors.New("max_lanes must be between 1 and 32"))
+			return
+		}
+		if err := h.cfg.Store.SetHubMaxLanes(r.Context(), id, *req.MaxLanes); err != nil {
 			httpError(w, statusForStore(err), err)
 			return
 		}
@@ -755,6 +781,7 @@ func toBoardInfo(h store.Hub) BoardInfo {
 		Name:      h.Name,
 		HubSlide:  h.HubSlide,
 		Status:    string(h.Status),
+		MaxLanes:  h.MaxLanes,
 		CreatedAt: h.CreatedAt,
 	}
 }

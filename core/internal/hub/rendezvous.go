@@ -205,6 +205,7 @@ type BundleInfo struct {
 	LaneID    bond.LaneID
 	Epoch     bond.Epoch
 	JoinToken bond.JoinToken
+	MaxLanes  int
 	Page      string
 }
 
@@ -279,10 +280,10 @@ func DialBundle(ctx context.Context, cfg ClientConfig) (*DialResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("hub: handshake complete: %w", err)
 	}
-	if assign.version != byte(proto.Version) {
+	if assign.version < 3 || assign.version > byte(proto.Version) {
 		return nil, fmt.Errorf("hub: server selected unsupported protocol version %d", assign.version)
 	}
-	assignment, ok := decodeBundleAssignment(assignmentBytes)
+	assignment, ok := decodeBundleAssignment(assignmentBytes, assign.version)
 	if !ok || assignment.id != bundleID {
 		return nil, errors.New("hub: invalid bundle assignment")
 	}
@@ -323,7 +324,7 @@ func DialBundle(ctx context.Context, cfg ClientConfig) (*DialResult, error) {
 		return nil, err
 	}
 	m := mux.New(b, mux.Options{
-		Version:           int(proto.Version),
+		Version:           int(assign.version),
 		Client:            true,
 		MaxPayload:        cfg.MaxPayload,
 		StreamWindow:      cfg.StreamWindow,
@@ -342,6 +343,7 @@ func DialBundle(ctx context.Context, cfg ClientConfig) (*DialResult, error) {
 			LaneID:    assignment.lane,
 			Epoch:     assignment.epoch,
 			JoinToken: assignment.token,
+			MaxLanes:  int(assignment.maxLanes),
 			Page:      assignment.page,
 		},
 	}
@@ -350,6 +352,13 @@ func DialBundle(ctx context.Context, cfg ClientConfig) (*DialResult, error) {
 	targetLanes := cfg.TargetLanes
 	if targetLanes <= 0 {
 		targetLanes = 1
+	}
+	maxLanes := cfg.MaxLanes
+	if assign.version >= 5 {
+		maxLanes = int(assignment.maxLanes)
+	}
+	if maxLanes > 0 && targetLanes > maxLanes {
+		targetLanes = maxLanes
 	}
 	if targetLanes > absoluteMaxBundleLanes {
 		targetLanes = absoluteMaxBundleLanes
@@ -363,7 +372,6 @@ func DialBundle(ctx context.Context, cfg ClientConfig) (*DialResult, error) {
 		}
 		result.Lanes = append(result.Lanes, laneInfo)
 	}
-	maxLanes := cfg.MaxLanes
 	if maxLanes > absoluteMaxBundleLanes {
 		maxLanes = absoluteMaxBundleLanes
 	}
@@ -423,12 +431,13 @@ func joinBundleLane(ctx context.Context, cfg ClientConfig, b *bond.Conn, bundle 
 	if err != nil {
 		return BundleInfo{}, fmt.Errorf("hub: join lane handshake complete: %w", err)
 	}
-	if assign.version != byte(proto.Version) {
+	if assign.version < 3 || assign.version > byte(proto.Version) {
 		return BundleInfo{}, fmt.Errorf("hub: server selected unsupported protocol version %d", assign.version)
 	}
-	assignment, ok := decodeBundleAssignment(assignmentBytes)
+	assignment, ok := decodeBundleAssignment(assignmentBytes, assign.version)
 	if !ok || assignment.id != bundle.ID || assignment.epoch != bundle.Epoch ||
-		!assignment.token.Equal(bundle.JoinToken) || assignment.lane == bundle.LaneID {
+		!assignment.token.Equal(bundle.JoinToken) || assignment.lane == bundle.LaneID ||
+		(assign.version >= 5 && int(assignment.maxLanes) != bundle.MaxLanes) {
 		return BundleInfo{}, errors.New("hub: invalid joined lane assignment")
 	}
 	sealed, err := crypto.NewSealed(cfg.Codec, keys.Send, keys.Recv)
@@ -454,7 +463,7 @@ func joinBundleLane(ctx context.Context, cfg ClientConfig, b *bond.Conn, bundle 
 		"lane", assignment.lane, "epoch", assignment.epoch, "page", assignment.page)
 	return BundleInfo{
 		ID: assignment.id, LaneID: assignment.lane, Epoch: assignment.epoch,
-		JoinToken: assignment.token, Page: assignment.page,
+		JoinToken: assignment.token, MaxLanes: int(assignment.maxLanes), Page: assignment.page,
 	}, nil
 }
 

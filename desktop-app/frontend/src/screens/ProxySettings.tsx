@@ -15,32 +15,22 @@ import { isValidPort, isValidRegex } from "@/lib/utils";
 export function ProxySettings({ onOpenDebug }: { onOpenDebug: () => void }) {
   const port = useSettingsStore((state) => state.port);
   const listenAddr = useSettingsStore((state) => state.listenAddr);
-  const maxLanes = useSettingsStore((state) => state.maxLanes);
   const bypassList = useSettingsStore((state) => state.bypassList);
   const setPort = useSettingsStore((state) => state.setPort);
   const setListenAddr = useSettingsStore((state) => state.setListenAddr);
-  const setMaxLanes = useSettingsStore((state) => state.setMaxLanes);
   const addBypass = useSettingsStore((state) => state.addBypass);
   const removeBypass = useSettingsStore((state) => state.removeBypass);
 
   const [draftPort, setDraftPort] = useState(String(port));
   const [draftAddr, setDraftAddr] = useState(listenAddr);
-  const [draftMaxLanes, setDraftMaxLanes] = useState(String(maxLanes));
   const [saved, setSaved] = useState(false);
   const [bypassInput, setBypassInput] = useState("");
 
   const saveListenAddress = () => {
     const nextPort = Number(draftPort);
-    const nextMaxLanes = Number(draftMaxLanes);
-    if (
-      !isValidPort(nextPort) ||
-      !Number.isInteger(nextMaxLanes) ||
-      nextMaxLanes < 1 ||
-      nextMaxLanes > 16
-    ) return;
+	if (!isValidPort(nextPort)) return;
     setPort(nextPort);
     setListenAddr(draftAddr.trim() || "127.0.0.1");
-    setMaxLanes(nextMaxLanes);
     setSaved(true);
     window.setTimeout(() => setSaved(false), 1500);
   };
@@ -59,7 +49,7 @@ export function ProxySettings({ onOpenDebug }: { onOpenDebug: () => void }) {
         <CardHeader>
           <CardTitle>Локальный прокси</CardTitle>
         </CardHeader>
-        <div className="grid grid-cols-1 gap-3 min-[760px]:grid-cols-4">
+		<div className="grid grid-cols-1 gap-3 min-[760px]:grid-cols-3">
           <Field label="Адрес" className="min-[760px]:col-span-2">
             <Input
               value={draftAddr}
@@ -76,16 +66,10 @@ export function ProxySettings({ onOpenDebug }: { onOpenDebug: () => void }) {
               onChange={(event) => setDraftPort(event.target.value)}
             />
           </Field>
-          <Field label="Макс. lanes">
-            <Input
-              type="number"
-              min={1}
-              max={16}
-              value={draftMaxLanes}
-              onChange={(event) => setDraftMaxLanes(event.target.value)}
-            />
-          </Field>
-        </div>
+		</div>
+		<p className="mt-3 text-xs text-muted">
+		  Максимальное число lanes задаёт сервер доски и передаёт клиенту при рукопожатии.
+		</p>
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 break-all font-mono text-xs text-muted">

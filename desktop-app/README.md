@@ -85,6 +85,12 @@ BoardProxy's own control-plane sockets (WSS/REST/DNS to the board) to the
 physical interface via the core `Protector` hook, so board traffic never
 re-enters the tunnel.
 
+Starting TUN is transactional: `stop` cancels a pending helper start and rolls
+back routes, DNS and the interface immediately, even if the core connection is
+still finishing. A terminal connection/TUN error triggers the same rollback;
+the connecting/stopping status controls in the UI remain clickable as an
+idempotent emergency stop.
+
 Hostnames in stats: in TUN mode the helper runs a local DNS forwarder on the TUN
 address (`internal/dnsproxy`), records IP→domain from answers, and enriches
 stream metrics so the UI can show domains instead of bare IPs.
