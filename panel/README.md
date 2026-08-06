@@ -40,6 +40,18 @@ docker compose exec core bproxy serve keygen panel --db /data/bproxy.db
 `127.0.0.1`; для удалённой панели откройте management API через firewall и TLS
 reverse proxy, затем отметьте HTTPS при добавлении ноды.
 
+Проверить ключ напрямую на хосте ноды можно так:
+
+```sh
+read -rsp 'Core access key: ' BPROXY_CORE_KEY; echo
+curl -i -H "Authorization: Bearer ${BPROXY_CORE_KEY}" http://127.0.0.1:8081/stats
+unset BPROXY_CORE_KEY
+```
+
+Ответ `200 OK` подтверждает доступ. `401 Unauthorized` означает, что ключ
+создан в другой БД, отозван либо core ещё запущен со старой версией без
+поддержки отзываемых access keys.
+
 Данные панели находятся в отдельном томе `panel-data`, данные ноды — в
 `bproxy-data`. Контейнеры можно запускать и обновлять независимо.
 

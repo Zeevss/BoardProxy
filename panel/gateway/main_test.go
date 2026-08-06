@@ -87,3 +87,30 @@ func TestSelectedNodeProxyInjectsKeyAndHidesItFromList(t *testing.T) {
 		t.Fatalf("proxy body = %s err=%v", proxyW.Body.String(), err)
 	}
 }
+
+func TestNodeUnauthorizedDoesNotInvalidatePanelSession(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		jsonError(w, http.StatusUnauthorized, "unauthorized")
+	}))
+	defer upstream.Close()
+	parsed, _ := url.Parse(upstream.URL)
+	host, port, _ := strings.Cut(parsed.Host, ":")
+	portNumber := 0
+	_, _ = fmt.Sscan(port, &portNumber)
+
+	r, err := loadRegistry(filepath.Join(t.TempDir(), "nodes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.add(node{ID: "n1", Name: "one", Host: host, Port: portNumber, AccessKey: "bpa_wrong"}); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{registry: r, client: &http.Client{Timeout: time.Second}}
+	req := httptest.NewRequest(http.MethodGet, "/api/node/stats", nil)
+	req.AddCookie(&http.Cookie{Name: nodeCookie, Value: "n1"})
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, req)
+	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "node access key rejected") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}

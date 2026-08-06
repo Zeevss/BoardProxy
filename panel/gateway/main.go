@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -418,6 +419,23 @@ func (s *server) proxyNode(w http.ResponseWriter, r *http.Request) {
 		req.URL.RawPath = ""
 		req.Header.Set("Authorization", "Bearer "+n.AccessKey)
 		req.Header.Del("Cookie")
+	}
+	// A 401 produced here belongs to the selected core node: panel auth has
+	// already succeeded in the outer middleware. Do not pass it through as a
+	// panel-session 401, otherwise the SPA logs the operator out.
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		if resp.StatusCode != http.StatusUnauthorized {
+			return nil
+		}
+		_ = resp.Body.Close()
+		body := []byte(`{"error":"node access key rejected"}` + "\n")
+		resp.StatusCode = http.StatusBadGateway
+		resp.Status = "502 Bad Gateway"
+		resp.Body = io.NopCloser(strings.NewReader(string(body)))
+		resp.ContentLength = int64(len(body))
+		resp.Header.Set("Content-Type", "application/json")
+		resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+		return nil
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
 		jsonError(w, http.StatusBadGateway, "node unavailable: "+err.Error())
