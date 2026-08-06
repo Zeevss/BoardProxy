@@ -5,9 +5,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -24,7 +21,6 @@ import (
 	"bproxy-core/internal/config"
 	"bproxy-core/internal/logging"
 	"bproxy-core/internal/mgmt"
-	"bproxy-core/internal/store/sqlite"
 	"bproxy-core/pkg/bproxy"
 
 	"github.com/spf13/cobra"
@@ -234,7 +230,7 @@ func serveCmd(socket *string) *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVarP(&cfg.Board.Hash, "board", "b", getenvOr("BPROXY_BOARD", ""), "whiteboard hash (empty = board-less start)")
-	cmd.PersistentFlags().StringVar(&cfg.Store.Path, "db", getenvOr("BPROXY_DB", defaultDBPath()), "SQLite database file path (created if missing)")
+	f.StringVar(&cfg.Store.Path, "db", getenvOr("BPROXY_DB", defaultDBPath()), "SQLite database file path (created if missing)")
 	f.StringVar(&cfg.Server.KeyPath, "key-file", getenvOr("BPROXY_KEY_FILE", defaultKeyPath()), "server private key file path (generated next to the binary if missing)")
 	f.StringVar(&cfg.Board.APIBase, "api", cfg.Board.APIBase, "board REST API base URL")
 	f.StringVar(&cfg.Server.HubPage, "hub", "", "hub slide hash (empty = deterministic)")
@@ -258,11 +254,11 @@ func serveCmd(socket *string) *cobra.Command {
 		"require this bearer token on --web-api requests (recommended if not bound to loopback)")
 	f.StringVar(&cfg.Server.WebUIPassword, "web-ui-password", getenvOr("BPROXY_WEB_UI_PASSWORD", ""),
 		"password for the web panel login (POST /login issues a session cookie); empty disables password login")
-	cmd.AddCommand(serveKeygenCmd(&cfg), serveKeysCmd(&cfg), serveRevokeKeyCmd(&cfg))
+	cmd.AddCommand(serveKeygenCmd(socket), serveKeysCmd(socket), serveRevokeKeyCmd(socket))
 	return cmd
 }
 
-func serveKeygenCmd(cfg *config.Config) *cobra.Command {
+func serveKeygenCmd(socket *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "keygen [name]",
 		Short: "issue a revocable remote management access key",
@@ -272,39 +268,28 @@ func serveKeygenCmd(cfg *config.Config) *cobra.Command {
 			if len(args) == 1 && args[0] != "" {
 				name = args[0]
 			}
-			raw := make([]byte, 32)
-			if _, err := rand.Read(raw); err != nil {
-				return fmt.Errorf("generate access key: %w", err)
-			}
-			token := "bpa_" + base64.RawURLEncoding.EncodeToString(raw)
-			digest := sha256.Sum256([]byte(token))
-			st, err := sqlite.Open(cmd.Context(), cfg.Store.Path)
+			ctx, cancel := mgmtCtx()
+			defer cancel()
+			key, err := mgmt.NewClient(*socket).CreateAccessKey(ctx, name)
 			if err != nil {
 				return err
 			}
-			defer st.Close()
-			key, err := st.CreateAccessKey(cmd.Context(), name, token[:12], digest[:])
-			if err != nil {
-				return err
-			}
-			fmt.Printf("access key #%d %q created; copy it now, it will not be shown again:\n%s\n", key.ID, key.Name, token)
+			fmt.Printf("access key #%d %q created by the running server; copy it now, it will not be shown again:\n%s\n",
+				key.ID, key.Name, key.Token)
 			return nil
 		},
 	}
 }
 
-func serveKeysCmd(cfg *config.Config) *cobra.Command {
+func serveKeysCmd(socket *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "keys",
 		Short: "list issued remote management access keys",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			st, err := sqlite.Open(cmd.Context(), cfg.Store.Path)
-			if err != nil {
-				return err
-			}
-			defer st.Close()
-			keys, err := st.ListAccessKeys(cmd.Context())
+		RunE: func(_ *cobra.Command, _ []string) error {
+			ctx, cancel := mgmtCtx()
+			defer cancel()
+			keys, err := mgmt.NewClient(*socket).ListAccessKeys(ctx)
 			if err != nil {
 				return err
 			}
@@ -312,7 +297,7 @@ func serveKeysCmd(cfg *config.Config) *cobra.Command {
 			fmt.Fprintln(tw, "ID\tNAME\tPREFIX\tCREATED\tSTATUS")
 			for _, key := range keys {
 				status := "active"
-				if !key.RevokedAt.IsZero() {
+				if key.RevokedAt != nil {
 					status = "revoked"
 				}
 				fmt.Fprintf(tw, "%d\t%s\t%s…\t%s\t%s\n", key.ID, key.Name, key.Prefix, key.CreatedAt.Format(time.RFC3339), status)
@@ -322,22 +307,19 @@ func serveKeysCmd(cfg *config.Config) *cobra.Command {
 	}
 }
 
-func serveRevokeKeyCmd(cfg *config.Config) *cobra.Command {
+func serveRevokeKeyCmd(socket *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "revoke <id>",
 		Short: "revoke a remote management access key",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil || id <= 0 {
 				return fmt.Errorf("invalid access key id %q", args[0])
 			}
-			st, err := sqlite.Open(cmd.Context(), cfg.Store.Path)
-			if err != nil {
-				return err
-			}
-			defer st.Close()
-			if err := st.RevokeAccessKey(cmd.Context(), id); err != nil {
+			ctx, cancel := mgmtCtx()
+			defer cancel()
+			if err := mgmt.NewClient(*socket).RevokeAccessKey(ctx, id); err != nil {
 				return err
 			}
 			fmt.Printf("access key #%d revoked\n", id)

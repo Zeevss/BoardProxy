@@ -88,6 +88,20 @@ func (c *Client) RemoveBoard(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/boards/"+id, nil, nil)
 }
 
+func (c *Client) CreateAccessKey(ctx context.Context, name string) (CreateAccessKeyResponse, error) {
+	var out CreateAccessKeyResponse
+	return out, c.do(ctx, http.MethodPost, "/access-keys", CreateAccessKeyRequest{Name: name}, &out)
+}
+
+func (c *Client) ListAccessKeys(ctx context.Context) ([]AccessKeyInfo, error) {
+	var out []AccessKeyInfo
+	return out, c.do(ctx, http.MethodGet, "/access-keys", nil, &out)
+}
+
+func (c *Client) RevokeAccessKey(ctx context.Context, id int64) error {
+	return c.do(ctx, http.MethodDelete, fmt.Sprintf("/access-keys/%d", id), nil, nil)
+}
+
 // Restart просит сервер плавно перезапуститься.
 func (c *Client) Restart(ctx context.Context) error {
 	return c.do(ctx, http.MethodPost, "/restart", nil, nil)

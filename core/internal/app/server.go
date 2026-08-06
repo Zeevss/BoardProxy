@@ -102,6 +102,7 @@ func RunServer(ctx context.Context, cfg config.Config, log *slog.Logger, logs *l
 		}
 		h := mgmt.Handler(mgmt.Config{
 			Store:        st,
+			AccessKeys:   st,
 			ServerPublic: serverStatic.Public(),
 			Board:        cfg.Board.Hash,
 			Disconnector: disc,
@@ -187,6 +188,7 @@ func (h *hubSet) UserConnections(userID int64) []hub.ConnectionInfo {
 // к unix-сокету) — для удалённого/скриптового доступа. Доступ разрешён по
 // статическому токену, UI-cookie либо одному из отзываемых ключей в store.
 func startWebAPI(ctx context.Context, cfg config.Config, h http.Handler, st *sqlite.Store, log *slog.Logger) {
+	h = mgmt.RemoteHandler(h)
 	// Аутентификация web-API: bearer-токен (для скриптов) и/или пароль веб-панели
 	// (сессионная cookie). Unix-сокет остаётся без неё — там граница файловые права.
 	h = mgmt.WebAuth(mgmt.WebAuthConfig{

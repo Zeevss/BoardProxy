@@ -395,10 +395,14 @@ keylink = "bproxy://…#label"
 Для удалённой multi-node панели выпустите отдельный отзываемый bearer-ключ:
 
 ```sh
-./bin/bproxy serve keygen panel --db /path/to/bproxy.db
-./bin/bproxy serve keys --db /path/to/bproxy.db
-./bin/bproxy serve revoke <id> --db /path/to/bproxy.db
+./bin/bproxy serve keygen panel
+./bin/bproxy serve keys
+./bin/bproxy serve revoke <id>
 ```
+
+Команды не открывают SQLite напрямую: они обращаются к уже запущенному серверу
+через `--socket`/`BPROXY_SOCKET`. Если сокет нестандартный, укажите его как
+глобальный флаг: `bproxy --socket /run/bproxy.sock serve keygen panel`.
 
 Секрет `bpa_…` показывается только при создании, в SQLite хранится его digest.
 Можно выпустить несколько ключей для разных панелей/операторов; отзыв начинает

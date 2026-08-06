@@ -117,7 +117,8 @@ cookie-сессии, `App.tsx` задаёт маршруты. Экраны:
 - `Nodes` — выбор/добавление core-ноды, её online-статус и переход внутрь;
 
 Core-нода не знает о панели. Она проверяет `bpa_…` bearer-ключ по SHA-256 digest
-в собственной SQLite; `serve keygen/keys/revoke` управляют несколькими ключами.
+в собственной SQLite; `serve keygen/keys/revoke` управляют несколькими ключами
+через Unix management socket запущенного процесса, не открывая БД из CLI.
 Panel gateway хранит raw key в своём `0600` registry и не отдаёт его браузеру.
 - `Clients` + `ClientConnections` — пользователи, keylink, живые страницы и
   стримы;

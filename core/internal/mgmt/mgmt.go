@@ -6,6 +6,8 @@ package mgmt
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -13,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"bproxy-core/internal/crypto"
@@ -37,6 +40,15 @@ type Store interface {
 	DeleteHub(ctx context.Context, id string) error
 }
 
+// AccessKeyStore is kept separate from Store because issuing management
+// credentials is available only on the local Unix socket, never through the
+// remotely exposed management HTTP API.
+type AccessKeyStore interface {
+	CreateAccessKey(ctx context.Context, name, prefix string, digest []byte) (store.AccessKey, error)
+	ListAccessKeys(ctx context.Context) ([]store.AccessKey, error)
+	RevokeAccessKey(ctx context.Context, id int64) error
+}
+
 // Disconnector корректно закрывает живые сессии пользователя (см.
 // hub.Server.DisconnectUser). Нужен, чтобы отключение клиента рвало его живые
 // соединения, а не оставляло их висеть на линии.
@@ -55,6 +67,9 @@ type ConnectionsProvider interface {
 // Config конфигурирует управляющий слой.
 type Config struct {
 	Store Store
+	// AccessKeys enables local access-key management endpoints. The application
+	// exposes them on the Unix socket and filters them out from remote HTTP.
+	AccessKeys AccessKeyStore
 	// ServerPublic — публичный ключ сервера; уходит в keylink при создании
 	// клиента.
 	ServerPublic []byte
@@ -278,6 +293,25 @@ type CreateClientResponse struct {
 	Keylink string `json:"keylink"`
 }
 
+type CreateAccessKeyRequest struct {
+	Name string `json:"name"`
+}
+
+type AccessKeyInfo struct {
+	ID        int64      `json:"id"`
+	Name      string     `json:"name"`
+	Prefix    string     `json:"prefix"`
+	CreatedAt time.Time  `json:"created_at"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+}
+
+// CreateAccessKeyResponse contains the raw token exactly once. Only its digest
+// remains in the server store after this response.
+type CreateAccessKeyResponse struct {
+	AccessKeyInfo
+	Token string `json:"token"`
+}
+
 // BoardInfo — представление хаба в API.
 type BoardInfo struct {
 	ID        string    `json:"id"`
@@ -318,6 +352,9 @@ func Handler(cfg Config) http.Handler {
 	mux.HandleFunc("GET /boards/{id}", h.getBoard)
 	mux.HandleFunc("PATCH /boards/{id}", h.updateBoard)
 	mux.HandleFunc("DELETE /boards/{id}", h.removeBoard)
+	mux.HandleFunc("GET /access-keys", h.listAccessKeys)
+	mux.HandleFunc("POST /access-keys", h.createAccessKey)
+	mux.HandleFunc("DELETE /access-keys/{id}", h.revokeAccessKey)
 	mux.HandleFunc("POST /restart", h.restart)
 	mux.HandleFunc("GET /logs", h.getLogs)
 	mux.HandleFunc("GET /stats", h.getStats)
@@ -326,11 +363,97 @@ func Handler(cfg Config) http.Handler {
 	return mux
 }
 
+// RemoteHandler removes local-only credential-management endpoints from a
+// handler that is going to be exposed over TCP. A panel bearer token must not
+// be able to mint another token or revoke operator access.
+func RemoteHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/access-keys" || strings.HasPrefix(r.URL.Path, "/access-keys/") {
+			http.NotFound(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // maxBackupUpload — потолок на размер загружаемого дампа БД (256 MiB), чтобы
 // импорт не съел память/диск от произвольно большого тела запроса.
 const maxBackupUpload = 256 << 20
 
 type handler struct{ cfg Config }
+
+func (h *handler) createAccessKey(w http.ResponseWriter, r *http.Request) {
+	if h.cfg.AccessKeys == nil {
+		httpError(w, http.StatusNotImplemented, errors.New("access key management not supported"))
+		return
+	}
+	var req CreateAccessKeyRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		httpError(w, http.StatusBadRequest, errors.New("name required"))
+		return
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		httpError(w, http.StatusInternalServerError, err)
+		return
+	}
+	token := "bpa_" + base64.RawURLEncoding.EncodeToString(raw)
+	digest := sha256.Sum256([]byte(token))
+	key, err := h.cfg.AccessKeys.CreateAccessKey(r.Context(), req.Name, token[:12], digest[:])
+	if err != nil {
+		httpError(w, statusForStore(err), err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, CreateAccessKeyResponse{AccessKeyInfo: toAccessKeyInfo(key), Token: token})
+}
+
+func (h *handler) listAccessKeys(w http.ResponseWriter, r *http.Request) {
+	if h.cfg.AccessKeys == nil {
+		httpError(w, http.StatusNotImplemented, errors.New("access key management not supported"))
+		return
+	}
+	keys, err := h.cfg.AccessKeys.ListAccessKeys(r.Context())
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]AccessKeyInfo, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, toAccessKeyInfo(key))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *handler) revokeAccessKey(w http.ResponseWriter, r *http.Request) {
+	if h.cfg.AccessKeys == nil {
+		httpError(w, http.StatusNotImplemented, errors.New("access key management not supported"))
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httpError(w, http.StatusBadRequest, errors.New("invalid access key id"))
+		return
+	}
+	if err := h.cfg.AccessKeys.RevokeAccessKey(r.Context(), id); err != nil {
+		httpError(w, statusForStore(err), err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func toAccessKeyInfo(key store.AccessKey) AccessKeyInfo {
+	info := AccessKeyInfo{ID: key.ID, Name: key.Name, Prefix: key.Prefix, CreatedAt: key.CreatedAt}
+	if !key.RevokedAt.IsZero() {
+		revoked := key.RevokedAt
+		info.RevokedAt = &revoked
+	}
+	return info
+}
 
 func (h *handler) listClients(w http.ResponseWriter, r *http.Request) {
 	users, err := h.cfg.Store.ListUsers(r.Context())

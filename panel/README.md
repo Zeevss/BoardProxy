@@ -22,8 +22,10 @@
 ./bproxy serve revoke <id>
 ```
 
-`keygen` показывает секрет один раз. В БД ноды хранится только SHA-256 digest;
-ключей может быть несколько, отзыв применяется к следующему HTTP-запросу без
+Эти команды подключаются к уже запущенному `serve` через management socket
+(`--socket`/`BPROXY_SOCKET`); самостоятельно БД они не открывают. `keygen`
+показывает секрет один раз. В БД ноды хранится только SHA-256 digest; ключей
+может быть несколько, отзыв применяется к следующему HTTP-запросу без
 перезапуска core. В UI откройте «Ноды», укажите название, IP/hostname, порт и
 полученный `bpa_…` ключ.
 
@@ -32,7 +34,7 @@
 ```sh
 cp .env.example .env
 docker compose up -d --build
-docker compose exec core bproxy serve keygen panel --db /data/bproxy.db
+docker compose exec core bproxy serve keygen panel
 ```
 
 Панель доступна на `PANEL_PORT`. Для ноды из того же compose используйте host

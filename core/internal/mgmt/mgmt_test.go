@@ -2,7 +2,10 @@ package mgmt
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,10 +22,11 @@ type fakeStore struct {
 	next  int64
 	users map[int64]store.User
 	hubs  map[string]store.Hub
+	keys  map[int64]store.AccessKey
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{users: map[int64]store.User{}, hubs: map[string]store.Hub{}}
+	return &fakeStore{users: map[int64]store.User{}, hubs: map[string]store.Hub{}, keys: map[int64]store.AccessKey{}}
 }
 
 func (f *fakeStore) CreateUser(_ context.Context, pub []byte, name string) (store.User, error) {
@@ -140,6 +144,37 @@ func (f *fakeStore) DeleteHub(_ context.Context, id string) error {
 	return nil
 }
 
+func (f *fakeStore) CreateAccessKey(_ context.Context, name, prefix string, _ []byte) (store.AccessKey, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.next++
+	key := store.AccessKey{ID: f.next, Name: name, Prefix: prefix, CreatedAt: time.Now().UTC()}
+	f.keys[key.ID] = key
+	return key, nil
+}
+
+func (f *fakeStore) ListAccessKeys(context.Context) ([]store.AccessKey, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]store.AccessKey, 0, len(f.keys))
+	for _, key := range f.keys {
+		out = append(out, key)
+	}
+	return out, nil
+}
+
+func (f *fakeStore) RevokeAccessKey(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key, ok := f.keys[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	key.RevokedAt = time.Now().UTC()
+	f.keys[id] = key
+	return nil
+}
+
 // fakeConnections — минимальная реализация ConnectionsProvider для тестов.
 type fakeConnections struct {
 	mu    sync.Mutex
@@ -210,7 +245,46 @@ func startServerCfg(t *testing.T, cfg Config) *Client {
 }
 
 func startServer(t *testing.T, fs *fakeStore, serverPub []byte) *Client {
-	return startServerCfg(t, Config{Store: fs, ServerPublic: serverPub, Board: "board-hash"})
+	return startServerCfg(t, Config{Store: fs, AccessKeys: fs, ServerPublic: serverPub, Board: "board-hash"})
+}
+
+func TestAccessKeysAreManagedThroughRunningServerSocket(t *testing.T) {
+	fs := newFakeStore()
+	c := startServer(t, fs, nil)
+	ctx := context.Background()
+
+	created, err := c.CreateAccessKey(ctx, "panel")
+	if err != nil {
+		t.Fatalf("CreateAccessKey: %v", err)
+	}
+	if created.ID == 0 || created.Name != "panel" || !strings.HasPrefix(created.Token, "bpa_") {
+		t.Fatalf("created = %+v", created)
+	}
+	keys, err := c.ListAccessKeys(ctx)
+	if err != nil || len(keys) != 1 || keys[0].ID != created.ID || keys[0].RevokedAt != nil {
+		t.Fatalf("ListAccessKeys = %+v, %v", keys, err)
+	}
+	if err := c.RevokeAccessKey(ctx, created.ID); err != nil {
+		t.Fatalf("RevokeAccessKey: %v", err)
+	}
+	keys, err = c.ListAccessKeys(ctx)
+	if err != nil || len(keys) != 1 || keys[0].RevokedAt == nil {
+		t.Fatalf("revoked ListAccessKeys = %+v, %v", keys, err)
+	}
+}
+
+func TestRemoteHandlerBlocksAccessKeyManagement(t *testing.T) {
+	fs := newFakeStore()
+	h := RemoteHandler(Handler(Config{Store: fs, AccessKeys: fs}))
+	req := httptest.NewRequest(http.MethodPost, "/access-keys", strings.NewReader(`{"name":"attacker"}`))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+	if len(fs.keys) != 0 {
+		t.Fatal("remote request created an access key")
+	}
 }
 
 func TestCreateClientReturnsUsableKeylink(t *testing.T) {
