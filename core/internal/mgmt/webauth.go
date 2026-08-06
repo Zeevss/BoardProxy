@@ -1,6 +1,7 @@
 package mgmt
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -19,6 +20,9 @@ type WebAuthConfig struct {
 	// Token, если задан, разрешает доступ по заголовку
 	// "Authorization: Bearer <token>" — для скриптов/CLI поверх TCP.
 	Token string
+	// TokenValidator validates independently issued and revocable bearer keys.
+	// It is called only for a syntactically valid non-empty Bearer token.
+	TokenValidator func(context.Context, string) bool
 	// UIPassword, если задан, включает вход в веб-панель по паролю: POST /login
 	// заводит сессионную cookie, которая дальше пускает к API. Пусто — вход по
 	// паролю выключен.
@@ -95,7 +99,7 @@ func WebAuth(cfg WebAuthConfig, next http.Handler) http.Handler {
 		sum := sha256.Sum256([]byte("bproxy-session\x00" + cfg.UIPassword))
 		key = sum[:]
 	}
-	open := cfg.Token == "" && cfg.UIPassword == ""
+	open := cfg.Token == "" && cfg.TokenValidator == nil && cfg.UIPassword == ""
 	limiter := newLoginLimiter()
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -113,12 +117,24 @@ func WebAuth(cfg WebAuthConfig, next http.Handler) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		if open || bearerOK(cfg.Token, r) || sessionOK(key, r) {
+		if open || bearerOK(cfg.Token, r) || bearerValidated(cfg.TokenValidator, r) || sessionOK(key, r) {
 			next.ServeHTTP(w, r)
 			return
 		}
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 	})
+}
+
+func bearerValidated(validate func(context.Context, string) bool, r *http.Request) bool {
+	if validate == nil {
+		return false
+	}
+	const prefix = "Bearer "
+	header := r.Header.Get("Authorization")
+	if len(header) <= len(prefix) || header[:len(prefix)] != prefix {
+		return false
+	}
+	return validate(r.Context(), header[len(prefix):])
 }
 
 // handleLogin проверяет пароль и, при совпадении, ставит сессионную cookie.

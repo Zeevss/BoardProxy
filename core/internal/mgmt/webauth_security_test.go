@@ -1,11 +1,36 @@
 package mgmt
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestWebAuthRevocableTokenValidator(t *testing.T) {
+	active := true
+	h := WebAuth(WebAuthConfig{TokenValidator: func(_ context.Context, token string) bool {
+		return active && token == "bpa_valid"
+	}}, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/stats", nil)
+	req.Header.Set("Authorization", "Bearer bpa_valid")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("active key status = %d", w.Code)
+	}
+
+	active = false
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked key status = %d", w.Code)
+	}
+}
 
 func TestWebAuthRateLimitsLogin(t *testing.T) {
 	h := WebAuth(WebAuthConfig{UIPassword: "secret"}, http.NotFoundHandler())

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -122,7 +123,7 @@ func RunServer(ctx context.Context, cfg config.Config, log *slog.Logger, logs *l
 		}
 
 		if cfg.Server.WebAPI != "" {
-			startWebAPI(runCtx, cfg, h, log)
+			startWebAPI(runCtx, cfg, h, st, log)
 		}
 	}
 
@@ -183,22 +184,22 @@ func (h *hubSet) UserConnections(userID int64) []hub.ConnectionInfo {
 }
 
 // startWebAPI поднимает управляющий API поверх обычного TCP/HTTP (в дополнение
-// к unix-сокету) — для удалённого/скриптового доступа. Встроенной
-// аутентификации нет: биндинг на что-то кроме loopback без WebAPIToken отдаёт
-// полный контроль (CRUD клиентов/хабов, рестарт) любому, кто дотянется до
-// адреса, поэтому при таком сочетании логируем явное предупреждение при
-// старте, а не молчим.
-func startWebAPI(ctx context.Context, cfg config.Config, h http.Handler, log *slog.Logger) {
-	if cfg.Server.WebAPIToken == "" && cfg.Server.WebUIPassword == "" {
-		log.Error("web API disabled: configure --web-api-token or --web-ui-password",
-			"addr", cfg.Server.WebAPI)
-		return
-	}
+// к unix-сокету) — для удалённого/скриптового доступа. Доступ разрешён по
+// статическому токену, UI-cookie либо одному из отзываемых ключей в store.
+func startWebAPI(ctx context.Context, cfg config.Config, h http.Handler, st *sqlite.Store, log *slog.Logger) {
 	// Аутентификация web-API: bearer-токен (для скриптов) и/или пароль веб-панели
 	// (сессионная cookie). Unix-сокет остаётся без неё — там граница файловые права.
 	h = mgmt.WebAuth(mgmt.WebAuthConfig{
 		Token:      cfg.Server.WebAPIToken,
 		UIPassword: cfg.Server.WebUIPassword,
+		TokenValidator: func(ctx context.Context, token string) bool {
+			digest := sha256.Sum256([]byte(token))
+			valid, err := st.AccessKeyValid(ctx, digest[:])
+			if err != nil {
+				log.Warn("validate management access key", "err", err)
+			}
+			return err == nil && valid
+		},
 	}, h)
 	srv := &http.Server{
 		Addr:              cfg.Server.WebAPI,
@@ -218,8 +219,7 @@ func startWebAPI(ctx context.Context, cfg config.Config, h http.Handler, log *sl
 		defer cancel()
 		_ = srv.Shutdown(sctx)
 	}()
-	auth := cfg.Server.WebAPIToken != "" || cfg.Server.WebUIPassword != ""
-	log.Info("web api listening", "addr", cfg.Server.WebAPI, "auth", auth)
+	log.Info("web api listening", "addr", cfg.Server.WebAPI, "auth", true)
 }
 
 // resolveBoards возвращает набор досок для обслуживания: объединение активных

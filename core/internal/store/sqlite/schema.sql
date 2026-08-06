@@ -17,3 +17,12 @@ CREATE TABLE IF NOT EXISTS hubs (
 	max_lanes   INTEGER NOT NULL DEFAULT 8,
     created_at  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS access_keys (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    prefix      TEXT NOT NULL,
+    digest      BLOB NOT NULL UNIQUE,
+    created_at  TEXT NOT NULL,
+    revoked_at  TEXT
+);

@@ -5,6 +5,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,6 +24,7 @@ import (
 	"bproxy-core/internal/config"
 	"bproxy-core/internal/logging"
 	"bproxy-core/internal/mgmt"
+	"bproxy-core/internal/store/sqlite"
 	"bproxy-core/pkg/bproxy"
 
 	"github.com/spf13/cobra"
@@ -230,7 +234,7 @@ func serveCmd(socket *string) *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVarP(&cfg.Board.Hash, "board", "b", getenvOr("BPROXY_BOARD", ""), "whiteboard hash (empty = board-less start)")
-	f.StringVar(&cfg.Store.Path, "db", getenvOr("BPROXY_DB", defaultDBPath()), "SQLite database file path (created if missing)")
+	cmd.PersistentFlags().StringVar(&cfg.Store.Path, "db", getenvOr("BPROXY_DB", defaultDBPath()), "SQLite database file path (created if missing)")
 	f.StringVar(&cfg.Server.KeyPath, "key-file", getenvOr("BPROXY_KEY_FILE", defaultKeyPath()), "server private key file path (generated next to the binary if missing)")
 	f.StringVar(&cfg.Board.APIBase, "api", cfg.Board.APIBase, "board REST API base URL")
 	f.StringVar(&cfg.Server.HubPage, "hub", "", "hub slide hash (empty = deterministic)")
@@ -254,7 +258,92 @@ func serveCmd(socket *string) *cobra.Command {
 		"require this bearer token on --web-api requests (recommended if not bound to loopback)")
 	f.StringVar(&cfg.Server.WebUIPassword, "web-ui-password", getenvOr("BPROXY_WEB_UI_PASSWORD", ""),
 		"password for the web panel login (POST /login issues a session cookie); empty disables password login")
+	cmd.AddCommand(serveKeygenCmd(&cfg), serveKeysCmd(&cfg), serveRevokeKeyCmd(&cfg))
 	return cmd
+}
+
+func serveKeygenCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "keygen [name]",
+		Short: "issue a revocable remote management access key",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := "panel"
+			if len(args) == 1 && args[0] != "" {
+				name = args[0]
+			}
+			raw := make([]byte, 32)
+			if _, err := rand.Read(raw); err != nil {
+				return fmt.Errorf("generate access key: %w", err)
+			}
+			token := "bpa_" + base64.RawURLEncoding.EncodeToString(raw)
+			digest := sha256.Sum256([]byte(token))
+			st, err := sqlite.Open(cmd.Context(), cfg.Store.Path)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			key, err := st.CreateAccessKey(cmd.Context(), name, token[:12], digest[:])
+			if err != nil {
+				return err
+			}
+			fmt.Printf("access key #%d %q created; copy it now, it will not be shown again:\n%s\n", key.ID, key.Name, token)
+			return nil
+		},
+	}
+}
+
+func serveKeysCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "keys",
+		Short: "list issued remote management access keys",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			st, err := sqlite.Open(cmd.Context(), cfg.Store.Path)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			keys, err := st.ListAccessKeys(cmd.Context())
+			if err != nil {
+				return err
+			}
+			tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+			fmt.Fprintln(tw, "ID\tNAME\tPREFIX\tCREATED\tSTATUS")
+			for _, key := range keys {
+				status := "active"
+				if !key.RevokedAt.IsZero() {
+					status = "revoked"
+				}
+				fmt.Fprintf(tw, "%d\t%s\t%s…\t%s\t%s\n", key.ID, key.Name, key.Prefix, key.CreatedAt.Format(time.RFC3339), status)
+			}
+			return tw.Flush()
+		},
+	}
+}
+
+func serveRevokeKeyCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "revoke <id>",
+		Short: "revoke a remote management access key",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil || id <= 0 {
+				return fmt.Errorf("invalid access key id %q", args[0])
+			}
+			st, err := sqlite.Open(cmd.Context(), cfg.Store.Path)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			if err := st.RevokeAccessKey(cmd.Context(), id); err != nil {
+				return err
+			}
+			fmt.Printf("access key #%d revoked\n", id)
+			return nil
+		},
+	}
 }
 
 // mgmtCtx — короткий контекст для одиночного управляющего вызова к сокету.

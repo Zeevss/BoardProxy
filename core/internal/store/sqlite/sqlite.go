@@ -348,6 +348,65 @@ func (s *Store) DeleteHub(ctx context.Context, id string) error {
 	return s.updateStatus(ctx, "delete hub", `DELETE FROM hubs WHERE id = ?`, id)
 }
 
+func (s *Store) CreateAccessKey(ctx context.Context, name, prefix string, digest []byte) (store.AccessKey, error) {
+	now := time.Now().UTC()
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO access_keys (name, prefix, digest, created_at) VALUES (?, ?, ?, ?)`,
+		name, prefix, digest, formatTime(now))
+	if err != nil {
+		if isUniqueViolation(err) {
+			return store.AccessKey{}, store.ErrConflict
+		}
+		return store.AccessKey{}, fmt.Errorf("sqlite: create access key: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return store.AccessKey{}, fmt.Errorf("sqlite: create access key id: %w", err)
+	}
+	return store.AccessKey{ID: id, Name: name, Prefix: prefix, CreatedAt: now}, nil
+}
+
+func (s *Store) ListAccessKeys(ctx context.Context) ([]store.AccessKey, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name, prefix, created_at, revoked_at FROM access_keys ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: list access keys: %w", err)
+	}
+	defer rows.Close()
+	var out []store.AccessKey
+	for rows.Next() {
+		var key store.AccessKey
+		var created string
+		var revoked sql.NullString
+		if err := rows.Scan(&key.ID, &key.Name, &key.Prefix, &created, &revoked); err != nil {
+			return nil, fmt.Errorf("sqlite: list access keys: scan: %w", err)
+		}
+		key.CreatedAt = parseTime(created)
+		key.RevokedAt = parseNullTime(revoked)
+		out = append(out, key)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) RevokeAccessKey(ctx context.Context, id int64) error {
+	return s.updateStatus(ctx, "revoke access key",
+		`UPDATE access_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?`,
+		formatTime(time.Now().UTC()), id)
+}
+
+func (s *Store) AccessKeyValid(ctx context.Context, digest []byte) (bool, error) {
+	var found int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM access_keys WHERE digest = ? AND revoked_at IS NULL`, digest).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("sqlite: validate access key: %w", err)
+	}
+	return found == 1, nil
+}
+
 // updateStatus выполняет UPDATE ... WHERE id = ? и возвращает ErrNotFound,
 // если строка не затронута (нет такой записи).
 func (s *Store) updateStatus(ctx context.Context, op, query string, args ...any) error {

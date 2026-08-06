@@ -3,7 +3,7 @@
 // HttpOnly-cookie, которую ставит POST /api/login. На 401 бросаем Unauthorized —
 // глобальный обработчик уводит на экран логина.
 
-const BASE = "/api";
+const BASE = "/api/node";
 
 export class Unauthorized extends Error {
   constructor() {
@@ -42,6 +42,43 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const ct = resp.headers.get("Content-Type") ?? "";
   if (ct.includes("application/json")) return (await resp.json()) as T;
   return undefined as T;
+}
+
+async function panelRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const resp = await fetch("/api" + path, {
+    credentials: "include",
+    headers: init?.body ? { "Content-Type": "application/json" } : undefined,
+    ...init,
+  });
+  if (resp.status === 401) throw new Unauthorized();
+  if (!resp.ok) {
+    let message = `HTTP ${resp.status}`;
+    try {
+      const body = await resp.json();
+      if (body?.error) message = body.error;
+    } catch { /* keep status */ }
+    throw new ApiError(resp.status, message);
+  }
+  if (resp.status === 204) return undefined as T;
+  return (await resp.json()) as T;
+}
+
+export interface NodeInfo {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  tls: boolean;
+  key_hint: string;
+  created_at: string;
+  selected: boolean;
+}
+
+export interface NodeStatus {
+  online: boolean;
+  latency_ms: number;
+  checked_at: string;
+  error?: string;
 }
 
 // ---- Типы ответов (совпадают с internal/mgmt) ----
@@ -217,8 +254,16 @@ export interface ServerStats {
 
 export const api = {
   login: (password: string) =>
-    request<void>("/login", { method: "POST", body: JSON.stringify({ password }) }),
-  logout: () => request<void>("/logout", { method: "POST" }),
+	panelRequest<void>("/login", { method: "POST", body: JSON.stringify({ password }) }),
+  logout: () => panelRequest<void>("/logout", { method: "POST" }),
+  session: () => panelRequest<void>("/session"),
+
+  listNodes: () => panelRequest<NodeInfo[]>("/nodes"),
+  createNode: (node: { name: string; host: string; port: number; tls: boolean; access_key: string }) =>
+    panelRequest<NodeInfo>("/nodes", { method: "POST", body: JSON.stringify(node) }),
+  selectNode: (id: string) => panelRequest<void>(`/nodes/${id}/select`, { method: "POST" }),
+  deleteNode: (id: string) => panelRequest<void>(`/nodes/${id}`, { method: "DELETE" }),
+  nodeStatus: (id: string) => panelRequest<NodeStatus>(`/nodes/${id}/status`),
 
   stats: () => request<ServerStats>("/stats"),
   logs: (limit = 500) => request<LogEntry[]>(`/logs?limit=${limit}`),

@@ -31,11 +31,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Проба сессии при загрузке: /stats дёшев и требует авторизации.
+  // Session belongs to the standalone panel, not to any selected node.
   React.useEffect(() => {
     let alive = true;
     api
-      .stats()
+      .session()
       .then(() => alive && setAuthed(true))
       .catch((e) => {
         if (!alive) return;

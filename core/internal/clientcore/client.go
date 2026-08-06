@@ -25,6 +25,8 @@ type yandexDialer struct {
 	options yandex.Options
 }
 
+var joinBoard = yandex.Join
+
 func (d yandexDialer) Join(ctx context.Context) (board.Session, error) {
 	return yandex.Join(ctx, d.options)
 }
@@ -32,12 +34,32 @@ func (d yandexDialer) Join(ctx context.Context) (board.Session, error) {
 // Dial joins the board, completes rendezvous, and returns an encrypted mux
 // session. Closing the mux cascades through link to the board session.
 func Dial(ctx context.Context, cfg config.Config, log *slog.Logger) (*mux.Session, error) {
-	clientStatic, serverPublic, boardHash, err := credentials(cfg)
+	clientStatic, serverPublic, boards, err := credentials(cfg)
 	if err != nil {
 		return nil, err
 	}
-	cfg.Board.Hash = boardHash
+	var failures []error
+	for index, boardHash := range boards {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		attempt := cfg
+		attempt.Board.Hash = boardHash
+		sess, err := dialBoard(ctx, attempt, log, clientStatic, serverPublic)
+		if err == nil {
+			if index > 0 {
+				log.Info("client board failover succeeded", "board", boardHash, "attempt", index+1)
+			}
+			return sess, nil
+		}
+		failures = append(failures, fmt.Errorf("board %s: %w", boardHash, err))
+		log.Warn("client board unavailable; trying next", "board", boardHash,
+			"attempt", index+1, "remaining", len(boards)-index-1, "err", err)
+	}
+	return nil, fmt.Errorf("all keylink boards failed: %w", errors.Join(failures...))
+}
 
+func dialBoard(ctx context.Context, cfg config.Config, log *slog.Logger, clientStatic crypto.Keypair, serverPublic []byte) (*mux.Session, error) {
 	boardOptions := yandex.Options{
 		APIBase:   cfg.Board.APIBase,
 		Hash:      cfg.Board.Hash,
@@ -45,7 +67,7 @@ func Dial(ctx context.Context, cfg config.Config, log *slog.Logger) (*mux.Sessio
 		Protector: cfg.Client.Protector,
 		Log:       log.With("component", "board", "role", "client-lane"),
 	}
-	sess, err := yandex.Join(ctx, boardOptions)
+	sess, err := joinBoard(ctx, boardOptions)
 	if err != nil {
 		return nil, fmt.Errorf("join board: %w", err)
 	}
@@ -88,26 +110,27 @@ func Dial(ctx context.Context, cfg config.Config, log *slog.Logger) (*mux.Sessio
 	return m, nil
 }
 
-func credentials(cfg config.Config) (kp crypto.Keypair, serverPub []byte, boardHash string, err error) {
+func credentials(cfg config.Config) (kp crypto.Keypair, serverPub []byte, boards []string, err error) {
 	if cfg.Client.Keylink == "" {
-		return crypto.Keypair{}, nil, "", errors.New("client keylink not set (-keylink / BPROXY_KEYLINK)")
+		return crypto.Keypair{}, nil, nil, errors.New("client keylink not set (-keylink / BPROXY_KEYLINK)")
 	}
 	creds, err := keylink.Parse(cfg.Client.Keylink)
 	if err != nil {
-		return crypto.Keypair{}, nil, "", fmt.Errorf("parse keylink: %w", err)
+		return crypto.Keypair{}, nil, nil, fmt.Errorf("parse keylink: %w", err)
 	}
 	kp, err = creds.ClientKeypair()
 	if err != nil {
-		return crypto.Keypair{}, nil, "", fmt.Errorf("client keypair: %w", err)
+		return crypto.Keypair{}, nil, nil, fmt.Errorf("client keypair: %w", err)
 	}
-	boardHash = cfg.Board.Hash
-	if boardHash == "" && len(creds.Boards) > 0 {
-		boardHash = creds.Boards[0]
+	if cfg.Board.Hash != "" {
+		boards = []string{cfg.Board.Hash}
+	} else {
+		boards = append([]string(nil), creds.Boards...)
 	}
-	if boardHash == "" {
-		return crypto.Keypair{}, nil, "", errors.New("no board hash (-board flag or keylink)")
+	if len(boards) == 0 {
+		return crypto.Keypair{}, nil, nil, errors.New("no board hash (-board flag or keylink)")
 	}
-	return kp, creds.ServerPublic, boardHash, nil
+	return kp, creds.ServerPublic, boards, nil
 }
 
 func resolveHubSlide(cfg config.Config, sess *yandex.Session) (string, error) {

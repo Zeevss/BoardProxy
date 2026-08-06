@@ -298,6 +298,11 @@ v4 добавляет unordered bond delivery, DATA StreamOffset, FIN FinalOffse
 Этапы многоканального транспорта и его инварианты описаны в
 [`V3_BONDING.md`](V3_BONDING.md).
 
+Если keylink содержит несколько досок (`@hashA,hashB,…`), клиент выполняет
+полный join+rendezvous в указанном порядке. Ошибка одной доски закрывает её
+частично созданную сессию и переключает попытку на следующую; явный `--board`
+по-прежнему отключает failover и принудительно выбирает одну доску.
+
 ## Запуск
 
 Один бинарник `bproxy` с подкомандами: `connect` (клиент), `serve` (сервер) и
@@ -386,6 +391,18 @@ keylink = "bproxy://…#label"
 соединений клиента, трафик, рестарт), но по обычному HTTP/TCP — для
 удалённого/скриптового доступа. Включается флагом `--web-api`/переменной
 `WEB_API` (адрес вида `127.0.0.1:8080`); по умолчанию выключен.
+
+Для удалённой multi-node панели выпустите отдельный отзываемый bearer-ключ:
+
+```sh
+./bin/bproxy serve keygen panel --db /path/to/bproxy.db
+./bin/bproxy serve keys --db /path/to/bproxy.db
+./bin/bproxy serve revoke <id> --db /path/to/bproxy.db
+```
+
+Секрет `bpa_…` показывается только при создании, в SQLite хранится его digest.
+Можно выпустить несколько ключей для разных панелей/операторов; отзыв начинает
+действовать без рестарта ноды.
 
 ```sh
 WEB_API=127.0.0.1:8080 BPROXY_WEB_UI_PASSWORD='<password>' ./bin/bproxy serve -b <boardHash>

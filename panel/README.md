@@ -1,61 +1,55 @@
-# BoardProxy — админ-панель
+# BoardProxy multi-node panel
 
-Веб-панель администратора для сервера BoardProxy (core). Полностью покрывает
-управляющий API core: клиенты, доски, статистика, логи, бэкап БД, перезапуск.
+Панель — самостоятельный control-plane, не привязанный к одному процессу core.
+Она состоит из React UI и небольшого Go gateway. Gateway хранит список нод и
+их access keys в `/data/nodes.json` с правами `0600`; ключи никогда не уходят в
+браузер. Все прежние экраны (`Clients`, `Boards`, `Statistics`, `Logs`,
+`Maintenance`) работают относительно выбранной ноды.
 
-Стек: React 18 + TypeScript + Vite + Tailwind + [shadcn/ui](https://ui.shadcn.com/),
-TanStack Query, react-router, `qrcode.react`.
+## Подключение ноды
 
-## Запуск через docker-compose (рекомендуется)
-
-Из **корня проекта** (не из `panel/`):
+На каждой ноде management API должен слушать TCP-порт:
 
 ```sh
-cp .env.example .env       # заполните BPROXY_WEB_UI_PASSWORD и, при желании, BPROXY_BOARD
-docker compose up --build
+./bproxy serve --web-api=0.0.0.0:8080
 ```
 
-Открыть `http://localhost:8080` (порт задаётся `PANEL_PORT`). Наружу публикуется
-**только** этот порт: Caddy отдаёт статику панели и проксирует `/api/*` во
-внутренний web-api `core`, который сам портов наружу не имеет. БД и приватный
-ключ сервера живут в томе `bproxy-data` (`/data`).
+Сгенерируйте отдельный ключ для панели:
 
-### Несколько досок
+```sh
+./bproxy serve keygen panel
+./bproxy serve keys
+./bproxy serve revoke <id>
+```
 
-Один сервер обслуживает несколько досок одновременно: поднимает хаб на каждую
-активную доску из БД. Доски задаются в `BPROXY_BOARD` через запятую
-(`hashA,hashB`) и/или добавляются из панели (экран «Доски») с последующим
-перезапуском. Битая/недоступная доска логируется и пропускается, не роняя
-остальные. Отключение/добавление доски применяется после `restart` (живой пул
-хабов не пересобирается на лету).
+`keygen` показывает секрет один раз. В БД ноды хранится только SHA-256 digest;
+ключей может быть несколько, отзыв применяется к следующему HTTP-запросу без
+перезапуска core. В UI откройте «Ноды», укажите название, IP/hostname, порт и
+полученный `bpa_…` ключ.
 
-## Аутентификация
+## Docker Compose
 
-Панель защищена паролем (`BPROXY_WEB_UI_PASSWORD`). Форма логина шлёт
-`POST /api/login`, core сверяет пароль и ставит подписанную HttpOnly-cookie
-(ключ подписи выводится из пароля, поэтому сессия переживает перезапуск сервера).
-Bearer-токен core (`--web-api-token`) остаётся отдельным механизмом для скриптов
-и в браузер не попадает.
+```sh
+cp .env.example .env
+docker compose up -d --build
+docker compose exec core bproxy serve keygen panel --db /data/bproxy.db
+```
 
-> **TLS.** Cookie сессии выставляется без флага `Secure` — предполагается работа
-> на loopback или за внешним TLS-терминатором. Для доступа снаружи поставьте
-> перед панелью HTTPS (тот же Caddy с доменом, реверс-прокси и т.п.).
+Панель доступна на `PANEL_PORT`. Для ноды из того же compose используйте host
+`core`, port `8080`. Порт `CORE_API_PORT` по умолчанию публикуется только на
+`127.0.0.1`; для удалённой панели откройте management API через firewall и TLS
+reverse proxy, затем отметьте HTTPS при добавлении ноды.
+
+Данные панели находятся в отдельном томе `panel-data`, данные ноды — в
+`bproxy-data`. Контейнеры можно запускать и обновлять независимо.
 
 ## Разработка
 
 ```sh
 npm install
-# core должен быть запущен с --web-api; по умолчанию проксируем на 127.0.0.1:8080
-VITE_API_TARGET=http://127.0.0.1:8099 npm run dev
+npm run build
+cd gateway && go test ./...
 ```
 
-`npm run build` — типизация + сборка в `dist/`.
-
-## Что где
-
-- `src/lib/api.ts` — типизированный клиент над `/api` (совпадает с `internal/mgmt`).
-- `src/lib/auth.tsx` — состояние сессии, проба при загрузке, обработка 401.
-- `src/routes/` — экраны: `Login`, `Dashboard`, `Clients`, `Boards`, `Logs`,
-  `Maintenance` (бэкап).
-- `src/components/ui/` — компоненты shadcn/ui.
-- `Caddyfile` / `Dockerfile` — обслуживание статики и прокси `/api` в core.
+Vite UI обращается к gateway по same-origin `/api`. `/api/nodes` управляет
+реестром, а `/api/node/*` проксируется в выбранный core с bearer-ключом.

@@ -21,7 +21,7 @@ RUN mkdir -p /data && chown bproxy:bproxy /data
 VOLUME /data
 USER bproxy
 
-# Управляющий web-api. Наружу НЕ публикуется — доступ только из внутренней сети
-# compose (через панель/Caddy). Параметры задаются флагами в docker-compose.
+# Управляющий web-api. Публикуйте его только в доверенной сети либо за TLS;
+# доступ панели авторизуется отзываемым bearer-ключом из `serve keygen`.
 EXPOSE 8080
 ENTRYPOINT ["bproxy"]

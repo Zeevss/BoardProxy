@@ -63,6 +63,16 @@ type Hub struct {
 	CreatedAt time.Time
 }
 
+// AccessKey is a revocable bearer credential for the remote management API.
+// Only its SHA-256 digest is stored; the raw token is shown once by keygen.
+type AccessKey struct {
+	ID        int64
+	Name      string
+	Prefix    string
+	CreatedAt time.Time
+	RevokedAt time.Time
+}
+
 // Store — порт хранилища. Боевая реализация — store/sqlite.
 type Store interface {
 	// CreateUser заводит нового предоставленного оператором пользователя.
@@ -108,6 +118,11 @@ type Store interface {
 	// DeleteHub безвозвратно удаляет запись хаба (в отличие от
 	// SetHubStatus(disabled)). ErrNotFound, если такого нет.
 	DeleteHub(ctx context.Context, id string) error
+
+	CreateAccessKey(ctx context.Context, name, prefix string, digest []byte) (AccessKey, error)
+	ListAccessKeys(ctx context.Context) ([]AccessKey, error)
+	RevokeAccessKey(ctx context.Context, id int64) error
+	AccessKeyValid(ctx context.Context, digest []byte) (bool, error)
 
 	// Close освобождает ресурсы хранилища.
 	Close() error

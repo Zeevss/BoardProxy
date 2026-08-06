@@ -2,12 +2,38 @@ package sqlite
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"path/filepath"
 	"testing"
 
 	"bproxy-core/internal/store"
 )
+
+func TestAccessKeysCanBeIssuedValidatedAndRevoked(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	digest := sha256.Sum256([]byte("bpa_test-secret"))
+	created, err := s.CreateAccessKey(ctx, "panel", "bpa_test", digest[:])
+	if err != nil {
+		t.Fatalf("CreateAccessKey: %v", err)
+	}
+	valid, err := s.AccessKeyValid(ctx, digest[:])
+	if err != nil || !valid {
+		t.Fatalf("AccessKeyValid = %v, %v", valid, err)
+	}
+	keys, err := s.ListAccessKeys(ctx)
+	if err != nil || len(keys) != 1 || keys[0].Name != "panel" || keys[0].Prefix != "bpa_test" {
+		t.Fatalf("ListAccessKeys = %+v, %v", keys, err)
+	}
+	if err := s.RevokeAccessKey(ctx, created.ID); err != nil {
+		t.Fatalf("RevokeAccessKey: %v", err)
+	}
+	valid, err = s.AccessKeyValid(ctx, digest[:])
+	if err != nil || valid {
+		t.Fatalf("revoked AccessKeyValid = %v, %v", valid, err)
+	}
+}
 
 // testStore открывает свежую БД во временном каталоге теста — в отличие от
 // Postgres, SQLite не требует внешней СУБД, поэтому тесты идут всегда.

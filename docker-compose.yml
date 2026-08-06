@@ -1,15 +1,10 @@
-# BoardProxy: сервер (core) + админ-панель (panel).
-#
-# Наружу публикуется ТОЛЬКО порт панели. core живёт во внутренней сети и
-# доступен лишь панели/Caddy — его web-api не имеет опубликованных портов.
+# BoardProxy node (core) and independent multi-node control panel.
 # Настройки — в .env (см. .env.example).
 
 services:
   core:
     build: ./core
     restart: unless-stopped
-    # Пароль и доски передаём ТОЛЬКО через environment (флаги читают их из env
-    # через getenvOr), чтобы секрет не светился в `ps`/`docker inspect` командой.
     command:
       - serve
       - --web-api=0.0.0.0:8080
@@ -19,7 +14,6 @@ services:
       - --idle-timeout=${BPROXY_IDLE_TIMEOUT:-90s}
       - --stream-idle-timeout=${BPROXY_STREAM_IDLE_TIMEOUT:-0s}
     environment:
-      BPROXY_WEB_UI_PASSWORD: ${BPROXY_WEB_UI_PASSWORD}
       # BPROXY_BOARD — одна доска или несколько через запятую (hashA,hashB).
       BPROXY_BOARD: ${BPROXY_BOARD}
       BPROXY_SERVER_MAX_SESSIONS_PER_USER: ${BPROXY_SERVER_MAX_SESSIONS_PER_USER:-4}
@@ -32,19 +26,26 @@ services:
       - /sys/class/net/bproxy0/statistics:/host-net-stats:ro
     networks:
       - internal
+    # Publish this only behind a firewall/TLS reverse proxy when the panel runs
+    # on another host. Revocable `serve keygen` bearer keys protect the API.
+    ports:
+      - "${CORE_API_BIND:-127.0.0.1}:${CORE_API_PORT:-8081}:8080"
 
   panel:
     build: ./panel
     restart: unless-stopped
-    depends_on:
-      - core
     ports:
-      - "${PANEL_PORT:-8080}:80"
+      - "${PANEL_PORT:-8080}:8080"
+    environment:
+      PANEL_PASSWORD: ${PANEL_PASSWORD:-${BPROXY_WEB_UI_PASSWORD:-}}
+    volumes:
+      - panel-data:/data
     networks:
       - internal
 
 volumes:
   bproxy-data:
+  panel-data:
 
 networks:
   internal:

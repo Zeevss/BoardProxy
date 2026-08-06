@@ -16,7 +16,7 @@ export function Login() {
   const [busy, setBusy] = React.useState(false);
 
   // Уже авторизованы — на дашборд.
-  if (authed) return <Navigate to="/" replace />;
+  if (authed) return <Navigate to="/nodes" replace />;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();

@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   LayoutDashboard,
@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Network,
   ChartNoAxesCombined,
+  Server,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -29,6 +30,7 @@ import {
 } from "@/components/ui/alert-dialog";
 
 const NAV = [
+  { to: "/nodes", label: "Ноды", icon: Server, end: false },
   { to: "/", label: "Обзор", icon: LayoutDashboard, end: true },
   { to: "/clients", label: "Клиенты", icon: Users, end: false },
   { to: "/boards", label: "Доски", icon: LayoutPanelTop, end: false },
@@ -41,6 +43,15 @@ export function AppLayout() {
   const { logout } = useAuth();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.listNodes });
+  const selectedNode = nodes.data?.find((node) => node.selected);
+  const selectNode = useMutation({
+    mutationFn: (id: string) => api.selectNode(id),
+    onSuccess: async () => {
+      await qc.invalidateQueries();
+      navigate("/");
+    },
+  });
 
   const restart = useMutation({
     mutationFn: () => api.restart(),
@@ -107,12 +118,26 @@ export function AppLayout() {
               </NavLink>
             ))}
           </nav>
-          <div className="hidden md:block" />
+          <div className="hidden min-w-0 md:block">
+            {nodes.data?.length ? (
+              <select
+                aria-label="Выбранная нода"
+                value={selectedNode?.id ?? ""}
+                onChange={(event) => selectNode.mutate(event.target.value)}
+                className="h-8 max-w-64 rounded-md border bg-background px-2 text-sm"
+              >
+                {!selectedNode && <option value="">Выберите ноду</option>}
+                {nodes.data.map((node) => <option key={node.id} value={node.id}>{node.name} · {node.host}</option>)}
+              </select>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => navigate("/nodes")}>Добавить ноду</Button>
+            )}
+          </div>
 
           <div className="flex items-center gap-2">
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button variant="outline" size="sm">
+                <Button variant="outline" size="sm" disabled={!selectedNode || restart.isPending}>
                   <RefreshCw className="h-4 w-4" />
                   <span className="hidden sm:inline">Перезапуск</span>
                 </Button>
