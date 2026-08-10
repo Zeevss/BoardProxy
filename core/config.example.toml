@@ -1,0 +1,62 @@
+version = 1
+
+[server]
+# Generate once with: bproxy generate server-key
+private_key = "base64:REPLACE_WITH_32_BYTE_SERVER_PRIVATE_KEY"
+idle_timeout = "90s"
+allow_private_egress = false
+
+[transport]
+# Zero means adaptive/default where supported.
+window = 0
+max_frame_payload = 4194304
+stream_window = 1048576
+max_stream_window = 33554432
+ack_timeout = "6s"
+coalesce_target = 0
+stream_idle_timeout = "0s"
+
+[management]
+# The Unix socket is the recommended local control endpoint. Runtime mutations
+# made through gRPC are intentionally ephemeral and are replaced on reload.
+grpc_listen = "unix:///run/bproxy/control.sock"
+# Optional, read-only liveness/readiness/statistics/logs adapter. Must bind to
+# loopback. It exposes /healthz, /readyz, /stats and /logs only.
+# http_listen = "127.0.0.1:8080"
+
+[observability]
+enabled = true
+log_level = "info"
+
+[[boards]]
+tag = "primary"
+name = "Primary board"
+hash = "REPLACE_WITH_BOARD_HASH"
+# Advanced: every client must use the same hub_page override. Keylinks do not
+# currently carry this value, so leave it empty for deterministic discovery.
+# hub_slide = "optional-fixed-slide-id"
+# api_base = "https://boards.yandex.ru/api"
+# guest_name = "bproxy"
+enabled = true
+max_lanes = 2
+
+[[users]]
+tag = "alice"
+name = "Alice"
+# Generate once with: bproxy generate user-key
+private_key = "base64:REPLACE_WITH_32_BYTE_USER_PRIVATE_KEY"
+enabled = true
+boards = ["primary"]
+# 0 means unlimited logical sessions.
+max_sessions = 2
+max_lanes = 2
+
+# Migration-only form for an old user whose private key is unavailable:
+# [[users]]
+# tag = "legacy"
+# name = "Legacy user"
+# public_key = "base64:REPLACE_WITH_32_BYTE_USER_PUBLIC_KEY"
+# enabled = true
+# boards = ["primary"]
+# max_sessions = 1
+# max_lanes = 1

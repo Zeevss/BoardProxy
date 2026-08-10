@@ -9,6 +9,11 @@ build/
 .codex/
 
 .env
+# Server desired state contains private keys. Commit only the redacted example.
+/config.toml
+/core/config.toml
+/client.toml
+/core/client.toml
 
 *.log
 

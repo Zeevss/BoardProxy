@@ -43,7 +43,7 @@ func TestDisconnectUserClosesLiveSessions(t *testing.T) {
 	}
 }
 
-func (s *Server) userSessionCount(userID int64) int {
+func (s *Server) userSessionCount(userID string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.byUser[userID])
@@ -61,7 +61,7 @@ func waitCond(cond func() bool) error {
 }
 
 // dialProvisioned подключает клиента и возвращает сессию вместе с его user_id.
-func (h *testHub) dialProvisioned(t *testing.T) (*mux.Session, int64) {
+func (h *testHub) dialProvisioned(t *testing.T) (*mux.Session, string) {
 	t.Helper()
 	client, err := crypto.Generate()
 	if err != nil {

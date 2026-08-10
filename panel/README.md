@@ -1,69 +1,28 @@
-# BoardProxy multi-node panel
+# BoardProxy panel (legacy)
 
-Панель — самостоятельный control-plane, не привязанный к одному процессу core.
-Она состоит из React UI и небольшого Go gateway. Gateway хранит список нод и
-их access keys в `/data/nodes.json` с правами `0600`; ключи никогда не уходят в
-браузер. Все прежние экраны (`Clients`, `Boards`, `Statistics`, `Logs`,
-`Maintenance`) работают относительно выбранной ноды.
+This directory contains the previous React/Go multi-node panel. It targeted the
+stateful core HTTP API (user/board CRUD, restart, SQLite backup and revocable
+access-key storage). That API was deliberately removed from stateless core.
 
-## Подключение ноды
+The panel is therefore no longer part of the root Compose deployment and must
+not be pointed at a current core instance: most screens and mutations are
+incompatible even if the UI itself builds.
 
-На каждой ноде management API должен слушать TCP-порт:
+The intended replacement is a separate control plane that:
 
-```sh
-./bproxy serve --web-api=0.0.0.0:8080
-```
+- owns durable desired-state files/secrets, audit history and operator auth;
+- generates a complete versioned TOML snapshot per node;
+- applies immediate changes through `core/api/control/v1/control.proto`;
+- uses optimistic runtime revisions and reconciles drift;
+- scrapes ephemeral `GetStats` into an external metrics store;
+- reaches core through a local/sidecar Unix socket or an authenticated mTLS
+  transport, instead of reintroducing credentials and a database into core.
 
-Сгенерируйте отдельный ключ для панели:
-
-```sh
-./bproxy serve keygen panel
-./bproxy serve keys
-./bproxy serve revoke <id>
-```
-
-Эти команды подключаются к уже запущенному `serve` через management socket
-(`--socket`/`BPROXY_SOCKET`); самостоятельно БД они не открывают. `keygen`
-показывает секрет один раз. В БД ноды хранится только SHA-256 digest; ключей
-может быть несколько, отзыв применяется к следующему HTTP-запросу без
-перезапуска core. В UI откройте «Ноды», укажите название, IP/hostname, порт и
-полученный `bpa_…` ключ.
-
-## Docker Compose
-
-```sh
-cp .env.example .env
-docker compose up -d --build
-docker compose exec core bproxy serve keygen panel
-```
-
-Панель доступна на `PANEL_PORT`. Для ноды из того же compose используйте host
-`core`, port `8080`. Порт `CORE_API_PORT` по умолчанию публикуется только на
-`127.0.0.1`; для удалённой панели откройте management API через firewall и TLS
-reverse proxy, затем отметьте HTTPS при добавлении ноды.
-
-Проверить ключ напрямую на хосте ноды можно так:
-
-```sh
-read -rsp 'Core access key: ' BPROXY_CORE_KEY; echo
-curl -i -H "Authorization: Bearer ${BPROXY_CORE_KEY}" http://127.0.0.1:8081/stats
-unset BPROXY_CORE_KEY
-```
-
-Ответ `200 OK` подтверждает доступ. `401 Unauthorized` означает, что ключ
-создан в другой БД, отозван либо core ещё запущен со старой версией без
-поддержки отзываемых access keys.
-
-Данные панели находятся в отдельном томе `panel-data`, данные ноды — в
-`bproxy-data`. Контейнеры можно запускать и обновлять независимо.
-
-## Разработка
+The legacy sources are kept temporarily as UI/reference material. They still
+build independently with:
 
 ```sh
 npm install
 npm run build
 cd gateway && go test ./...
 ```
-
-Vite UI обращается к gateway по same-origin `/api`. `/api/nodes` управляет
-реестром, а `/api/node/*` проксируется в выбранный core с bearer-ключом.

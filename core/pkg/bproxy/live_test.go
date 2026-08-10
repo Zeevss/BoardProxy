@@ -2,6 +2,7 @@ package bproxy
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -9,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,14 +18,14 @@ import (
 
 	"bproxy-core/internal/app"
 	"bproxy-core/internal/boardtest"
-	"bproxy-core/internal/config"
-	"bproxy-core/internal/mgmt"
+	"bproxy-core/internal/crypto"
+	"bproxy-core/internal/keylink"
+	"bproxy-core/internal/serverconfig"
 )
 
-// TestLiveProvisionAndConnect проверяет весь путь провизионирования: serve
-// поднимает управляющий сокет, `clients add` через него заводит пользователя и
-// возвращает keylink, и этим keylink клиент подключается и гонит трафик сквозь
-// доску. Закрывает разрыв «пользователя нечем завести».
+// TestLiveProvisionAndConnect checks the complete config-driven path: a runtime
+// starts with a pre-generated user identity, reconstructs its keylink and uses
+// it to move traffic through the board.
 func TestLiveProvisionAndConnect(t *testing.T) {
 	hash := boardtest.LiveHash(t)
 	wantBody := strings.Repeat("BOARDPROXY-V4-OFFSET-", 1<<16)
@@ -38,48 +38,16 @@ func TestLiveProvisionAndConnect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	sockPath := filepath.Join(t.TempDir(), "mgmt.sock")
-
-	srvCfg := config.Default()
-	srvCfg.Board.Hash = hash
-	srvCfg.LogLevel = "warn"
-	srvCfg.Store.Path = filepath.Join(t.TempDir(), "bproxy.db")
-	srvCfg.Server.KeyPath = filepath.Join(t.TempDir(), "bproxy.key")
-	srvCfg.Server.Socket = sockPath
-	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	go func() { _ = app.RunServer(ctx, srvCfg, quiet, nil) }()
-
-	// Ждём, пока управляющий сокет начнёт отвечать.
-	mc := mgmt.NewClient(sockPath)
-	if err := waitMgmt(mc, 30*time.Second); err != nil {
-		t.Fatalf("mgmt socket: %v", err)
-	}
-
-	// Провизионируем клиента через запущенный сервер.
-	resp, err := mc.AddClient(ctx, "smoke")
-	if err != nil {
-		t.Fatalf("AddClient: %v", err)
-	}
+	link := startLiveServer(t, ctx, hash, "smoke")
 
 	// Подключаемся выданным keylink.
 	listen := freeAddr(t)
-	c := New(Config{Keylink: resp.Keylink, Listen: listen, LogLevel: "warn"})
+	c := New(Config{Keylink: link, Listen: listen, LogLevel: "warn"})
 	go func() { _ = c.Run(ctx) }()
 	defer c.Stop()
 
 	if err := waitDial(listen, 30*time.Second); err != nil {
 		t.Fatalf("client proxy never came up: %v", err)
-	}
-	laneDeadline := time.Now().Add(15 * time.Second)
-	for {
-		connections, err := mc.GetClientConnections(ctx, resp.ID)
-		if err == nil && len(connections) == 1 && len(connections[0].Lanes) == 2 {
-			break
-		}
-		if time.Now().After(laneDeadline) {
-			t.Fatalf("client did not establish one two-lane bundle: connections=%+v err=%v", connections, err)
-		}
-		time.Sleep(200 * time.Millisecond)
 	}
 	body, err := socks5HTTPGet(listen, target.Listener.Addr().String())
 	if err != nil {
@@ -88,33 +56,7 @@ func TestLiveProvisionAndConnect(t *testing.T) {
 	if body != wantBody {
 		t.Fatalf("unexpected body length: got=%d want=%d", len(body), len(wantBody))
 	}
-	c.Stop()
-	releaseDeadline := time.Now().Add(15 * time.Second)
-	for {
-		connections, err := mc.GetClientConnections(ctx, resp.ID)
-		if err == nil && len(connections) == 0 {
-			break
-		}
-		if time.Now().After(releaseDeadline) {
-			t.Fatalf("two-lane bundle was not released: connections=%+v err=%v", connections, err)
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	t.Logf("provisioned client #%d and tunneled through the board", resp.ID)
-}
-
-func waitMgmt(c *mgmt.Client, d time.Duration) error {
-	deadline := time.Now().Add(d)
-	for time.Now().Before(deadline) {
-		cctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-		_, err := c.ListClients(cctx)
-		cancel()
-		if err == nil {
-			return nil
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	return fmt.Errorf("management socket not ready")
+	t.Log("config-provisioned client tunneled through the board")
 }
 
 // TestLiveClientMetrics поднимает сервер на живой доске, гоняет запрос через
@@ -131,31 +73,11 @@ func TestLiveClientMetrics(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	// Сервер: ключ эфемерный, поэтому клиента заводим через управляющий сокет.
-	sockPath := filepath.Join(t.TempDir(), "mgmt.sock")
-	srvCfg := config.Default()
-	srvCfg.Board.Hash = hash
-	srvCfg.LogLevel = "warn"
-	srvCfg.Store.Path = filepath.Join(t.TempDir(), "bproxy.db")
-	srvCfg.Server.KeyPath = filepath.Join(t.TempDir(), "bproxy.key")
-	srvCfg.Server.Socket = sockPath
-	quietLog := slog.New(slog.NewTextHandler(io.Discard, nil))
-	go func() { _ = app.RunServer(ctx, srvCfg, quietLog, nil) }()
-
-	mc := mgmt.NewClient(sockPath)
-	if err := waitMgmt(mc, 30*time.Second); err != nil {
-		t.Fatalf("mgmt socket: %v", err)
-	}
-	// Дадим серверу присоединиться к доске перед rendezvous клиента.
-	time.Sleep(4 * time.Second)
-	resp, err := mc.AddClient(ctx, "pkg-metrics")
-	if err != nil {
-		t.Fatalf("AddClient: %v", err)
-	}
+	link := startLiveServer(t, ctx, hash, "pkg-metrics")
 
 	// Клиент через pkg.
 	listen := freeAddr(t)
-	c := New(Config{Keylink: resp.Keylink, Listen: listen, Board: hash, LogLevel: "warn"})
+	c := New(Config{Keylink: link, Listen: listen, Board: hash, LogLevel: "warn"})
 
 	var mu sync.Mutex
 	var lastMetrics Metrics
@@ -227,27 +149,10 @@ func TestLiveUDPRoundTrip(t *testing.T) {
 		}
 	}()
 
-	sockPath := filepath.Join(t.TempDir(), "mgmt.sock")
-	srvCfg := config.Default()
-	srvCfg.Board.Hash = hash
-	srvCfg.Store.Path = filepath.Join(t.TempDir(), "bproxy.db")
-	srvCfg.Server.KeyPath = filepath.Join(t.TempDir(), "bproxy.key")
-	srvCfg.Server.Socket = sockPath
-	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	go func() { _ = app.RunServer(ctx, srvCfg, quiet, nil) }()
-
-	mc := mgmt.NewClient(sockPath)
-	if err := waitMgmt(mc, 30*time.Second); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(4 * time.Second)
-	provisioned, err := mc.AddClient(ctx, "udp-live")
-	if err != nil {
-		t.Fatal(err)
-	}
+	link := startLiveServer(t, ctx, hash, "udp-live")
 
 	listen := freeAddr(t)
-	client := New(Config{Keylink: provisioned.Keylink, Listen: listen, EnableUDP: true})
+	client := New(Config{Keylink: link, Listen: listen, EnableUDP: true})
 	go func() { _ = client.Run(ctx) }()
 	defer client.Stop()
 	if err := waitDial(listen, 30*time.Second); err != nil {
@@ -262,6 +167,33 @@ func TestLiveUDPRoundTrip(t *testing.T) {
 	if string(got) != string(payload) {
 		t.Fatalf("UDP payload = %q, want %q", got, payload)
 	}
+}
+
+func startLiveServer(t *testing.T, ctx context.Context, hash, tag string) string {
+	t.Helper()
+	serverKP, err := crypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientKP, err := crypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := func(raw []byte) string { return "base64:" + base64.StdEncoding.EncodeToString(raw) }
+	cfg := serverconfig.Defaults()
+	cfg.Server.PrivateKey = enc(serverKP.Private())
+	cfg.Server.AllowPrivateEgress = true
+	cfg.Management.GRPCListen = "unix://" + t.TempDir() + "/control.sock"
+	cfg.Boards = []serverconfig.Board{{Tag: "live", Name: "Live", Hash: hash, MaxLanes: 8}}
+	cfg.Users = []serverconfig.User{{Tag: tag, Name: tag, PrivateKey: enc(clientKP.Private()), Boards: []string{"live"}, MaxSessions: 4, MaxLanes: 8}}
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	go func() { _ = app.RunServer(ctx, cfg, "stdin:", quiet, nil) }()
+	time.Sleep(4 * time.Second)
+	link, err := keylink.Build(clientKP.Private(), serverKP.Public(), []string{hash}, tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return link
 }
 
 func freeAddr(t *testing.T) string {

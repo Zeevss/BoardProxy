@@ -86,19 +86,20 @@ func CreateClient(configJSON string, listener Listener, protector SocketProtecto
 
 	log := slog.New(&callbackHandler{listener: listener, minLevel: parseLogLevel(cfg.LogLevel)})
 	core := bproxy.New(bproxy.Config{
-		Keylink:     cfg.Keylink,
-		Listen:      cfg.Listen,
-		Board:       cfg.Board,
-		APIBase:     cfg.APIBase,
-		HubPage:     cfg.HubPage,
-		LogLevel:    cfg.LogLevel,
-		Logger:      log,
-		BypassList:  cfg.Bypass,
-		LocalDNS:    cfg.LocalDNS,
-		Protector:   protector,
-		EnableUDP:   cfg.EnableUDP,
-		MaxLanes:    cfg.MaxLanes,
-		SystemProxy: false, // Android routing is owned by VpnService.
+		Keylink:      cfg.Keylink,
+		Listen:       cfg.Listen,
+		Board:        cfg.Board,
+		APIBase:      cfg.APIBase,
+		HubPage:      cfg.HubPage,
+		LogLevel:     cfg.LogLevel,
+		Logger:       log,
+		BypassList:   cfg.Bypass,
+		LocalDNS:     cfg.LocalDNS,
+		Protector:    protector,
+		EnableUDP:    cfg.EnableUDP,
+		MaxLanes:     cfg.MaxLanes,
+		RetryInitial: true,  // VpnService is supervised and may start before connectivity returns.
+		SystemProxy:  false, // Android routing is owned by VpnService.
 	})
 	core.OnStatus(func(status bproxy.Status, err error) {
 		if listener == nil {

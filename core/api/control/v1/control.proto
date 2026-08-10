@@ -1,0 +1,205 @@
+syntax = "proto3";
+
+package bproxy.control.v1;
+
+option go_package = "bproxy-core/api/control/v1;controlv1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+service ControlService {
+  rpc GetRuntime(google.protobuf.Empty) returns (RuntimeInfo);
+  rpc Reload(RevisionRequest) returns (MutationResult);
+
+  // Atomically replaces the complete runtime user/board desired-state slice.
+  // Server identity, transport and listener settings remain file-owned.
+  rpc ApplySnapshot(ApplySnapshotRequest) returns (MutationResult);
+
+  rpc ListUsers(google.protobuf.Empty) returns (ListUsersResponse);
+  rpc ReplaceUser(ReplaceUserRequest) returns (MutationResult);
+  rpc SetUserEnabled(SetEnabledRequest) returns (MutationResult);
+  rpc RemoveUser(ResourceRequest) returns (MutationResult);
+  rpc GetKeylink(ResourceRequest) returns (KeylinkResponse);
+
+  rpc ListBoards(google.protobuf.Empty) returns (ListBoardsResponse);
+  rpc ReplaceBoard(ReplaceBoardRequest) returns (MutationResult);
+  rpc SetBoardEnabled(SetEnabledRequest) returns (MutationResult);
+  rpc RemoveBoard(ResourceRequest) returns (MutationResult);
+
+  rpc GetStats(google.protobuf.Empty) returns (RuntimeStats);
+}
+
+message RuntimeInfo {
+  uint64 revision = 1;
+  string config_source = 2;
+  string server_public_key = 3;
+}
+
+message RevisionRequest {
+  uint64 expected_revision = 1;
+}
+
+message ResourceRequest {
+  uint64 expected_revision = 1;
+  string tag = 2;
+}
+
+message MutationResult {
+  uint64 revision = 1;
+}
+
+message SetEnabledRequest {
+  uint64 expected_revision = 1;
+  string tag = 2;
+  bool enabled = 3;
+}
+
+message UserSpec {
+  string tag = 1;
+  string name = 2;
+  string private_key = 3;
+  string public_key = 4;
+  optional bool enabled = 5;
+  repeated string boards = 6;
+  int32 max_sessions = 7;
+  int32 max_lanes = 8;
+}
+
+message ReplaceUserRequest {
+  uint64 expected_revision = 1;
+  UserSpec user = 2;
+}
+
+message ApplySnapshotRequest {
+  uint64 expected_revision = 1;
+  repeated UserSpec users = 2;
+  repeated BoardSpec boards = 3;
+}
+
+message UserInfo {
+  string tag = 1;
+  string name = 2;
+  string public_key = 3;
+  bool enabled = 4;
+  repeated string boards = 5;
+  int32 max_sessions = 6;
+  int32 max_lanes = 7;
+  int32 active_sessions = 8;
+  uint64 rx_bytes_since_start = 9;
+  uint64 tx_bytes_since_start = 10;
+  google.protobuf.Timestamp last_seen_since_start = 11;
+}
+
+message ListUsersResponse {
+  uint64 revision = 1;
+  repeated UserInfo users = 2;
+}
+
+message KeylinkResponse {
+  string keylink = 1;
+}
+
+message BoardSpec {
+  string tag = 1;
+  string name = 2;
+  string hash = 3;
+  string hub_slide = 4;
+  string api_base = 5;
+  string guest_name = 6;
+  optional bool enabled = 7;
+  int32 max_lanes = 8;
+}
+
+message ReplaceBoardRequest {
+  uint64 expected_revision = 1;
+  BoardSpec board = 2;
+}
+
+message BoardInfo {
+  BoardSpec config = 1;
+  string state = 2;
+  string error = 3;
+}
+
+message ListBoardsResponse {
+  uint64 revision = 1;
+  repeated BoardInfo boards = 2;
+}
+
+message RuntimeStats {
+  google.protobuf.Timestamp started_at = 1;
+  uint64 revision = 2;
+  int32 users_configured = 3;
+  int32 users_enabled = 4;
+  int32 users_online = 5;
+  int32 boards_configured = 6;
+  int32 boards_enabled = 7;
+  int32 boards_running = 8;
+  int32 active_connections = 9;
+  int32 active_lanes = 10;
+  int32 active_streams = 11;
+  uint64 rx_bytes_since_start = 12;
+  uint64 tx_bytes_since_start = 13;
+  repeated UserRuntimeStats users = 14;
+  repeated BoardRuntimeStats boards = 15;
+  NetworkStats network = 16;
+  TransportStats transport = 17;
+}
+
+message UserRuntimeStats {
+  string tag = 1;
+  string name = 2;
+  bool enabled = 3;
+  bool online = 4;
+  google.protobuf.Timestamp last_seen_since_start = 5;
+  int32 connections = 6;
+  int32 lanes = 7;
+  int32 streams = 8;
+  uint64 rx_bytes_since_start = 9;
+  uint64 tx_bytes_since_start = 10;
+  int32 max_sessions = 11;
+  int32 max_lanes = 12;
+}
+
+message BoardRuntimeStats {
+  string tag = 1;
+  string name = 2;
+  string hash = 3;
+  bool enabled = 4;
+  string state = 5;
+  string error = 6;
+  int32 clients = 7;
+  int32 free_pages = 8;
+  uint64 rx_bytes = 9;
+  uint64 tx_bytes = 10;
+  uint64 page_cleanup_runs = 11;
+  uint64 page_cleanup_deleted = 12;
+  uint64 page_cleanup_failures = 13;
+  uint64 page_cleanup_quarantined = 14;
+}
+
+message NetworkStats {
+  bool available = 1;
+  string scope = 2;
+  repeated string interfaces = 3;
+  google.protobuf.Timestamp sampled_at = 4;
+  uint64 rx_bytes_since_start = 5;
+  uint64 tx_bytes_since_start = 6;
+  double rx_bytes_per_second = 7;
+  double tx_bytes_per_second = 8;
+}
+
+message TransportStats {
+  uint64 disconnects_total = 1;
+  uint64 reconnects_total = 2;
+  uint64 reconnect_attempts_failed = 3;
+  uint64 circuit_open_total = 4;
+  uint64 snapshot_objects_total = 5;
+  uint64 snapshot_bytes_total = 6;
+  int32 reconnects_last_minute = 7;
+  uint64 snapshot_bytes_last_minute = 8;
+  google.protobuf.Timestamp last_disconnect_at = 9;
+  string last_disconnect_reason = 10;
+  google.protobuf.Timestamp last_reconnect_at = 11;
+  int64 last_downtime_ms = 12;
+}

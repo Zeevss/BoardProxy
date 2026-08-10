@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -9,14 +10,15 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 
 	"bproxy-core/internal/boardtest"
-	"bproxy-core/internal/config"
-	"bproxy-core/internal/mgmt"
+	"bproxy-core/internal/crypto"
+	"bproxy-core/internal/keylink"
+	"bproxy-core/internal/serverconfig"
+	"bproxy-core/pkg/bproxy"
 )
 
 // TestLiveEndToEnd runs the whole pipeline over a real board: a server (hub +
@@ -37,44 +39,45 @@ func TestLiveEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	// Ключ сервера эфемерный (генерируется в RunServer), поэтому keylink клиента
-	// нельзя собрать заранее — провизионируем клиента через управляющий сокет
-	// уже запущенного сервера и берём keylink из его ответа.
-	socket := filepath.Join(t.TempDir(), "mgmt.sock")
+	serverKP, err := crypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientKP, err := crypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := func(raw []byte) string { return "base64:" + base64.StdEncoding.EncodeToString(raw) }
+	serverCfg := serverconfig.Defaults()
+	serverCfg.Server.PrivateKey = enc(serverKP.Private())
+	serverCfg.Server.AllowPrivateEgress = true
+	serverCfg.Management.GRPCListen = "unix://" + t.TempDir() + "/control.sock"
+	serverCfg.Boards = []serverconfig.Board{{Tag: "live", Name: "Live", Hash: hash, MaxLanes: 8}}
+	serverCfg.Users = []serverconfig.User{{Tag: "e2e", Name: "e2e-client", PrivateKey: enc(clientKP.Private()), Boards: []string{"live"}, MaxSessions: 4, MaxLanes: 8}}
 
-	cfg := config.Default()
-	cfg.Board.Hash = hash
-	cfg.LogLevel = "warn"
-	cfg.Client.Listen = freeAddr(t)
-	cfg.Store.Path = filepath.Join(t.TempDir(), "bproxy.db")
-	cfg.Server.KeyPath = filepath.Join(t.TempDir(), "bproxy.key")
-	cfg.Server.Socket = socket
+	cfg := bproxy.Config{LogLevel: "warn", Listen: freeAddr(t), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	cfg.Keylink, err = keylink.Build(clientKP.Private(), serverKP.Public(), []string{hash}, "e2e-client")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	srvErr := make(chan error, 1)
-	go func() { srvErr <- RunServer(ctx, cfg, log, nil) }()
+	go func() { srvErr <- RunServer(ctx, serverCfg, "stdin:", log, nil) }()
 
 	// Give the server time to join the board and subscribe the hub before the
 	// client starts rendezvous.
 	time.Sleep(4 * time.Second)
 
-	// Провизионируем клиента через сокет; keylink несёт публичный ключ этого
-	// запуска сервера и обслуживаемую доску.
-	resp, err := mgmt.NewClient(socket).AddClient(ctx, "e2e-client")
-	if err != nil {
-		t.Fatalf("provision client: %v (srv=%v)", err, drain(srvErr))
-	}
-	cfg.Client.Keylink = resp.Keylink
-
 	cliErr := make(chan error, 1)
-	go func() { cliErr <- RunClient(ctx, cfg, log) }()
+	go func() { cliErr <- bproxy.New(cfg).Run(ctx) }()
 
-	if err := waitDial(cfg.Client.Listen, 30*time.Second); err != nil {
+	if err := waitDial(cfg.Listen, 30*time.Second); err != nil {
 		t.Fatalf("client proxy never came up: %v (srv=%v cli=%v)", err, drain(srvErr), drain(cliErr))
 	}
 
-	body, err := socks5HTTPGet(cfg.Client.Listen, targetAddr, "/")
+	body, err := socks5HTTPGet(cfg.Listen, targetAddr, "/")
 	if err != nil {
 		t.Fatalf("request through board proxy failed: %v", err)
 	}

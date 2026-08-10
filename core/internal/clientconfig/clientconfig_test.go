@@ -26,10 +26,13 @@ log = "debug"
 local_dns = true
 system_proxy = true
 enable_udp = true
+retry_initial_connection = true
 max_lanes = 6
 bypass = ["\\.local$", "^10\\."]
 keylink = "bproxy://abc#label"
 board = "boardhash"
+api_base = "https://example.test/api"
+hub_page = "hub-slide"
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -41,13 +44,13 @@ board = "boardhash"
 	if cfg.Listen != "127.0.0.1:9999" || cfg.LogLevel != "debug" {
 		t.Errorf("listen/log не смапились: %+v", cfg)
 	}
-	if !cfg.LocalDNS || !cfg.SystemProxy || !cfg.EnableUDP {
+	if !cfg.LocalDNS || !cfg.SystemProxy || !cfg.EnableUDP || !cfg.RetryInitial {
 		t.Errorf("local_dns/system_proxy/enable_udp не смапились: %+v", cfg)
 	}
 	if cfg.MaxLanes != 6 {
 		t.Errorf("max_lanes = %d", cfg.MaxLanes)
 	}
-	if len(cfg.BypassList) != 2 || cfg.Board != "boardhash" {
+	if len(cfg.BypassList) != 2 || cfg.Board != "boardhash" || cfg.APIBase != "https://example.test/api" || cfg.HubPage != "hub-slide" {
 		t.Errorf("bypass/board не смапились: %+v", cfg)
 	}
 }
@@ -118,5 +121,25 @@ bypass = ["a", "b", "c"]
 	}
 	if len(got) != 3 {
 		t.Fatalf("ReadBypass = %v, хочу 3 паттерна", got)
+	}
+}
+
+func TestLoadRejectsUnknownField(t *testing.T) {
+	path := writeTOML(t, `
+keylink = "bproxy://abc"
+max_lane = 4
+`)
+	if _, err := Load(path); err == nil {
+		t.Fatal("unknown field must be rejected")
+	}
+}
+
+func TestLoadRejectsInvalidMaxLanes(t *testing.T) {
+	path := writeTOML(t, `
+keylink = "bproxy://abc"
+max_lanes = 33
+`)
+	if _, err := Load(path); err == nil {
+		t.Fatal("max_lanes above protocol limit must be rejected")
 	}
 }

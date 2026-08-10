@@ -18,28 +18,9 @@ import (
 	"bproxy-core/internal/link"
 	"bproxy-core/internal/mux"
 	"bproxy-core/internal/proto"
-	"bproxy-core/internal/store"
 )
 
 type memDialer struct{ b *memory.Board }
-
-func TestPerUserSessionClaimsIncludeLiveAndInFlight(t *testing.T) {
-	s := &Server{
-		cfg:        ServerConfig{MaxSessionsPerUser: 2},
-		byUser:     map[int64]map[*mux.Session]bool{7: {&mux.Session{}: true}},
-		userClaims: make(map[int64]int),
-	}
-	if !s.claimUserSession(7) {
-		t.Fatal("first in-flight session should fit the remaining slot")
-	}
-	if s.claimUserSession(7) {
-		t.Fatal("live plus in-flight sessions exceeded the per-user limit")
-	}
-	s.releaseUserSessionClaim(7)
-	if !s.claimUserSession(7) {
-		t.Fatal("released claim did not free the slot")
-	}
-}
 
 func (d memDialer) Join(context.Context) (board.Session, error) {
 	return d.b.NewSession(board.NewID()), nil
@@ -69,51 +50,59 @@ func (d *recordingDialer) session(i int) *memory.Session {
 // публичному ключу заранее «предоставленных» пользователей.
 type fakeUsers struct {
 	mu      sync.Mutex
-	next    int64
-	byKey   map[string]store.User
-	traffic map[int64][2]uint64 // id -> [rx, tx], для проверки AddUserTraffic
+	next    int
+	byKey   map[string]User
+	active  map[string]int
+	traffic map[string][2]uint64
 }
 
 func newFakeUsers() *fakeUsers {
-	return &fakeUsers{byKey: make(map[string]store.User), traffic: make(map[int64][2]uint64)}
+	return &fakeUsers{byKey: make(map[string]User), active: make(map[string]int), traffic: make(map[string][2]uint64)}
 }
 
 func (f *fakeUsers) provision(pub []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.next++
-	f.byKey[string(pub)] = store.User{ID: f.next, PublicKey: pub, Name: "test", Status: store.UserActive}
+	f.byKey[string(pub)] = User{ID: fmt.Sprintf("user-%d", f.next), Name: "test", MaxSessions: 4, MaxLanes: 8}
 }
 
-func (f *fakeUsers) idOf(pub []byte) int64 {
+func (f *fakeUsers) idOf(pub []byte) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.byKey[string(pub)].ID
 }
 
-func (f *fakeUsers) UserByPublicKey(_ context.Context, pub []byte) (store.User, error) {
+func (f *fakeUsers) Authorize(_ context.Context, pub []byte, _ string) (User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	u, ok := f.byKey[string(pub)]
 	if !ok {
-		return store.User{}, store.ErrNotFound
+		return User{}, errors.New("not found")
 	}
 	return u, nil
 }
 
-func (f *fakeUsers) AddUserTraffic(_ context.Context, id int64, rx, tx uint64) error {
+func (f *fakeUsers) AcquireSession(id string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.active[id]++
+	return true
+}
+
+func (f *fakeUsers) ReleaseSession(id string, rx, tx uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.active[id] > 0 {
+		f.active[id]--
+	}
 	t := f.traffic[id]
 	t[0] += rx
 	t[1] += tx
 	f.traffic[id] = t
-	return nil
 }
 
-func (f *fakeUsers) TouchUser(_ context.Context, _ int64) error { return nil }
-
-func (f *fakeUsers) trafficOf(id int64) (rx, tx uint64) {
+func (f *fakeUsers) trafficOf(id string) (rx, tx uint64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	t := f.traffic[id]
@@ -481,34 +470,34 @@ func TestClaimJoinValidatesOwnerTokenAndLaneLimit(t *testing.T) {
 	s := &Server{
 		bundles: map[bond.BundleID]*liveBundle{
 			id: {
-				userID: 7,
-				epoch:  bond.FirstEpoch,
-				token:  token,
-				lanes:  map[bond.LaneID]*liveLane{1: &liveLane{}},
-				nextID: 2,
+				userID:   "user-7",
+				maxLanes: 4,
+				epoch:    bond.FirstEpoch,
+				token:    token,
+				lanes:    map[bond.LaneID]*liveLane{1: {}},
+				nextID:   2,
 			},
 		},
 		joinClaims: make(map[bond.BundleID]bool),
-		maxLanes:   4,
 	}
 	req := bundleRequest{id: id, epoch: bond.FirstEpoch, token: token}
-	if _, laneID, ok := s.claimJoin(7, req); !ok || laneID != 2 {
+	if _, laneID, ok := s.claimJoin("user-7", req); !ok || laneID != 2 {
 		t.Fatalf("valid join = lane %d, ok %v", laneID, ok)
 	}
 	s.releaseJoinClaim(id)
 
 	bad := req
 	bad.token[0] ^= 0xff
-	if _, _, ok := s.claimJoin(7, bad); ok {
+	if _, _, ok := s.claimJoin("user-7", bad); ok {
 		t.Fatal("join with wrong token accepted")
 	}
-	if _, _, ok := s.claimJoin(8, req); ok {
+	if _, _, ok := s.claimJoin("user-8", req); ok {
 		t.Fatal("join from another user accepted")
 	}
-	for laneID := bond.LaneID(2); laneID <= bond.LaneID(s.maxLanes); laneID++ {
+	for laneID := bond.LaneID(2); laneID <= bond.LaneID(s.bundles[id].maxLanes); laneID++ {
 		s.bundles[id].lanes[laneID] = &liveLane{}
 	}
-	if _, _, ok := s.claimJoin(7, req); ok {
+	if _, _, ok := s.claimJoin("user-7", req); ok {
 		t.Fatal("lane exceeded adaptive bundle limit")
 	}
 }
@@ -571,7 +560,7 @@ func TestDialBundleReturnsAuthenticatedIdentity(t *testing.T) {
 	h.srv.mu.Lock()
 	bundle := h.srv.bundles[result.Bundle.ID]
 	h.srv.mu.Unlock()
-	if bundle == nil || bundle.userID == 0 || bundle.epoch != result.Bundle.Epoch ||
+	if bundle == nil || bundle.userID == "" || bundle.epoch != result.Bundle.Epoch ||
 		!bundle.token.Equal(result.Bundle.JoinToken) || bundle.lanes[result.Bundle.LaneID] == nil {
 		t.Fatalf("server bundle state = %+v", bundle)
 	}

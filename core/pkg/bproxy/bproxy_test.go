@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"bproxy-core/internal/config"
 	"bproxy-core/internal/mux"
 	"bproxy-core/internal/proxy"
 )
@@ -31,6 +30,58 @@ func TestRunEmptyKeylinkGoesConnectingThenError(t *testing.T) {
 	}
 }
 
+func TestRunRetriesInitialFailureWhenEnabled(t *testing.T) {
+	c := New(Config{Keylink: "test", RetryInitial: true})
+	conn := newReconnectTestConn()
+	sess := mux.New(conn, mux.Options{Client: true})
+	var dials atomic.Int32
+	c.dial = func(context.Context, Config, *slog.Logger) (*mux.Session, error) {
+		if dials.Add(1) == 1 {
+			return nil, errors.New("temporary board outage")
+		}
+		return sess, nil
+	}
+	c.serve = func(ctx context.Context, _ string, _ proxy.Dialer, _ *slog.Logger, _ proxy.Options) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	connected := make(chan struct{})
+	c.OnStatus(func(status Status, _ error) {
+		if status == StatusConnected {
+			select {
+			case <-connected:
+			default:
+				close(connected)
+			}
+		}
+	})
+	done := make(chan error, 1)
+	go func() { done <- c.Run(context.Background()) }()
+	select {
+	case <-connected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("client did not recover from initial connection failure")
+	}
+	c.Stop()
+	if err := <-done; err != nil {
+		t.Fatalf("Run after recovery and Stop: %v", err)
+	}
+	if got := dials.Load(); got != 2 {
+		t.Fatalf("dial attempts = %d, want 2", got)
+	}
+}
+
+func TestRunDoesNotRetryPermanentInitialConfigurationError(t *testing.T) {
+	c := New(Config{RetryInitial: true})
+	started := time.Now()
+	if err := c.Run(context.Background()); err == nil {
+		t.Fatal("invalid keylink must remain fatal with initial retry enabled")
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("permanent error was retried for %v", elapsed)
+	}
+}
+
 func TestStopBeforeRunReturnsNil(t *testing.T) {
 	c := New(Config{Keylink: "bproxy://whatever"})
 	c.Stop()
@@ -43,7 +94,7 @@ func TestConcurrentRunRejected(t *testing.T) {
 	c := New(Config{Keylink: "test"})
 	started := make(chan struct{})
 	var once sync.Once
-	c.dial = func(ctx context.Context, _ config.Config, _ *slog.Logger) (*mux.Session, error) {
+	c.dial = func(ctx context.Context, _ Config, _ *slog.Logger) (*mux.Session, error) {
 		once.Do(func() { close(started) })
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -125,7 +176,7 @@ func TestRunReconnectsAfterEstablishedSessionCloses(t *testing.T) {
 
 	var dialMu sync.Mutex
 	dials := 0
-	c.dial = func(context.Context, config.Config, *slog.Logger) (*mux.Session, error) {
+	c.dial = func(context.Context, Config, *slog.Logger) (*mux.Session, error) {
 		dialMu.Lock()
 		defer dialMu.Unlock()
 		dials++

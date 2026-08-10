@@ -8,7 +8,8 @@ package clientconfig
 import (
 	"encoding/base64"
 	"fmt"
-	"os"
+	"sort"
+	"strings"
 
 	"bproxy-core/internal/keylink"
 	"bproxy-core/pkg/bproxy"
@@ -18,17 +19,19 @@ import (
 
 // file — TOML-схема клиентского конфига.
 type file struct {
-	Listen      string   `toml:"listen"`
-	Log         string   `toml:"log"`
-	LocalDNS    bool     `toml:"local_dns"`
-	SystemProxy bool     `toml:"system_proxy"`
-	EnableUDP   bool     `toml:"enable_udp"`
-	MaxLanes    int      `toml:"max_lanes"`
-	Bypass      []string `toml:"bypass"`
-	Keylink     string   `toml:"keylink"`
-	Board       string   `toml:"board"`    // переопределяет доску из keylink
-	APIBase     string   `toml:"api_base"` // REST-точка доски (пусто — дефолт)
-	Keys        *keys    `toml:"keys"`     // альтернатива keylink
+	Listen       string   `toml:"listen"`
+	Log          string   `toml:"log"`
+	LocalDNS     bool     `toml:"local_dns"`
+	SystemProxy  bool     `toml:"system_proxy"`
+	EnableUDP    bool     `toml:"enable_udp"`
+	RetryInitial bool     `toml:"retry_initial_connection"`
+	MaxLanes     int      `toml:"max_lanes"`
+	Bypass       []string `toml:"bypass"`
+	Keylink      string   `toml:"keylink"`
+	Board        string   `toml:"board"`    // переопределяет доску из keylink
+	APIBase      string   `toml:"api_base"` // REST-точка доски (пусто — дефолт)
+	HubPage      string   `toml:"hub_page"` // общий hub-слайд; обычно не задаётся
+	Keys         *keys    `toml:"keys"`     // альтернатива keylink
 }
 
 // keys — явные учётные данные (альтернатива готовой строке keylink). Ключи —
@@ -44,28 +47,44 @@ type keys struct {
 // один источник учётных данных: либо keylink, либо секцию [keys].
 func Load(path string) (bproxy.Config, error) {
 	var f file
-	if _, err := toml.DecodeFile(path, &f); err != nil {
+	metadata, err := toml.DecodeFile(path, &f)
+	if err != nil {
 		return bproxy.Config{}, fmt.Errorf("clientconfig: %w", err)
+	}
+	if err := rejectUnknown(metadata); err != nil {
+		return bproxy.Config{}, err
 	}
 	return f.toConfig()
 }
 
 func (f file) toConfig() (bproxy.Config, error) {
+	if f.Log != "" {
+		switch strings.ToLower(strings.TrimSpace(f.Log)) {
+		case "debug", "info", "warn", "warning", "error":
+		default:
+			return bproxy.Config{}, fmt.Errorf("clientconfig: unsupported log level %q", f.Log)
+		}
+	}
+	if f.MaxLanes < 0 || f.MaxLanes > 32 {
+		return bproxy.Config{}, fmt.Errorf("clientconfig: max_lanes must be between 1 and 32, or 0 for default")
+	}
 	link, err := f.resolveKeylink()
 	if err != nil {
 		return bproxy.Config{}, err
 	}
 	return bproxy.Config{
-		Keylink:     link,
-		Listen:      f.Listen,
-		Board:       f.Board,
-		APIBase:     f.APIBase,
-		LogLevel:    f.Log,
-		BypassList:  f.Bypass,
-		LocalDNS:    f.LocalDNS,
-		SystemProxy: f.SystemProxy,
-		EnableUDP:   f.EnableUDP,
-		MaxLanes:    f.MaxLanes,
+		Keylink:      link,
+		Listen:       f.Listen,
+		Board:        f.Board,
+		APIBase:      f.APIBase,
+		HubPage:      f.HubPage,
+		LogLevel:     f.Log,
+		BypassList:   f.Bypass,
+		LocalDNS:     f.LocalDNS,
+		SystemProxy:  f.SystemProxy,
+		EnableUDP:    f.EnableUDP,
+		RetryInitial: f.RetryInitial,
+		MaxLanes:     f.MaxLanes,
 	}, nil
 }
 
@@ -105,15 +124,25 @@ func (k keys) build() (string, error) {
 // обновления на лету без разбора остального (учётные данные не трогаем).
 func ReadBypass(path string) ([]string, error) {
 	var f file
-	if _, err := toml.DecodeFile(path, &f); err != nil {
+	metadata, err := toml.DecodeFile(path, &f)
+	if err != nil {
 		return nil, fmt.Errorf("clientconfig: %w", err)
+	}
+	if err := rejectUnknown(metadata); err != nil {
+		return nil, err
 	}
 	return f.Bypass, nil
 }
 
-// Exists сообщает, существует ли файл конфига (для CLI: отличить «дали путь» от
-// «путь не задан»).
-func Exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+func rejectUnknown(metadata toml.MetaData) error {
+	undecoded := metadata.Undecoded()
+	if len(undecoded) == 0 {
+		return nil
+	}
+	fields := make([]string, 0, len(undecoded))
+	for _, key := range undecoded {
+		fields = append(fields, key.String())
+	}
+	sort.Strings(fields)
+	return fmt.Errorf("clientconfig: unknown fields: %s", strings.Join(fields, ", "))
 }

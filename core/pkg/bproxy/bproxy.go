@@ -16,8 +16,6 @@ import (
 	"time"
 
 	"bproxy-core/internal/bypass"
-	"bproxy-core/internal/clientcore"
-	"bproxy-core/internal/config"
 	"bproxy-core/internal/keylink"
 	"bproxy-core/internal/mux"
 	"bproxy-core/internal/proxy"
@@ -121,6 +119,10 @@ type Config struct {
 	// MaxLanes is the fallback adaptive limit for protocol v3/v4 servers. V5+
 	// receives the authoritative per-board limit in the encrypted handshake.
 	MaxLanes int
+	// RetryInitial keeps the process alive when the first board rendezvous fails.
+	// This is useful for supervised daemons whose network may appear after boot.
+	// Invalid static configuration fails immediately and is never retried.
+	RetryInitial bool
 }
 
 // StreamInfo — снимок одного проксируемого стрима.
@@ -184,8 +186,8 @@ type Client struct {
 	cancel  context.CancelFunc
 
 	// Внедряемые точки композиции оставлены приватными: production использует
-	// clientcore.Dial/proxy.Serve, тесты жизненного цикла обходятся без сети.
-	dial  func(context.Context, config.Config, *slog.Logger) (*mux.Session, error)
+	// dialClient/proxy.Serve, тесты жизненного цикла обходятся без сети.
+	dial  func(context.Context, Config, *slog.Logger) (*mux.Session, error)
 	serve func(context.Context, string, proxy.Dialer, *slog.Logger, proxy.Options) error
 }
 
@@ -257,7 +259,7 @@ func New(cfg Config) *Client {
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(discard{}, nil))
 	}
-	c := &Client{cfg: cfg, log: log, dial: clientcore.Dial, serve: proxy.Serve}
+	c := &Client{cfg: cfg, log: log, dial: dialClient, serve: proxy.Serve}
 	// bypass.New всегда возвращает ненулевой Matcher (даже при ошибке), поэтому
 	// UpdateBypassList/Match безопасны и до успешной инициализации.
 	c.bypass, c.initErr = bypass.New(cfg.BypassList)
@@ -297,8 +299,9 @@ func (c *Client) Metrics() Metrics {
 // Run подключается и обслуживает прокси, пока ctx не отменён или Stop не вызван.
 // После хотя бы одного успешного подключения потеря mux-сессии (в том числе
 // GOAWAY при остановке сервера) запускает rendezvous заново с backoff.
-// Первичная ошибка подключения по-прежнему возвращается вызывающему сразу: это
-// сохраняет явную диагностику неверного keylink/доски при запуске.
+// Первичная ошибка подключения возвращается сразу, если RetryInitial=false.
+// При RetryInitial=true она повторяется с тем же ограниченным backoff, что и
+// восстановление уже установленной сессии.
 func (c *Client) Run(parentCtx context.Context) error {
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
@@ -361,17 +364,23 @@ func (c *Client) Run(parentCtx context.Context) error {
 			c.setStatus(StatusConnecting, nil)
 		}
 
-		sess, err := c.dial(ctx, c.toInternalConfig(), c.log)
+		sess, err := c.dial(ctx, c.cfg, c.log)
 		if err != nil {
 			if ctx.Err() != nil {
 				c.finishStopping()
 				return nil
 			}
-			if !connectedOnce {
+			var permanent permanentDialError
+			if !connectedOnce && (!c.cfg.RetryInitial || errors.As(err, &permanent)) {
 				c.setStatus(StatusError, err)
 				return err
 			}
-			c.setStatus(StatusReconnecting, err)
+			if connectedOnce {
+				c.setStatus(StatusReconnecting, err)
+			} else {
+				c.log.Warn("initial connection failed; retrying", "err", err, "backoff", backoff)
+				c.setStatus(StatusConnecting, err)
+			}
 			if !waitReconnect(ctx, backoff) {
 				c.finishStopping()
 				return nil
@@ -617,25 +626,6 @@ func (c *Config) listenOrDefault() string {
 		return c.Listen
 	}
 	return "127.0.0.1:1080"
-}
-
-func (c *Client) toInternalConfig() config.Config {
-	cfg := config.Default()
-	if c.cfg.APIBase != "" {
-		cfg.Board.APIBase = c.cfg.APIBase
-	}
-	if c.cfg.LogLevel != "" {
-		cfg.LogLevel = c.cfg.LogLevel
-	}
-	cfg.Board.Hash = c.cfg.Board
-	cfg.Client.Keylink = c.cfg.Keylink
-	cfg.Client.Listen = c.cfg.listenOrDefault()
-	cfg.Client.Protector = c.cfg.Protector
-	if c.cfg.MaxLanes > 0 {
-		cfg.Client.MaxLanes = c.cfg.MaxLanes
-	}
-	cfg.Server.HubPage = c.cfg.HubPage
-	return cfg
 }
 
 // loopbackAddr приводит адрес прослушивания к loopback-хосту для записи в

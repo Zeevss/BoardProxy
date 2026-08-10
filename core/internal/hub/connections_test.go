@@ -49,7 +49,7 @@ func TestUserConnectionsReportsLiveSession(t *testing.T) {
 	}
 
 	// Неизвестный пользователь — пустой список, не ошибка.
-	if got := h.srv.UserConnections(999999); len(got) != 0 {
+	if got := h.srv.UserConnections("missing"); len(got) != 0 {
 		t.Fatalf("UserConnections(неизвестный) = %+v, хочу пусто", got)
 	}
 }

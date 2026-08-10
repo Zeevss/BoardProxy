@@ -1,488 +1,222 @@
-# BoardProxy (core)
+# BoardProxy Core
 
-SOCKS5 TCP/UDP (+HTTP) прокси, **транспортом которого служит сервис онлайн-досок**
-(Yandex Board). Данные передаются не по сети напрямую, а через
-создание/удаление текстовых объектов на странице доски: создание объекта =
-доставка пакета, удаление = подтверждение (ACK).
+BoardProxy Core is a SOCKS5/HTTP proxy whose transport is an online whiteboard.
+The server is now a **stateless runtime**: its complete desired state is loaded
+from a versioned TOML file, while live changes are applied through gRPC. Core
+does not own a database, user catalogue, configuration history or accumulated
+traffic history.
 
-Экспериментальный проект. `curl --socks5 localhost:1080 https://…` проходит
-трафик сквозь доску.
+## Architecture
 
-## Архитектура
+The data plane remains layered and independent from the control plane:
 
-Сетевой стек из чистых слоёв, зависимости идут сверху вниз через интерфейсы, а
-не напрямую между пакетами — поэтому слои тестируются на in-process доске
-(`board/memory`) без сети.
-
+```text
+client proxy -> mux -> bond -> link -> board -> hub -> egress -> target
+                                          ^
+                                          |
+                    immutable policy snapshot + runtime reconciler
+                                          ^
+                                          |
+                                  TOML / gRPC control
 ```
-app → [proxy] → mux stream/datagram → bond → link × 2 → страницы доски → bond → mux → [egress] → target
-      клиент (bproxy connect)            hub раздаёт lane           сервер (bproxy serve)
-```
 
-### Карта модулей
+The important server-side packages are:
 
-Столбец «Зависит от» — прямые импорты `internal/*` (не транзитивные). Пакеты
-без внутренних зависимостей — листья графа, их можно читать/тестировать в
-изоляции.
+| Package | Responsibility |
+|---|---|
+| `internal/serverconfig` | strict, versioned TOML schema, defaults and validation |
+| `internal/control` | atomic user policy snapshot and process-local session counters |
+| `internal/app` | composition root and board/user reconciler |
+| `internal/controlapi` | typed gRPC control adapter |
+| `internal/telemetry` | secret-free, since-start runtime statistics DTOs |
+| `internal/mgmt` | read-only HTTP adapter: health, stats and recent in-memory logs |
+| `internal/hub` | authenticated rendezvous and live sessions; no persistence dependency |
 
-| Пакет | Слой | Ответственность | Зависит от |
-|---|---|---|---|
-| `internal/proto` | протокольный словарь | версия протокола, типы mux-кадров, id системного стрима — общий для клиента и сервера | — |
-| `internal/board` | L0, интерфейс транспорта | `Session`: Subscribe/Put/Delete/Events поверх абстрактной доски | — |
-| `internal/board/yandex/socketio` | L0, драйвер | Engine.IO/Socket.IO клиент поверх `github.com/coder/websocket` | — |
-| `internal/board/yandex` | L0, драйвер | `board.Session` для настоящей Yandex Board поверх `socketio` | `board`, `board/yandex/socketio` |
-| `internal/board/memory` | L0, тестовый дублёр | `board.Session` in-process, без сети — на нём гоняются все не-live тесты | `board` |
-| `internal/codec` | L1, кодек объекта | кадр ↔ текст объекта (base64/Z85 + маркер) | — |
-| `internal/crypto` | L1, конфиденциальность | статические ключи X25519 (`Keypair`) и запечатывающий `codec.Codec`-декоратор (XChaCha20-Poly1305, по объекту) | `codec` |
-| `internal/handshake` | согласование ключа | Noise IK: взаимная аутентификация + направленные ключи трафика (для `crypto.Sealed`) | `crypto` |
-| `internal/keylink` | учётные данные | `bproxy://…`: приватный ключ клиента + публичный ключ сервера + список досок | `crypto` |
-| `internal/store` | порт хранилища | `Store`: предоставленные пользователи и обслуживаемые хабы; реализация `store/sqlite` (modernc.org/sqlite, чистый Go) | — |
-| `internal/relay` | утилита | двунаправленное копирование между двумя half-close потоками (`mux.Stream` ⇄ `net.TCPConn`) | — |
-| `internal/config` | конфигурация | `Config` и дефолты, общие для обоих бинарников | — |
-| `internal/logging` | утилита | обёртка над `log/slog`, единый формат логов | — |
-| `internal/link` | L2, канал страницы | seq/дедуп/ACK-by-delete, rwnd, адаптивный лимит параллелизма (`limiter`) и адаптивный размер батча (`sizer`), pacing, reconcile (в т.ч. на авто-реконнект сессии) | `board`, `codec` |
-| `internal/bond` | объединённый транспорт | связывает две независимые страницы в один логический `mux.Conn`; PacketID даёт dedup/replay без глобального порядка и межканального HOL | `internal/link` |
-| `internal/mux` | L3, мультиплексор | TCP-стримы с StreamOffset/FinalOffset и абсолютным MAX_STREAM_DATA, per-stream reorder; UDP associations с сохранением границ датаграмм | `proto` |
-| `internal/hub` | control-plane | observer на hub-слайде, пул страниц, Noise IK rendezvous `NEW_BUNDLE`/`JOIN_LANE`, один `bond`+`mux` на логическое подключение | `board`, `bond`, `codec`, `crypto`, `handshake`, `link`, `mux`, `store` |
-| `internal/proxy` | L4, фронт клиента | SOCKS5 CONNECT/UDP ASSOCIATE и HTTP CONNECT; TCP relay и локальный UDP relay socket | `mux`, `relay` |
-| `internal/egress` | L5, egress сервера | TCP `net.Dial` + relay; отдельный UDP socket на association с full-cone ответами | `hub`, `mux`, `relay` |
-| `internal/bypass` | утилита клиента | потокобезопасный набор regexp'ов, обновляемый на лету (`Matcher.Update`) — решает, какие цели идут мимо туннеля | — |
-| `internal/sysproxy` | утилита клиента | Set/Unset системного прокси ОС, build-tags: Linux (gsettings), macOS (networksetup), Windows (реестр), прочие — unsupported | — |
-| `internal/netprotect` | утилита клиента | защищённый dialer: вызывает Android `VpnService.protect(fd)` до connect | — |
-| `internal/clientcore` | композиция клиента | собирает две board-сессии → два `link` → один `bond` → один `mux`, с деградацией до одной страницы | `board/yandex`, `config`, `crypto`, `hub`, `keylink`, `link`, `mux` |
-| `internal/clientconfig` | утилита клиента | TOML клиентский конфиг (`BurntSushi/toml`) → `bproxy.Config`; учётка — `keylink` либо `[keys]` | `keylink` |
-| `internal/mgmt` | управляющий слой | HTTP-API (CRUD клиентов/хабов, живые соединения клиента, трафик, рестарт) над unix-сокетом и опционально TCP (`--web-api`); CLI — его HTTP-клиент | `crypto`, `hub`, `keylink`, `store` |
-| `internal/app` | композиционный корень | `RunClient`/`RunServer`: собирает board→link→mux→hub→proxy/egress по `config.Config`, клиентские ключи из keylink, ключ сервера — из файла (генерируется при первом старте), store — файл SQLite | `board`, `board/yandex`, `codec`, `config`, `crypto`, `keylink`, `hub`, `link`, `proxy`, `egress`, `mgmt`, `store/sqlite` |
-| `cmd/bproxy` | единый бинарник | подкоманды `connect`/`serve`/`clients`/`boards`/`restart`: флаги/env → `config.Config` → `app.Run*`/mgmt | `app`, `config`, `logging`, `mgmt`, `pkg/bproxy` |
-| `pkg/mobile` | Android facade | bind-friendly JSON API/callbacks, async lifecycle и socket protector для `gomobile bind` | `pkg/bproxy` |
-| `internal/boardtest` | тестовая утилита | гейтинг live-тестов по `BPROXY_LIVE`/`BPROXY_BOARD`; используется тестами всех слоёв, в граф прод-зависимостей не входит | — |
+The rest of the data plane (`board`, `link`, `bond`, `mux`, `proxy`, `egress`)
+keeps the same narrow interfaces. A board is an independently managed runtime:
+an unavailable board enters `retrying` with bounded exponential backoff without
+stopping healthy boards or the control API.
 
-Ключевой момент связности: `mux` зависит только от `proto`, не от `link` —
-`link.Link` подходит под интерфейс `mux.Conn` (`Send`/`Recv`/`Close`/
-`TargetBatchSize`) структурно, без прямого импорта. Это то, что позволяет
-гонять `mux` на любом дублёре `Conn` в тестах, не поднимая настоящий `link`.
-Аналогично `link`/`hub`/`proxy`/`egress` не знают друг о друге напрямую —
-каждый видит только интерфейс слоя ниже (`board.Session` или `mux.Conn`), а
-всю сборку в конкретный граф зависимостей делает только `internal/app`.
+## Server configuration
 
-Подробности протокола работы с доской — `../yandex-board-api/SPEC.md`.
-
-### Контроль потока и лимит параллельных записей
-
-Каждый отдельный lane (доска поверх WebSocket/TCP) надёжен и упорядочен.
-Bond переигрывает только неподтверждённые PacketID после потери lane, а
-получатель безопасно отбрасывает дубликаты. Реальным узким местом на практике
-оказался не канал, а очередь на
-обработку запросов у бэкенда доски под нагрузкой от одного участника — не сетевая
-перегрузка, а RTT, растущий и спадающий вместе с нашей же нагрузкой. Отсюда:
-
-- **Flow control (два уровня):** окно приёма уровня link (объекты на странице,
-  объявляется через control-канал) и абсолютный per-stream
-  `MAX_STREAM_DATA` — максимальный разрешённый byte offset.
-- **Адаптивный лимит параллельных записей:** gradient-based (в духе Netflix
-  Gradient2, не сетевой AIMD) — сравнивает короткую и длинную сглаженные оценки
-  ACK-RTT и подстраивает лимит пропорционально их отношению, без намеренных
-  просадок и не чаще одного пересчёта за RTT. Плюс pacing: лимит размазывается
-  по RTT, а не уходит бурстом.
-- Эффективный лимит отправки = `min(лимит, rwnd_link)`.
-- **Батчинг ACK:** приём объекта ставит его id в очередь на удаление; воркер,
-  проснувшись на первый id, неблокирующе добирает всё, что уже накопилось (до
-  потолка), и удаляет их одним wire-вызовом вместо одного `Delete` на объект —
-  без искусственной задержки, при отсутствии очереди батч вырождается в один id.
-- **Live sanitation:** страница lane является служебной; объекты, которые не
-  декодируются текущим sealed-кодеком, удаляются как мусор прошлого владельца.
-- **Коалесинг data-кадров:** отправитель (`internal/mux`) объединяет несколько
-  data-кадров (round-robin по стримам) в один board-объект, целясь в
-  адаптивный целевой размер (не статическая константа — см. следующий пункт).
-  Control-кадры (SYN/RESET/MAX_STREAM_DATA) никогда не смешиваются с data-батчем
-  и не ждут его накопления — уходят немедленно, отдельным вызовом.
-- **Адаптивный размер батча (`sizer`, `internal/link/sizer.go`):** оптимальный
-  размер board-объекта — не универсальная константа, а точка на кривой
-  RTT(size), зависящая от текущей сети/загрузки бэкенда. Тот же
-  Gradient2-приём, что у лимитера параллелизма, но сэмплирует не сырой RTT, а
-  RTT, нормированный на размер отправленного объекта (`cost = rtt/size`) —
-  сырой RTT сам по себе сильно зависит от размера, поэтому нечестен как сигнал
-  перегрузки при переменном размере объектов. Растёт мультипликативно на
-  здоровой стоимости, резко (не более чем в ~2 раза за пересчёт) сжимается при
-  устойчивом росте стоимости — быстрая реакция на обрыв пропускной способности
-  оправдана его резким характером (эмпирически: 2x размер → 5x RTT). Лимитер
-  параллелизма (сколько объектов в полёте) при этом не тронут и продолжает
-  работать по сырому RTT — это разные оси (сколько vs какого размера), не одна
-  величина. `Transport.CoalesceTarget`, если задан (>0), — ручной потолок
-  поверх адаптивного значения, по умолчанию 0 = без потолка.
-
-### Graceful shutdown и жизненный цикл стримов
-
-- **Остановка:** `mux.Session.Close` шлёт пиру GOAWAY и дожидается завершения
-  асинхронной записи этого кадра перед разрывом (у доски
-  нет TCP-уровневого EOF, поэтому явный сигнал — единственный способ узнать
-  о завершении заранее, а не по молчанию канала). Сервер при остановке
-  (`SIGTERM`/`SIGINT`) закрывает так каждую клиентскую сессию, а не только
-  нижележащий `link.Link` — иначе GOAWAY клиентам не уходил. Приём
-  соединений/стримов (`proxy.Serve`, `egress.Serve`) дожидается уже принятых
-  до возврата, но не дольше ограниченного тайм-аута — застрявшее на молчащем
-  пире соединение не вешает shutdown навсегда.
-- **Простаивающие стримы:** `hub.Server.IdleTimeout` освобождает целую
-  страницу клиента, если от него перестали приходить события и heartbeat
-  (по умолчанию 90с, три heartbeat-интервала), даже если после аварийного
-  завершения остались открытые стримы; отдельно от
-  этого `Transport.StreamIdleTimeout` резетит один конкретный стрим, если он
-  не видел трафика дольше таймаута, даже пока другие стримы той же страницы
-  активны (например вкладка браузера, которую открыли и забыли). Плюс TCP
-  keepalive на локальных сокетах (`proxy`, `egress`) — отдельный от этого
-  механизм на случай, если реальный TCP-пир перестал отвечать (не просто
-  "тихо", а "не тут").
-
-### Безопасность и учётные данные
-
-- **Рукопожатие и шифрование:** при входе на хаб клиент и сервер проводят
-  взаимно аутентифицированное рукопожатие Noise IK (`internal/handshake`).
-  Клиент знает публичный ключ сервера из keylink; сервер узнаёт клиента по его
-  публичному ключу уже в ходе рукопожатия и сверяет со `store` (пускаются только
-  заранее заведённые пользователи). Первое сообщение едет в HELLO, ответ (с
-  зашифрованным id выданной страницы) — в ASSIGN; отказ единый (DENIED), без
-  указания причины. Дальше весь трафик страницы шифруется `crypto.Sealed`
-  (XChaCha20-Poly1305, независимо по каждому board-объекту — что естественно для
-  модели независимых объектов доски и «просто работает» при reconcile).
-- **keylink** (`bproxy://<base64url(clientPriv‖serverPub)>[@доски][#метка]`) —
-  однострочные учётные данные клиента: его приватный ключ, публичный ключ сервера
-  и опционально список хешей досок. Публичный ключ клиента выводится из
-  приватного и в ссылке не хранится.
-- **Ключ сервера** — X25519-пара, хранится в файле (`--key-file`, по умолчанию
-  `bproxy.key` рядом с исполняемым файлом — намеренно не `/tmp`: ребут или
-  очистка временных файлов иначе тихо сносили бы идентичность сервера). Если
-  файла нет — генерируется при первом старте и
-  сохраняется (права `0600`); если есть — загружается. Клиенты пинят публичную
-  часть через keylink, а приватный ключ клиента нигде на сервере не хранится
-  (только внутри выданного keylink'а) — поэтому стабильность идентичности
-  сервера важна: смени сервер ключ втихую, и все выданные keylink'и стали бы
-  битыми без возможности их перевыпустить для тех же пользователей. Файл
-  ключа можно удалить намеренно, чтобы сменить идентичность и инвалидировать
-  все выданные keylink'и разом.
-
-### Авто-реконнект транспорта
-
-Драйвер доски (`internal/board/yandex`) переподключается при обрыве websocket'а
-**прозрачно** для верхних слоёв: тот же `board.Session` живёт дальше, операции
-(`Put`/`Delete`/`Subscribe`) блокируются на время переподключения и повторяются
-(идемпотентны по id объекта), а не отдают ошибку — иначе `link`, увидев ошибку
-записи, заглушил бы себя. После повторной подписки свежий снапшот страницы
-приходит на `board.Session.Reconnects()`, и `link` тем же reconcile-путём
-освобождает слоты за объекты, заacked во время обрыва, и переигрывает
-пропущенные объекты пира. Так короткий сетевой блип не рвёт in-flight стримы.
-Engine.IO `pingInterval` и `pingTimeout` из handshake образуют read-watchdog:
-если после сна или смены Wi-Fi/мобильной сети старый TCP socket остался
-формально `ESTABLISHED`, но ping больше не приходит, клиент сам закрывает его и
-немедленно запускает тот же reconnect. Ждать системного TCP timeout не нужно.
-Короткоживущие socket-циклы получают отдельный экспоненциальный backoff, который
-не сбрасывается одним успешным dial. Три последовательных `message too big`
-открывают circuit и завершают lane; лимит одного WebSocket-сообщения — 64 MiB.
-Обычный lane пытается восстановить websocket до двух минут. После исчерпания
-этого бюджета terminal-сигнал проходит через `link -> bond -> mux`; потеря
-последнего lane закрывает логическую сессию, и управляемый клиент `pkg/bproxy`
-сообщает статус `reconnecting` и повторяет полный hub-rendezvous с
-экспоненциальным backoff. Управляющая hub-сессия сервера отличается: она
-переподключается без общего дедлайна до штатной остановки сервера, чтобы процесс
-не остался живым с молча умершим listener'ом `HELLO/JOIN_LANE`. Локальный
-SOCKS/HTTP listener живёт дольше отдельных mux-сессий и остаётся привязанным к
-тому же порту; во время reconnect новые подключения получают временную ошибку,
-а после ASSIGN автоматически используют новую сессию. Это позволяет Android
-TUN engine не перезапускать вместе с транспортом.
-Локальная остановка отдельно сообщает `stopping`, затем `disconnected`.
-
-### Наблюдаемость сервера
-
-`GET /stats` разделяет два принципиально разных вида трафика:
-
-- `rx_bytes`/`tx_bytes` — полезные байты proxy payload, накопленные по
-  пользователям (store + активные mux-сессии);
-- `network.*` — raw kernel RX/TX: WebSocket framing, REST, полные snapshots при
-  reconnect, ACK/control и payload вместе. При запуске через штатный
-  `docker-compose.yml` читаются read-only счётчики всего bridge `bproxy0`; при
-  обычном запуске бинарника — default-route интерфейс его network namespace.
-
-Там же `transport` хранит disconnect/reconnect, неудачные попытки, причину
-последнего обрыва, длительность предыдущего socket, downtime и wire-размер
-snapshot после повторной подписки. `users` даёт трафик и живые
-connections/lanes/streams по каждому пользователю без раскрытия target-адресов.
-Также публикуются `circuit_open_total` и счётчики очистки страниц
-`page_cleanup_*`, включая число помещённых в карантин страниц.
-Панель опрашивает этот снимок раз в 5 секунд и строит локальный граф скорости;
-история графика начинается при открытии вкладки и не хранится в SQLite.
-
-Периодический `server stats` лог содержит те же основные сигналы:
-`payload_*`, `network_*`, `reconnects_1m`, `snapshot_bytes_1m`. Каждый обрыв
-WebSocket отдельно логирует `reason`, `connected_for` и short-cycle streak,
-успешный reconnect —
-`attempts`, `downtime`, `snapshot_objects` и `snapshot_bytes`.
-
-После обновления существующего Compose deployment внутреннюю сеть нужно один
-раз пересоздать, чтобы Docker назначил bridge стабильное имя `bproxy0`:
+Start from [`config.example.toml`](config.example.toml). Generate secrets
+offline and put them into the file:
 
 ```sh
-docker compose down
-docker compose up -d --build
+bproxy generate server-key
+bproxy generate user-key
+cp config.example.toml config.toml
+chmod 600 config.toml
+bproxy serve --config config.toml --test
+bproxy serve --config config.toml
 ```
 
-Volume с raw-счётчиками монтирует только
-`/sys/class/net/bproxy0/statistics` read-only; Docker socket core не получает.
-
-## Сборка
+The same config can be piped through stdin:
 
 ```sh
-make build      # go build ./... + bin/bproxy
-make test       # go test ./...
-make            # fmt + vet + test + build
+bproxy serve stdin: < config.toml
+# `-` is an alias for `stdin:`
 ```
 
-Нужен Go 1.26+. Внешние зависимости: `github.com/coder/websocket` (транспорт
-доски), `github.com/flynn/noise` + `golang.org/x/crypto` (рукопожатие и
-шифрование), `modernc.org/sqlite` (хранилище, чистый Go без cgo),
-`github.com/spf13/cobra` (CLI).
+Unknown TOML fields are rejected. Tags, keys, board references, duplicate
+identities and limits are validated before any board is started. The file must
+contain `version = 1`, one server private key and explicit user-to-board
+allowlists. Users normally contain their private key, which lets the operator
+recover their keylink at any time. `public_key` exists only for migrating an
+old identity whose private key is already lost.
 
-### Android AAR (`pkg/mobile`)
+Relevant semantics:
 
-`pkg/mobile` — тонкая граница для `gomobile bind`: наружу выходят только JSON,
-строки, bool, error, callback-интерфейсы и непрозрачный `Client`. Его граф
-зависимостей не включает SQLite, management API и server composition.
+- `max_sessions = 0` means unlimited process-wide logical sessions for a user;
+- `max_lanes` is constrained to 1..32 for both boards and users;
+- a user's effective lane limit is the smaller user/board limit;
+- disabled resources stay in desired state but do not accept traffic;
+- changing a user policy disconnects its current sessions immediately;
+- changing only board `max_lanes` affects new bundles without rebuilding it;
+- changing board connection settings drains and replaces that board runtime;
+- server identity and listener addresses cannot be changed in-place.
+
+## Reactive updates
+
+The default control endpoint is a mode-0600 Unix socket. The public API is
+defined in [`api/control/v1/control.proto`](api/control/v1/control.proto) and
+supports:
+
+- `GetRuntime`, `Reload`, atomic `ApplySnapshot`;
+- `ListUsers`, `ReplaceUser`, `SetUserEnabled`, `RemoveUser`, `GetKeylink`;
+- `ListBoards`, `ReplaceBoard`, `SetBoardEnabled`, `RemoveBoard`;
+- `GetStats`.
+
+Every successful mutation increments a runtime revision. Clients may provide
+`expected_revision`; a stale value is rejected with gRPC `ABORTED`, preventing
+lost concurrent updates. Zero means "apply against the revision observed by
+this operation" and is convenient for one-off administrative commands.
+
+Runtime mutations intentionally change **memory only**. They are useful for
+instant activation, disabling and emergency changes, but the TOML file remains
+the durable source of truth. `Reload` rereads the file and reconciles the whole
+runtime, replacing any ephemeral divergence. A stdin-started process cannot
+reload because stdin is not replayable.
+
+Built-in CLI examples:
 
 ```sh
-go install golang.org/x/mobile/cmd/gomobile@latest
-go install golang.org/x/mobile/cmd/gobind@latest
-gomobile init
-ANDROID_NDK_HOME=/path/to/android-ndk make mobile-aar \
-  MOBILE_OUTPUT=../android/app/libs/boardproxy.aar
+bproxy --control unix:///run/bproxy/control.sock users list
+bproxy --control unix:///run/bproxy/control.sock users keylink alice
+bproxy --control unix:///run/bproxy/control.sock users disable alice
+bproxy --control unix:///run/bproxy/control.sock users enable alice
+bproxy --control unix:///run/bproxy/control.sock users remove alice
+bproxy --control unix:///run/bproxy/control.sock boards list
+bproxy --control unix:///run/bproxy/control.sock boards disable primary
+bproxy --control unix:///run/bproxy/control.sock boards enable primary
+bproxy --control unix:///run/bproxy/control.sock boards remove primary
+bproxy --control unix:///run/bproxy/control.sock reload
+bproxy --control unix:///run/bproxy/control.sock stats
 ```
 
-Makefile передаёт `GOFLAGS=-buildvcs=false`: `gomobile` собирает пакет во
-временном каталоге без корректного Git worktree, поэтому VCS stamping там не
-должен участвовать в воспроизводимости AAR.
+The protobuf API exposes full resource replacement and atomic user/board
+snapshots directly. The CLI deliberately keeps full specs out of flags:
+edit/reload TOML for durable changes, or use a generated gRPC client for an
+external reconciler/control plane.
 
-Без установленного NDK границу можно проверить командой `make mobile-check`:
-она выполняет Android cross-build и генерирует Java API через `gobind`. Полная
-сборка `make mobile-aar` требует Android SDK/NDK и установленный `gomobile`.
-Префикс Java-пакета по умолчанию — `io.boardproxy` (итоговые классы находятся
-в `io.boardproxy.mobile`); его можно заменить через `MOBILE_JAVA_PKG=...`.
-По умолчанию AAR собирается для `arm64-v8a`, `armeabi-v7a` и `x86_64`, с
-минимальным Android API 26. Линкеру передаётся максимальный размер страницы
-16 КиБ, чтобы ELF-сегменты `libgojni.so` были совместимы с современными
-16-КиБ Android-устройствами.
+Plaintext management listeners are restricted to Unix sockets or loopback TCP.
+The Unix socket is the recommended production default. Remote management should
+be provided by a separate authenticated control plane or a future mTLS adapter,
+not by exposing core directly.
 
-Минимальный JSON-конфиг:
+## Statistics and observability
 
-```json
-{"keylink":"bproxy://...","listen":"127.0.0.1:1080","enable_udp":true}
-```
+Statistics are deliberately ephemeral and reset on every process start. Core
+keeps only values needed to operate the current runtime:
 
-Android `VpnService` реализует `mobile.SocketProtector`: перенаправляет
-`Protect(fd)` в `VpnService.protect(fd)` и через `DNSAddress()` передаёт DNS
-активной физической сети, захваченный до поднятия TUN. Core защищает сокеты до
-connect для REST, WebSocket, direct bypass и DNS, чтобы full-tunnel route не
-завернул собственный транспорт BoardProxy обратно в TUN, а resolver не выбрал
-локальный Android DNS stub уже созданного VPN.
+- configured/enabled/online users and configured/enabled/running boards;
+- active logical connections, lanes and streams;
+- payload RX/TX totals since process start, globally and per user;
+- board pool/cleanup state and failures;
+- reconnect, circuit-breaker and snapshot counters;
+- network-interface counters relative to the process start sample;
+- the most recent disconnect/reconnect timestamps and reason.
 
-`Client.Start()` неблокирующий; `Stop()` инициирует graceful shutdown, а
-`AwaitTermination()` дожидается его на worker coroutine. `SupportsUDP()`
-возвращает true; `enable_udp=true` включает стандартный SOCKS5 UDP ASSOCIATE.
-Каждая association получает отдельный server-side UDP socket, границы сообщений
-и адрес источника/назначения сохраняются отдельными mux-кадрами. Изменение
-несовместимо с protocol v1, поэтому UDP появился в protocol v2.
+There are no billing totals, historical time series or per-target records.
+Exporting long-term metrics belongs outside core: scrape `GetStats`/`GET
+/stats` into Prometheus, ClickHouse or another observability system.
 
-Protocol v3 добавил negotiated rendezvous и идентичность логического
-подключения: `BundleID`, `LaneID`, `Epoch` и секрет `JOIN_LANE`. Текущий wire
-v4 добавляет unordered bond delivery, DATA StreamOffset, FIN FinalOffset и
-абсолютный MAX_STREAM_DATA. V5 добавляет в аутентифицированный assignment
-серверный предел lanes для конкретной доски: клиент больше не угадывает его
-локальным хардкодом. Negotiation сохраняет v4-формат при соединении с узлом,
-который ещё не обновлён.
-Этапы многоканального транспорта и его инварианты описаны в
-[`V3_BONDING.md`](V3_BONDING.md).
+Optional read-only HTTP is configured by `management.http_listen` and must bind
+to loopback. It exposes only:
 
-Если keylink содержит несколько досок (`@hashA,hashB,…`), клиент выполняет
-полный join+rendezvous в указанном порядке. Ошибка одной доски закрывает её
-частично созданную сессию и переключает попытку на следующую; явный `--board`
-по-прежнему отключает failover и принудительно выбирает одну доску.
-
-## Запуск
-
-Один бинарник `bproxy` с подкомандами: `connect` (клиент), `serve` (сервер) и
-управление `clients`/`boards`/`restart` через локальный сокет запущенного
-инстанса. Серверу нужна только доска (или добавить её потом через сокет);
-хранилище и ключ сервера — файлы, создаются сами при первом старте. Клиенту
-нужен keylink, который выдаёт сам сервер при `clients add`.
-
-```sh
-# сервер (foreground): хаб + egress + управляющий сокет.
-# БД создаётся по умолчанию в ~/.config/bproxy/bproxy.db (переопределить --db).
-# Ключ сервера создаётся рядом с бинарником, bproxy.key (переопределить
-# --key-file). Оба — намеренно не в /tmp: и данные, и идентичность сервера
-# должны переживать перезагрузку (в /tmp живёт только эфемерный сокет).
-./bin/bproxy serve -b <boardHash>
-
-# завести клиента и получить keylink (в другом терминале, через сокет сервера):
-./bin/bproxy clients add me            # печатает bproxy://…
-./bin/bproxy clients ls
-./bin/bproxy boards ls
-
-# клиент: локальный SOCKS5/HTTP прокси
-./bin/bproxy connect --link 'bproxy://…' --listen 127.0.0.1:1080
-
-# проверка
-curl --socks5 127.0.0.1:1080 https://example.com
-curl -x http://127.0.0.1:1080 https://example.com   # тот же порт как HTTP-прокси
-```
-
-Доска сервера резолвится так: явный `-b/--board`, иначе первый активный хаб из
-store (его добавляет `boards add`), иначе — **board-less старт**: поднимается
-только управляющий сокет с подсказкой добавить доску и перезапуститься. `boards
-add <hash> -r` (или отдельная команда `restart`) плавно перезапускает сервер,
-чтобы он подхватил новую доску; перезапуск переиспользует штатный
-graceful-shutdown (клиенты получают GOAWAY). `clients rm <id>` отключает
-пользователя и рвёт его живые сессии, если он ещё на линии.
-
-Флаги `serve`: `-b/--board`/`BPROXY_BOARD` (пусто = board-less старт),
-`--db`/`BPROXY_DB` (путь к файлу SQLite, по умолчанию `~/.config/bproxy/bproxy.db`),
-`--key-file`/`BPROXY_KEY_FILE` (путь к файлу приватного ключа сервера, по
-умолчанию `bproxy.key` рядом с бинарником; создаётся при первом старте), `--socket`/
-`BPROXY_SOCKET`, `--web-api`/`WEB_API`, `--web-api-token`/`BPROXY_WEB_API_TOKEN`,
-`--max-sessions-per-user`/`BPROXY_SERVER_MAX_SESSIONS_PER_USER`,
-`--allow-private-egress`/`BPROXY_ALLOW_PRIVATE_EGRESS` (см. «Web API» ниже),
-`--api`, `--hub`, `--log`.
-
-Флаги `connect`:
-- `--link`/`BPROXY_KEYLINK` — строка подключения (доска берётся из неё). Обязателен, если не задан через конфиг.
-- `--listen` — локальный адрес прокси (по умолчанию `127.0.0.1:1080`).
-- `--local-dns` — резолвить DNS локально и слать в туннель IP. По умолчанию имя резолвит сервер (egress), так DNS-запросы тоже идут через доску.
-- `--system-proxy` — на время работы прописать прокси в системные настройки ОС (Linux — GNOME/gsettings, macOS — networksetup, Windows — реестр) и восстановить прежние при выходе.
-- `--bypass` — список Go-regexp через запятую: цели, чей хост под них попадает, идут напрямую в сеть мимо туннеля (например `--bypass '\.local$,^10\.'`).
-- `--config` (или позиционный аргумент `bproxy connect <config.toml>`) — TOML-конфиг клиента; флаги переопределяют значения из файла.
-- `--debug`, `--version`.
-
-### Клиентский TOML-конфиг
-
-Полный клиентский конфиг одним файлом: `bproxy connect client.toml`. Учётные
-данные задаются либо готовой строкой `keylink`, либо секцией `[keys]` (ключи
-base64, доски списком) — тогда keylink собирается из них. Флаги CLI
-переопределяют поля файла. Список `bypass` перечитывается **на лету** при
-изменении файла (реактивное обновление без переподключения) — правки прочих
-полей требуют перезапуска.
-
-```toml
-listen       = "127.0.0.1:1080"
-log          = "info"
-local_dns    = false
-system_proxy = false
-bypass       = ['\.local$', '^10\.', 'example\.com$']
-
-# Вариант A: готовая строка подключения
-keylink = "bproxy://…#label"
-
-# Вариант B (альтернатива keylink): явные ключи + доски
-# [keys]
-# client_private = "<base64 32B X25519>"
-# server_public  = "<base64 32B X25519>"
-# boards         = ["<boardHash>"]
-# label          = "me"
-```
-
-## Web API
-
-Та же управляющая ручка, что и unix-сокет (CRUD клиентов/хабов, просмотр живых
-соединений клиента, трафик, рестарт), но по обычному HTTP/TCP — для
-удалённого/скриптового доступа. Включается флагом `--web-api`/переменной
-`WEB_API` (адрес вида `127.0.0.1:8080`); по умолчанию выключен.
-
-Для удалённой multi-node панели выпустите отдельный отзываемый bearer-ключ:
-
-```sh
-./bin/bproxy serve keygen panel
-./bin/bproxy serve keys
-./bin/bproxy serve revoke <id>
-```
-
-Команды не открывают SQLite напрямую: они обращаются к уже запущенному серверу
-через `--socket`/`BPROXY_SOCKET`. Если сокет нестандартный, укажите его как
-глобальный флаг: `bproxy --socket /run/bproxy.sock serve keygen panel`.
-
-Секрет `bpa_…` показывается только при создании, в SQLite хранится его digest.
-Можно выпустить несколько ключей для разных панелей/операторов; отзыв начинает
-действовать без рестарта ноды.
-
-```sh
-WEB_API=127.0.0.1:8080 BPROXY_WEB_UI_PASSWORD='<password>' ./bin/bproxy serve -b <boardHash>
-# или
-./bin/bproxy serve -b <boardHash> --web-api 127.0.0.1:8080 --web-api-token '<token>'
-```
-
-Web API не запускается без `--web-api-token` или `--web-ui-password`, даже на
-loopback. Это важно, потому что egress клиента работает из сетевого namespace
-сервера. Токен проверяется в заголовке `Authorization: Bearer <token>`:
-
-```sh
-./bin/bproxy serve -b <boardHash> --web-api 0.0.0.0:8080 --web-api-token "$(openssl rand -hex 32)"
-```
-
-Маршруты (те же данные, что у CLI `clients`/`boards`, плюс два новых):
-
-| Метод | Путь | Описание |
+| Method | Path | Meaning |
 |---|---|---|
-| GET | `/clients` | список клиентов (с накопленным трафиком) |
-| POST | `/clients` | создать клиента, получить keylink |
-| GET | `/clients/{id}` | один клиент |
-| PATCH | `/clients/{id}` | переименовать и/или сменить статус (`{"name":"...","status":"active\|disabled"}`) |
-| DELETE | `/clients/{id}` | отключить (алиас PATCH со `status=disabled`) |
-| GET | `/clients/{id}/connections` | живые соединения клиента: страница, трафик, открытые стримы (пусто — офлайн) |
-| GET | `/boards` | список хабов |
-| POST | `/boards` | зарегистрировать хаб |
-| GET | `/boards/{id}` | один хаб |
-| PATCH | `/boards/{id}` | переименовать и/или сменить статус |
-| DELETE | `/boards/{id}` | отключить хаб |
-| POST | `/restart` | плавный перезапуск сервера |
+| `GET` | `/healthz` | process is serving HTTP |
+| `GET` | `/readyz` | at least one enabled board is active; otherwise 503 |
+| `GET` | `/stats` | secret-free runtime snapshot |
+| `GET` | `/logs?limit=500` | bounded recent in-memory structured logs |
 
-`rx_bytes`/`tx_bytes` в `ClientInfo` — накопленный трафик клиента: персистентный
-(завершённые сессии, файл БД) плюс, если клиент сейчас на линии, его текущий
-живой трафик (иначе счётчик выглядел бы нулевым весь долгий сеанс).
+There is intentionally no HTTP CRUD, restart, backup or authentication-key
+store. Desired-state mutation is gRPC-only.
 
-## Тесты
+## Client
 
-Юнит- и интеграционные тесты идут на in-process доске, без сети:
+The client path is unchanged:
 
 ```sh
-go test ./...
+bproxy connect --link 'bproxy://…' --listen 127.0.0.1:1080
+curl --socks5 127.0.0.1:1080 https://example.com
+curl -x http://127.0.0.1:1080 https://example.com
+```
+
+A complete annotated client configuration is available in
+[`client.example.toml`](client.example.toml):
+
+```sh
+cp client.example.toml client.toml
+bproxy connect client.toml
+```
+
+A keylink contains the client private key, pinned server public key and allowed
+board hashes. It can be obtained for config users with a private key via
+`users keylink <tag>`. Migration-only public-key users can authenticate with
+their existing key but core cannot reconstruct their lost keylink.
+
+The client TOML and Android facade remain independent of the new server config.
+The data-plane lifecycle still performs explicit graceful close/GOAWAY,
+heartbeat-based stale-page reclamation and board websocket reconnect.
+`retry_initial_connection = true` keeps a supervised client alive if its first
+rendezvous happens before the network or board becomes available. CLI flags can
+enable the same behavior with `--retry-initial`; Android enables it by default.
+
+## Docker
+
+The root Compose file mounts the desired state read-only and keeps only the
+ephemeral gRPC socket in a runtime volume:
+
+```sh
+cp core/config.example.toml config.toml
+# fill keys and board values
+docker compose run --rm core serve --config /etc/bproxy/config.toml --test
+docker compose up -d --build core
+docker compose exec core bproxy --control unix:///run/bproxy/control.sock stats
+```
+
+No `/data` volume is required. The old multi-node panel depended on the removed
+stateful HTTP CRUD API and is intentionally not wired into Compose. Its proper
+replacement is a separate control-plane reconciler that owns durable desired
+state and calls the gRPC API.
+
+## Build and tests
+
+```sh
+make build
+make test
 go test -race ./...
 ```
 
-Живые тесты против реальной доски включаются переменными окружения (без них —
-`t.Skip`):
+Live Yandex Board tests remain opt-in:
 
 ```sh
 BPROXY_LIVE=1 BPROXY_BOARD=<boardHash> go test ./... -run Live
 ```
 
-Сквозной прогон — `internal/app` (`TestLiveEndToEnd`): поднимает сервер и клиент
-на живой доске и тянет HTTP через SOCKS5 до локальной цели.
-
-## Ограничения v1 / что дальше
-
-- Один bundle использует до двух страниц одной доски. Динамический выбор числа
-  lane и агрегация нескольких досок относятся к следующим этапам.
-- Пул страниц фиксированный (слайды доски); динамическое создание слайдов не
-  реализовано.
-- rwnd_link объявляется периодически (keepalive), но основную адаптацию делает
-  адаптивный лимит параллельных записей (`internal/link/limiter.go`).
-- Авто-реконнект транспорта переживает короткие блипы прозрачно (см. выше).
-  После долгого обрыва lane завершается и клиент создаёт новый bundle; уже
-  открытые TCP-соединения при этом не резюмируются. Резюме сессии через хаб по
-  grace-окну не делали (store хранит только пользователей и хабы, без lifecycle
-  соединений).
-- Персистентный трафик копится по факту закрытия сессии (`hub` → `AddUserTraffic`
-  в store при отключении клиента); текущая же нагрузка сервера — лог раз в 30с
-  (`serverMetricsLoop`), клиентская — через `pkg/bproxy` (OnMetrics).
-
-### CLI: возможные направления (не реализовано, флагов пока нет)
-
-- **Клиент:** `--system-proxy` реализован для GNOME/gsettings, macOS
-  (networksetup) и Windows — на других DE (например KDE) вернёт ошибку и
-  продолжит без системного прокси.
-- **Сервер:** фоновый режим (re-exec detached + PID-файл); сейчас `serve` идёт
-  на переднем плане.
+The core module requires Go 1.26+. Main dependencies are
+`github.com/coder/websocket`, `github.com/flynn/noise`,
+`github.com/BurntSushi/toml`, Cobra and gRPC/protobuf. SQLite is no longer in
+the dependency graph.

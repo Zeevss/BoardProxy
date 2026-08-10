@@ -1,46 +1,44 @@
-// Command bproxy — единый бинарник BoardProxy: клиент (`connect`), сервер
-// (`serve`) и управление запущенным сервером через его локальный сокет
-// (`clients`, `boards`, `restart`).
+// Command bproxy runs the client data plane, the config-driven server, and a
+// compact gRPC control client.
 package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strconv"
 	"syscall"
 	"text/tabwriter"
 	"time"
 
+	controlapi "bproxy-core/api/control/v1"
 	"bproxy-core/internal/app"
 	"bproxy-core/internal/clientconfig"
-	"bproxy-core/internal/config"
+	"bproxy-core/internal/crypto"
 	"bproxy-core/internal/logging"
-	"bproxy-core/internal/mgmt"
+	"bproxy-core/internal/serverconfig"
 	"bproxy-core/pkg/bproxy"
 
+	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-// version подставляется при сборке через -ldflags "-X main.version=…".
 var version = "dev"
 
 func main() {
-	var socket string
+	controlAddress := "unix:///tmp/bproxy-control.sock"
 	root := &cobra.Command{
-		Use:     "bproxy",
-		Short:   "SOCKS5/HTTP proxy tunneled over an online whiteboard",
-		Version: version,
+		Use: "bproxy", Short: "SOCKS5/HTTP proxy tunneled over an online whiteboard", Version: version,
 	}
-	root.PersistentFlags().StringVar(&socket, "socket",
-		getenvOr("BPROXY_SOCKET", "/tmp/bproxy.sock"), "management socket path of the running server")
-
-	root.AddCommand(connectCmd(), serveCmd(&socket), clientsCmd(&socket), boardsCmd(&socket), restartCmd(&socket))
-
+	root.PersistentFlags().StringVar(&controlAddress, "control", controlAddress, "gRPC control address of a running server")
+	root.AddCommand(connectCmd(), serveCmd(), generateCmd(), reloadCmd(&controlAddress), usersCmd(&controlAddress), boardsCmd(&controlAddress), statsCmd(&controlAddress))
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		if !errors.Is(err, context.Canceled) {
 			fmt.Fprintln(os.Stderr, "error:", err)
@@ -51,149 +49,121 @@ func main() {
 
 func connectCmd() *cobra.Command {
 	var (
-		link        string
-		listen      string
-		configPath  string
-		bypassList  []string
-		debug       bool
-		localDNS    bool
-		systemProxy bool
-		enableUDP   bool
-		maxLanes    = config.Default().Client.MaxLanes
+		link, listen, configPath string
+		bypassList               []string
+		debug, localDNS          bool
+		systemProxy, enableUDP   bool
+		retryInitial             bool
+		maxLanes                 = 8
 	)
 	cmd := &cobra.Command{
-		Use:   "connect [config.toml]",
-		Short: "run the local proxy, tunneling over the board",
-		Long: "run the local proxy, tunneling over the board.\n\n" +
-			"Credentials and options come from flags, or from a TOML config file\n" +
-			"passed as a positional arg (or --config); flags override the file.",
-		Args:    cobra.MaximumNArgs(1),
-		Version: version,
+		Use: "connect [config.toml]", Short: "run the local proxy", Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			level := "info"
-			if debug {
-				level = "debug"
-			}
-			log := logging.New(level)
-
-			// Путь к конфигу: позиционный аргумент имеет приоритет над --config.
 			path := configPath
 			if len(args) == 1 {
 				path = args[0]
 			}
-
 			f := cmd.Flags()
-			var bcfg bproxy.Config
+			var cfg bproxy.Config
 			if path != "" {
 				var err error
-				bcfg, err = clientconfig.Load(path)
+				cfg, err = clientconfig.Load(path)
 				if err != nil {
 					return err
 				}
-				// Флаги переопределяют файл только если заданы явно.
 				if f.Changed("link") {
-					bcfg.Keylink = link
+					cfg.Keylink = link
 				}
 				if f.Changed("listen") {
-					bcfg.Listen = listen
+					cfg.Listen = listen
 				}
 				if f.Changed("local-dns") {
-					bcfg.LocalDNS = localDNS
+					cfg.LocalDNS = localDNS
 				}
 				if f.Changed("system-proxy") {
-					bcfg.SystemProxy = systemProxy
+					cfg.SystemProxy = systemProxy
 				}
 				if f.Changed("udp") {
-					bcfg.EnableUDP = enableUDP
+					cfg.EnableUDP = enableUDP
+				}
+				if f.Changed("retry-initial") {
+					cfg.RetryInitial = retryInitial
 				}
 				if f.Changed("max-lanes") {
-					bcfg.MaxLanes = maxLanes
+					cfg.MaxLanes = maxLanes
 				}
 				if f.Changed("bypass") {
-					bcfg.BypassList = bypassList
+					cfg.BypassList = bypassList
 				}
 			} else {
-				bcfg = bproxy.Config{
-					Keylink:     link,
-					Listen:      listen,
-					LocalDNS:    localDNS,
-					SystemProxy: systemProxy,
-					EnableUDP:   enableUDP,
-					MaxLanes:    maxLanes,
-					BypassList:  bypassList,
-				}
+				cfg = bproxy.Config{Keylink: link, Listen: listen, LocalDNS: localDNS, SystemProxy: systemProxy,
+					EnableUDP: enableUDP, RetryInitial: retryInitial, MaxLanes: maxLanes, BypassList: bypassList}
 			}
-			bcfg.LogLevel = level
-			bcfg.Logger = log
-
-			c := bproxy.New(bcfg)
-			c.OnStatus(func(s bproxy.Status, err error) {
+			if debug {
+				cfg.LogLevel = "debug"
+			}
+			if cfg.LogLevel == "" {
+				cfg.LogLevel = "info"
+			}
+			log := logging.New(cfg.LogLevel)
+			cfg.Logger = log
+			client := bproxy.New(cfg)
+			client.OnStatus(func(status bproxy.Status, err error) {
 				if err != nil {
-					log.Error("status", "state", string(s), "err", err)
+					log.Error("status", "state", string(status), "err", err)
 					return
 				}
-				log.Info("status", "state", string(s))
+				log.Info("status", "state", string(status))
 			})
-			c.OnMetrics(func(m bproxy.Metrics) {
-				log.Debug("metrics", "streams", m.Streams, "tx_bytes", m.TotalTx,
-					"rx_bytes", m.TotalRx, "tx_bps", m.RateTx, "rx_bps", m.RateRx,
-					"confirmed_tx_bps", m.RateConfirmedTx, "backlog_bytes", m.BacklogBytes,
-					"blocked_writers", m.BlockedWriters, "rtt_ms", m.RTT.Milliseconds())
+			client.OnMetrics(func(m bproxy.Metrics) {
+				log.Debug("metrics", "streams", m.Streams, "tx_bytes", m.TotalTx, "rx_bytes", m.TotalRx,
+					"tx_bps", m.RateTx, "rx_bps", m.RateRx, "rtt_ms", m.RTT.Milliseconds())
 			})
-
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-
-			// При работе с файлом — реактивно перечитываем bypass при его правке.
 			if path != "" {
-				go watchBypass(ctx, path, c, log)
+				go watchBypass(ctx, path, client, log)
 			}
-			return c.Run(ctx)
+			return client.Run(ctx)
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&link, "link", getenvOr("BPROXY_KEYLINK", ""), "bproxy:// connection string (required unless in config)")
-	f.StringVar(&listen, "listen", "127.0.0.1:1080", "local SOCKS5/HTTP listen address")
-	f.StringVar(&configPath, "config", "", "path to a TOML client config (same as the positional arg)")
-	f.BoolVar(&debug, "debug", false, "verbose debug logging")
-	f.BoolVar(&localDNS, "local-dns", false, "resolve DNS locally and tunnel IPs (default: the server resolves)")
-	f.BoolVar(&systemProxy, "system-proxy", false, "set the OS system proxy while running, restore on exit")
-	f.BoolVar(&enableUDP, "udp", false, "enable SOCKS5 UDP ASSOCIATE tunneling")
-	f.IntVar(&maxLanes, "max-lanes", getenvIntOr("BPROXY_MAX_LANES", maxLanes),
-		"maximum physical lanes per connection (1-32)")
-	f.StringSliceVar(&bypassList, "bypass", nil, "comma-separated Go regexps; matching hosts go direct, bypassing the tunnel")
+	f.StringVar(&link, "link", getenvOr("BPROXY_KEYLINK", ""), "bproxy:// connection string")
+	f.StringVar(&listen, "listen", "127.0.0.1:1080", "local SOCKS5/HTTP address")
+	f.StringVar(&configPath, "config", "", "path to a TOML client config")
+	f.BoolVar(&debug, "debug", false, "verbose logging")
+	f.BoolVar(&localDNS, "local-dns", false, "resolve DNS locally")
+	f.BoolVar(&systemProxy, "system-proxy", false, "set the OS system proxy while running")
+	f.BoolVar(&enableUDP, "udp", false, "enable SOCKS5 UDP ASSOCIATE")
+	f.BoolVar(&retryInitial, "retry-initial", false, "retry if the initial board connection fails")
+	f.IntVar(&maxLanes, "max-lanes", maxLanes, "maximum physical lanes")
+	f.StringSliceVar(&bypassList, "bypass", nil, "host regexps that bypass the tunnel")
 	return cmd
 }
 
-// watchBypass следит за файлом конфига и на каждое его изменение перечитывает
-// только список bypass, применяя его к работающему клиенту без переподключения
-// (реактивное обновление). Поллинг mtime — намеренно без внешней зависимости на
-// inotify: список bypass меняют редко, секундная задержка некритична.
-func watchBypass(ctx context.Context, path string, c *bproxy.Client, log *slog.Logger) {
-	const interval = 2 * time.Second
+func watchBypass(ctx context.Context, path string, client *bproxy.Client, log *slog.Logger) {
 	var lastMod time.Time
-	if fi, err := os.Stat(path); err == nil {
-		lastMod = fi.ModTime()
+	if info, err := os.Stat(path); err == nil {
+		lastMod = info.ModTime()
 	}
-	t := time.NewTicker(interval)
-	defer t.Stop()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
-			fi, err := os.Stat(path)
-			if err != nil || !fi.ModTime().After(lastMod) {
+		case <-ticker.C:
+			info, err := os.Stat(path)
+			if err != nil || !info.ModTime().After(lastMod) {
 				continue
 			}
-			lastMod = fi.ModTime()
+			lastMod = info.ModTime()
 			patterns, err := clientconfig.ReadBypass(path)
-			if err != nil {
-				log.Warn("bypass reload: parse config", "err", err)
-				continue
+			if err == nil {
+				err = client.UpdateBypassList(patterns)
 			}
-			if err := c.UpdateBypassList(patterns); err != nil {
-				log.Warn("bypass reload: invalid pattern", "err", err)
+			if err != nil {
+				log.Warn("bypass reload rejected", "err", err)
 				continue
 			}
 			log.Info("bypass list reloaded", "patterns", len(patterns))
@@ -201,365 +171,204 @@ func watchBypass(ctx context.Context, path string, c *bproxy.Client, log *slog.L
 	}
 }
 
-func serveCmd(socket *string) *cobra.Command {
-	cfg := config.Default()
+func serveCmd() *cobra.Command {
+	configPath := "config.toml"
+	testOnly, dump := false, false
 	cmd := &cobra.Command{
-		Use:   "serve",
-		Short: "run a server instance (hub + egress + management socket)",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg.Server.Socket = *socket
-			// Сервер копит хвост лога в кольцевой буфер, чтобы web-панель могла
-			// показать последние записи (GET /logs).
-			log, logs := logging.NewWithBuffer(cfg.LogLevel)
-			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-			defer stop()
-			// Плавный перезапуск (через управляющий сокет) возвращает ErrRestart —
-			// поднимаем сервер заново, заново резолвя доску.
-			for {
-				err := app.RunServer(ctx, cfg, log, logs)
-				if errors.Is(err, app.ErrRestart) {
-					log.Info("restarting server")
-					continue
+		Use: "serve [config.toml|stdin:]", Short: "run the stateless config-driven server", Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			source := configPath
+			if len(args) == 1 {
+				source = args[0]
+			}
+			cfg, err := serverconfig.Load(source, os.Stdin)
+			if err != nil {
+				return err
+			}
+			if dump {
+				redacted := cfg
+				redacted.Server.PrivateKey = "<redacted>"
+				for i := range redacted.Users {
+					if redacted.Users[i].PrivateKey != "" {
+						redacted.Users[i].PrivateKey = "<redacted>"
+					}
 				}
-				if err != nil && !errors.Is(err, context.Canceled) {
-					return err
-				}
+				return toml.NewEncoder(os.Stdout).Encode(redacted)
+			}
+			if testOnly {
+				fmt.Fprintln(os.Stdout, "configuration OK")
 				return nil
 			}
+			log, logs := logging.NewWithBuffer(cfg.Observability.LogLevel)
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return app.RunServer(ctx, cfg, source, log, logs)
 		},
 	}
-	f := cmd.Flags()
-	f.StringVarP(&cfg.Board.Hash, "board", "b", getenvOr("BPROXY_BOARD", ""), "whiteboard hash (empty = board-less start)")
-	f.StringVar(&cfg.Store.Path, "db", getenvOr("BPROXY_DB", defaultDBPath()), "SQLite database file path (created if missing)")
-	f.StringVar(&cfg.Server.KeyPath, "key-file", getenvOr("BPROXY_KEY_FILE", defaultKeyPath()), "server private key file path (generated next to the binary if missing)")
-	f.StringVar(&cfg.Board.APIBase, "api", cfg.Board.APIBase, "board REST API base URL")
-	f.StringVar(&cfg.Server.HubPage, "hub", "", "hub slide hash (empty = deterministic)")
-	f.DurationVar(&cfg.Server.IdleTimeout, "idle-timeout", cfg.Server.IdleTimeout,
-		"release a client page after no events/heartbeats for this duration (0 disables)")
-	f.DurationVar(&cfg.Transport.StreamIdleTimeout, "stream-idle-timeout", cfg.Transport.StreamIdleTimeout,
-		"reset an individual stream after no traffic for this duration (0 disables)")
-	f.IntVar(&cfg.Server.MaxLanes, "max-lanes",
-		getenvIntOr("BPROXY_SERVER_MAX_LANES", cfg.Server.MaxLanes),
-		"maximum physical lanes accepted per client bundle (1-32)")
-	f.IntVar(&cfg.Server.MaxSessionsPerUser, "max-sessions-per-user",
-		getenvIntOr("BPROXY_SERVER_MAX_SESSIONS_PER_USER", cfg.Server.MaxSessionsPerUser),
-		"maximum independent logical sessions per provisioned user (0 disables the limit)")
-	f.BoolVar(&cfg.Server.AllowPrivateEgress, "allow-private-egress",
-		getenvBoolOr("BPROXY_ALLOW_PRIVATE_EGRESS", cfg.Server.AllowPrivateEgress),
-		"allow clients to reach RFC1918/ULA destinations (loopback and link-local stay blocked)")
-	f.StringVar(&cfg.LogLevel, "log", getenvOr("BPROXY_LOG", cfg.LogLevel), "log level: debug|info|warn|error")
-	f.StringVar(&cfg.Server.WebAPI, "web-api", getenvOr("WEB_API", ""),
-		"HTTP address (host:port) to also expose the management API on, e.g. 127.0.0.1:8080 (empty = disabled)")
-	f.StringVar(&cfg.Server.WebAPIToken, "web-api-token", getenvOr("BPROXY_WEB_API_TOKEN", ""),
-		"require this bearer token on --web-api requests (recommended if not bound to loopback)")
-	f.StringVar(&cfg.Server.WebUIPassword, "web-ui-password", getenvOr("BPROXY_WEB_UI_PASSWORD", ""),
-		"password for the web panel login (POST /login issues a session cookie); empty disables password login")
-	cmd.AddCommand(serveKeygenCmd(socket), serveKeysCmd(socket), serveRevokeKeyCmd(socket))
+	cmd.Flags().StringVarP(&configPath, "config", "c", configPath, "TOML file path or stdin:")
+	cmd.Flags().BoolVar(&testOnly, "test", false, "validate the config without starting")
+	cmd.Flags().BoolVar(&dump, "dump", false, "print normalized config with secrets redacted")
 	return cmd
 }
 
-func serveKeygenCmd(socket *string) *cobra.Command {
-	return &cobra.Command{
-		Use:   "keygen [name]",
-		Short: "issue a revocable remote management access key",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			name := "panel"
-			if len(args) == 1 && args[0] != "" {
-				name = args[0]
-			}
-			ctx, cancel := mgmtCtx()
-			defer cancel()
-			key, err := mgmt.NewClient(*socket).CreateAccessKey(ctx, name)
+func generateCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "generate", Short: "generate offline configuration secrets"}
+	gen := func(kind string) *cobra.Command {
+		return &cobra.Command{Use: kind, Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
+			kp, err := crypto.Generate()
 			if err != nil {
 				return err
 			}
-			fmt.Printf("access key #%d %q created by the running server; copy it now, it will not be shown again:\n%s\n",
-				key.ID, key.Name, key.Token)
+			fmt.Printf("base64:%s\n", base64.StdEncoding.EncodeToString(kp.Private()))
 			return nil
-		},
+		}}
 	}
+	cmd.AddCommand(gen("server-key"), gen("user-key"))
+	return cmd
 }
 
-func serveKeysCmd(socket *string) *cobra.Command {
-	return &cobra.Command{
-		Use:   "keys",
-		Short: "list issued remote management access keys",
-		Args:  cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			ctx, cancel := mgmtCtx()
-			defer cancel()
-			keys, err := mgmt.NewClient(*socket).ListAccessKeys(ctx)
+func reloadCmd(address *string) *cobra.Command {
+	return &cobra.Command{Use: "reload", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		return withControl(cmd.Context(), *address, func(c controlapi.ControlServiceClient) error {
+			resp, err := c.Reload(cmd.Context(), &controlapi.RevisionRequest{})
+			if err == nil {
+				fmt.Println("revision", resp.Revision)
+			}
+			return err
+		})
+	}}
+}
+
+func usersCmd(address *string) *cobra.Command {
+	cmd := &cobra.Command{Use: "users", Short: "inspect or mutate runtime users over gRPC"}
+	cmd.AddCommand(&cobra.Command{Use: "list", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
+		return withControl(c.Context(), *address, func(client controlapi.ControlServiceClient) error {
+			resp, err := client.ListUsers(c.Context(), &emptypb.Empty{})
 			if err != nil {
 				return err
 			}
 			tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tNAME\tPREFIX\tCREATED\tSTATUS")
-			for _, key := range keys {
-				status := "active"
-				if key.RevokedAt != nil {
-					status = "revoked"
-				}
-				fmt.Fprintf(tw, "%d\t%s\t%s…\t%s\t%s\n", key.ID, key.Name, key.Prefix, key.CreatedAt.Format(time.RFC3339), status)
+			fmt.Fprintln(tw, "TAG\tNAME\tENABLED\tSESSIONS\tRX\tTX")
+			for _, u := range resp.Users {
+				fmt.Fprintf(tw, "%s\t%s\t%t\t%d\t%d\t%d\n", u.Tag, u.Name, u.Enabled, u.ActiveSessions, u.RxBytesSinceStart, u.TxBytesSinceStart)
 			}
 			return tw.Flush()
-		},
-	}
-}
-
-func serveRevokeKeyCmd(socket *string) *cobra.Command {
-	return &cobra.Command{
-		Use:   "revoke <id>",
-		Short: "revoke a remote management access key",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			id, err := strconv.ParseInt(args[0], 10, 64)
-			if err != nil || id <= 0 {
-				return fmt.Errorf("invalid access key id %q", args[0])
+		})
+	}})
+	cmd.AddCommand(&cobra.Command{Use: "remove <tag>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
+		return withControl(c.Context(), *address, func(client controlapi.ControlServiceClient) error {
+			_, err := client.RemoveUser(c.Context(), &controlapi.ResourceRequest{Tag: args[0]})
+			return err
+		})
+	}})
+	cmd.AddCommand(setEnabledCmd("enable", func(ctx context.Context, client controlapi.ControlServiceClient, req *controlapi.SetEnabledRequest) error {
+		_, err := client.SetUserEnabled(ctx, req)
+		return err
+	}, address, true))
+	cmd.AddCommand(setEnabledCmd("disable", func(ctx context.Context, client controlapi.ControlServiceClient, req *controlapi.SetEnabledRequest) error {
+		_, err := client.SetUserEnabled(ctx, req)
+		return err
+	}, address, false))
+	cmd.AddCommand(&cobra.Command{Use: "keylink <tag>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
+		return withControl(c.Context(), *address, func(client controlapi.ControlServiceClient) error {
+			resp, err := client.GetKeylink(c.Context(), &controlapi.ResourceRequest{Tag: args[0]})
+			if err == nil {
+				fmt.Println(resp.Keylink)
 			}
-			ctx, cancel := mgmtCtx()
-			defer cancel()
-			if err := mgmt.NewClient(*socket).RevokeAccessKey(ctx, id); err != nil {
-				return err
-			}
-			fmt.Printf("access key #%d revoked\n", id)
-			return nil
-		},
-	}
+			return err
+		})
+	}})
+	return cmd
 }
 
-// mgmtCtx — короткий контекст для одиночного управляющего вызова к сокету.
-func mgmtCtx() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 10*time.Second)
-}
-
-func clientsCmd(socket *string) *cobra.Command {
-	cmd := &cobra.Command{Use: "clients", Short: "manage clients (provisioned users)"}
-
-	ls := &cobra.Command{
-		Use:   "ls",
-		Short: "list clients",
-		RunE: func(*cobra.Command, []string) error {
-			ctx, cancel := mgmtCtx()
-			defer cancel()
-			clients, err := mgmt.NewClient(*socket).ListClients(ctx)
+func boardsCmd(address *string) *cobra.Command {
+	cmd := &cobra.Command{Use: "boards", Short: "inspect or mutate runtime boards over gRPC"}
+	cmd.AddCommand(&cobra.Command{Use: "list", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
+		return withControl(c.Context(), *address, func(client controlapi.ControlServiceClient) error {
+			resp, err := client.ListBoards(c.Context(), &emptypb.Empty{})
 			if err != nil {
 				return err
 			}
 			tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tNAME\tSTATUS\tCREATED\tLAST SEEN")
-			for _, c := range clients {
-				last := "never"
-				if c.LastSeen != nil {
-					last = c.LastSeen.Format(time.RFC3339)
-				}
-				fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", c.ID, c.Name, c.Status,
-					c.CreatedAt.Format(time.RFC3339), last)
+			fmt.Fprintln(tw, "TAG\tNAME\tHASH\tENABLED\tSTATE\tERROR")
+			for _, b := range resp.Boards {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%t\t%s\t%s\n", b.Config.Tag, b.Config.Name, b.Config.Hash,
+					b.Config.GetEnabled(), b.State, b.Error)
 			}
 			return tw.Flush()
-		},
-	}
-	add := &cobra.Command{
-		Use:   "add <name>",
-		Short: "provision a client and print its keylink",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			ctx, cancel := mgmtCtx()
-			defer cancel()
-			resp, err := mgmt.NewClient(*socket).AddClient(ctx, args[0])
-			if err != nil {
-				return err
-			}
-			fmt.Printf("client #%d %q created\n%s\n", resp.ID, resp.Name, resp.Keylink)
-			return nil
-		},
-	}
-	rm := &cobra.Command{
-		Use:   "rm <id>",
-		Short: "disable a client (revoke access)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			id, err := strconv.ParseInt(args[0], 10, 64)
-			if err != nil {
-				return fmt.Errorf("invalid id %q", args[0])
-			}
-			ctx, cancel := mgmtCtx()
-			defer cancel()
-			if err := mgmt.NewClient(*socket).RemoveClient(ctx, id); err != nil {
-				return err
-			}
-			fmt.Printf("client #%d disabled\n", id)
-			return nil
-		},
-	}
-	info := &cobra.Command{
-		Use:   "info <id>",
-		Short: "show one client",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			id, err := strconv.ParseInt(args[0], 10, 64)
-			if err != nil {
-				return fmt.Errorf("invalid id %q", args[0])
-			}
-			ctx, cancel := mgmtCtx()
-			defer cancel()
-			c, err := mgmt.NewClient(*socket).GetClient(ctx, id)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("id:         %d\nname:       %s\nstatus:     %s\npublic_key: %s\ncreated:    %s\n",
-				c.ID, c.Name, c.Status, c.PublicKey, c.CreatedAt.Format(time.RFC3339))
-			if c.LastSeen != nil {
-				fmt.Printf("last_seen:  %s\n", c.LastSeen.Format(time.RFC3339))
-			}
-			return nil
-		},
-	}
-	cmd.AddCommand(ls, add, rm, info)
+		})
+	}})
+	cmd.AddCommand(&cobra.Command{Use: "remove <tag>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
+		return withControl(c.Context(), *address, func(client controlapi.ControlServiceClient) error {
+			_, err := client.RemoveBoard(c.Context(), &controlapi.ResourceRequest{Tag: args[0]})
+			return err
+		})
+	}})
+	cmd.AddCommand(setEnabledCmd("enable", func(ctx context.Context, client controlapi.ControlServiceClient, req *controlapi.SetEnabledRequest) error {
+		_, err := client.SetBoardEnabled(ctx, req)
+		return err
+	}, address, true))
+	cmd.AddCommand(setEnabledCmd("disable", func(ctx context.Context, client controlapi.ControlServiceClient, req *controlapi.SetEnabledRequest) error {
+		_, err := client.SetBoardEnabled(ctx, req)
+		return err
+	}, address, false))
 	return cmd
 }
 
-func boardsCmd(socket *string) *cobra.Command {
-	cmd := &cobra.Command{Use: "boards", Short: "manage boards (hubs)"}
-
-	ls := &cobra.Command{
-		Use:   "ls",
-		Short: "list boards",
-		RunE: func(*cobra.Command, []string) error {
-			ctx, cancel := mgmtCtx()
-			defer cancel()
-			boards, err := mgmt.NewClient(*socket).ListBoards(ctx)
-			if err != nil {
-				return err
-			}
-			tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-			fmt.Fprintln(tw, "HASH\tNAME\tHUB SLIDE\tSTATUS")
-			for _, b := range boards {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", b.ID, b.Name, b.HubSlide, b.Status)
-			}
-			return tw.Flush()
-		},
-	}
-	var restartAfter bool
-	add := &cobra.Command{
-		Use:   "add <hash> [name]",
-		Short: "register a board",
-		Args:  cobra.RangeArgs(1, 2),
-		RunE: func(_ *cobra.Command, args []string) error {
-			name := ""
-			if len(args) > 1 {
-				name = args[1]
-			}
-			ctx, cancel := mgmtCtx()
-			defer cancel()
-			c := mgmt.NewClient(*socket)
-			b, err := c.AddBoard(ctx, args[0], name)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("board %s registered\n", b.ID)
-			// Запущенный сервер обслуживает доску, выбранную на старте; чтобы он
-			// подхватил новую, нужен плавный перезапуск.
-			if restartAfter {
-				if err := c.Restart(ctx); err != nil {
-					return fmt.Errorf("restart: %w", err)
-				}
-				fmt.Println("server restarting to pick up the board")
-			} else {
-				fmt.Println("run `bproxy restart` (or add -r) to make the server serve it")
-			}
-			return nil
-		},
-	}
-	add.Flags().BoolVarP(&restartAfter, "restart", "r", false, "gracefully restart the server after adding")
-	rm := &cobra.Command{
-		Use:   "rm <hash>",
-		Short: "disable a board",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			ctx, cancel := mgmtCtx()
-			defer cancel()
-			if err := mgmt.NewClient(*socket).RemoveBoard(ctx, args[0]); err != nil {
-				return err
-			}
-			fmt.Printf("board %s disabled\n", args[0])
-			return nil
-		},
-	}
-	cmd.AddCommand(ls, add, rm)
-	return cmd
+func setEnabledCmd(name string, call func(context.Context, controlapi.ControlServiceClient, *controlapi.SetEnabledRequest) error,
+	address *string, enabled bool,
+) *cobra.Command {
+	return &cobra.Command{Use: name + " <tag>", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
+		return withControl(c.Context(), *address, func(client controlapi.ControlServiceClient) error {
+			return call(c.Context(), client, &controlapi.SetEnabledRequest{Tag: args[0], Enabled: enabled})
+		})
+	}}
 }
 
-func restartCmd(socket *string) *cobra.Command {
-	return &cobra.Command{
-		Use:   "restart",
-		Short: "gracefully restart the running server",
-		RunE: func(*cobra.Command, []string) error {
-			ctx, cancel := mgmtCtx()
-			defer cancel()
-			if err := mgmt.NewClient(*socket).Restart(ctx); err != nil {
+func statsCmd(address *string) *cobra.Command {
+	return &cobra.Command{Use: "stats", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
+		return withControl(c.Context(), *address, func(client controlapi.ControlServiceClient) error {
+			resp, err := client.GetStats(c.Context(), &emptypb.Empty{})
+			if err != nil {
 				return err
 			}
-			fmt.Println("restart requested")
-			return nil
-		},
+			raw, err := protojson.MarshalOptions{Indent: "  "}.Marshal(resp)
+			if err == nil {
+				fmt.Println(string(raw))
+			}
+			return err
+		})
+	}}
+}
+
+func withControl(ctx context.Context, address string, fn func(controlapi.ControlServiceClient) error) error {
+	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return err
 	}
+	defer conn.Close()
+	callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return fn(controlapi.NewControlServiceClient(&contextClientConn{ClientConnInterface: conn, ctx: callCtx}))
+}
+
+// contextClientConn applies the command timeout even when a Cobra callback
+// accidentally passes its longer-lived parent context.
+type contextClientConn struct {
+	grpc.ClientConnInterface
+	ctx context.Context
+}
+
+func (c *contextClientConn) Invoke(_ context.Context, method string, args, reply any, opts ...grpc.CallOption) error {
+	return c.ClientConnInterface.Invoke(c.ctx, method, args, reply, opts...)
+}
+func (c *contextClientConn) NewStream(_ context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	return c.ClientConnInterface.NewStream(c.ctx, desc, method, opts...)
 }
 
 func getenvOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+	if value := os.Getenv(key); value != "" {
+		return value
 	}
 	return fallback
-}
-
-func getenvIntOr(key string, fallback int) int {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	n, err := strconv.Atoi(value)
-	if err != nil {
-		return fallback
-	}
-	return n
-}
-
-func getenvBoolOr(key string, fallback bool) bool {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	b, err := strconv.ParseBool(value)
-	if err != nil {
-		return fallback
-	}
-	return b
-}
-
-// defaultKeyPath резолвит путь к файлу приватного ключа сервера рядом с самим
-// исполняемым файлом: так ключ переживает перезапуск/переустановку из любого
-// рабочего каталога и не зависит от того, откуда запущен бинарник. Если
-// os.Executable недоступен (редкий случай на некоторых платформах), откатываемся
-// на относительный путь — тот же дефолт, что и в config.Default().
-func defaultKeyPath() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "bproxy.key"
-	}
-	return filepath.Join(filepath.Dir(exe), "bproxy.key")
-}
-
-// defaultDBPath резолвит путь к файлу БД в пользовательском конфиг-каталоге
-// (os.UserConfigDir → ~/.config/bproxy на Linux, $XDG_CONFIG_HOME с приоритетом),
-// как принято у обычных приложений: не в /tmp (там только эфемерный сокет), не
-// требует root (в отличие от /etc, /var/lib для системных демонов). Каталог
-// создаётся при открытии БД (sqlite.Open делает MkdirAll). Если конфиг-каталог
-// недоступен, откатываемся на относительный путь — дефолт config.Default().
-func defaultDBPath() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "bproxy.db"
-	}
-	return filepath.Join(dir, "bproxy", "bproxy.db")
 }

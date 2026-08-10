@@ -15,7 +15,6 @@ import (
 	"bproxy-core/internal/handshake"
 	"bproxy-core/internal/link"
 	"bproxy-core/internal/mux"
-	"bproxy-core/internal/store"
 )
 
 // idleCheckInterval — как часто проверять простой клиентской страницы.
@@ -42,18 +41,20 @@ type Dialer interface {
 	Join(ctx context.Context) (board.Session, error)
 }
 
-// UserStore — то, что hub'у нужно от хранилища: поиск заранее предоставленного
-// пользователя по его публичному ключу для авторизации (ErrNotFound здесь и
-// есть отказ в доступе) и накопление трафика при закрытии его сессии. Узкий
-// интерфейс намеренно — не полный store.Store.
-type UserStore interface {
-	UserByPublicKey(ctx context.Context, pubKey []byte) (store.User, error)
-	// AddUserTraffic добавляет rx/tx к накопленному трафику пользователя,
-	// вызывается при закрытии его сессии с её финальными байтами.
-	AddUserTraffic(ctx context.Context, userID int64, rx, tx uint64) error
-	// TouchUser отмечает last_seen пользователя, вызывается при успешной
-	// авторизации подключившегося клиента (best-effort).
-	TouchUser(ctx context.Context, userID int64) error
+// User is authorization policy compiled from the current desired config.
+type User struct {
+	ID          string
+	Name        string
+	MaxSessions int
+	MaxLanes    int
+}
+
+// UserDirectory is the narrow control-plane port required by the data plane.
+// Its implementation is in-memory and session claims span every running hub.
+type UserDirectory interface {
+	Authorize(ctx context.Context, publicKey []byte, boardTag string) (User, error)
+	AcquireSession(userID string) bool
+	ReleaseSession(userID string, rx, tx uint64)
 }
 
 // ServerConfig конфигурирует хаб-сервер.
@@ -69,8 +70,10 @@ type ServerConfig struct {
 	// ServerStatic — постоянная пара ключей сервера (клиенты знают её публичную
 	// часть из keylink); ею сервер отвечает в рукопожатии Noise IK.
 	ServerStatic crypto.Keypair
-	// Users авторизует подключающихся клиентов по их публичному ключу.
-	Users UserStore
+	// BoardTag is the stable config identifier used by user allowlists.
+	BoardTag string
+	// Users authorizes clients and enforces process-wide session limits.
+	Users UserDirectory
 	Codec codec.Codec
 	Link  link.Options
 	// MaxPayload, StreamWindow, CoalesceTarget и StreamIdleTimeout передаются
@@ -89,9 +92,6 @@ type ServerConfig struct {
 	IdleTimeout time.Duration
 	// MaxLanes limits pages in one logical bundle. Zero means eight.
 	MaxLanes int
-	// MaxSessionsPerUser limits independent mux sessions per provisioned user.
-	// Additional lanes joining an existing bundle do not count. Zero disables it.
-	MaxSessionsPerUser int
 }
 
 // Server — хаб: observer на hub-слайде, раздаёт страницы и поднимает серверную
@@ -99,7 +99,7 @@ type ServerConfig struct {
 type Server struct {
 	cfg      ServerConfig
 	pool     *pagePool
-	maxLanes int
+	maxLanes atomic.Int64
 
 	accept chan *mux.Session
 
@@ -107,7 +107,7 @@ type Server struct {
 	clients map[*mux.Session]*liveBundle
 	// byUser — сессии, сгруппированные по id пользователя, чтобы «clients rm»
 	// мог корректно оборвать живые соединения отключаемого клиента.
-	byUser map[int64]map[*mux.Session]bool
+	byUser map[string]map[*mux.Session]bool
 	// bundles is the v3 logical-connection index. Every bundle owns exactly one
 	// mux session and one bond.Conn; its lanes are independent page sessions.
 	bundles         map[bond.BundleID]*liveBundle
@@ -117,17 +117,14 @@ type Server struct {
 	// processing — helloID, которые сейчас обрабатываются, для дедупликации
 	// повторно доставленных доской HELLO-событий.
 	processing map[string]bool
-	userClaims map[int64]int
 	helloSem   chan struct{}
 	hubCleanup chan string
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-	// connWG отдельно от wg считает горутины watchClient (по одной на клиентскую
-	// сессию): Close должен дождаться их завершения, чтобы персист трафика
-	// (AddUserTraffic) успел записаться в store до того, как вызывающий его
-	// закроет (см. app.RunServer, где store.Close() идёт после srv.Close()).
+	// connWG отдельно от wg считает горутины активных lanes и bundles. Close
+	// дожидается их, чтобы runtime accounting был завершён до возврата.
 	connWG sync.WaitGroup
 
 	pageCleanupRuns        atomic.Uint64
@@ -137,13 +134,14 @@ type Server struct {
 }
 
 type liveBundle struct {
-	userID int64
-	epoch  bond.Epoch
-	token  bond.JoinToken
-	bond   *bond.Conn
-	mux    *mux.Session
-	lanes  map[bond.LaneID]*liveLane
-	nextID bond.LaneID
+	userID   string
+	maxLanes int
+	epoch    bond.Epoch
+	token    bond.JoinToken
+	bond     *bond.Conn
+	mux      *mux.Session
+	lanes    map[bond.LaneID]*liveLane
+	nextID   bond.LaneID
 }
 
 type liveLane struct {
@@ -178,21 +176,20 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 	s := &Server{
 		cfg:             cfg,
 		pool:            newPagePool(pool),
-		maxLanes:        maxLanes,
 		accept:          make(chan *mux.Session, 16),
 		clients:         make(map[*mux.Session]*liveBundle),
-		byUser:          make(map[int64]map[*mux.Session]bool),
+		byUser:          make(map[string]map[*mux.Session]bool),
 		bundles:         make(map[bond.BundleID]*liveBundle),
 		bundleBySession: make(map[*mux.Session]bond.BundleID),
 		bundleClaims:    make(map[bond.BundleID]bool),
 		joinClaims:      make(map[bond.BundleID]bool),
 		processing:      make(map[string]bool),
-		userClaims:      make(map[int64]int),
 		helloSem:        make(chan struct{}, maxConcurrentHello),
 		hubCleanup:      make(chan string, 1024),
 		ctx:             sctx,
 		cancel:          cancel,
 	}
+	s.maxLanes.Store(int64(maxLanes))
 	s.wg.Add(2)
 	go s.rendezvousLoop()
 	go s.hubCleanupLoop()
@@ -239,9 +236,7 @@ func (s *Server) Close() error {
 	// Только после этого безопасно вызывать connWG.Wait (Add одновременно с
 	// Wait при нулевом счётчике является гонкой и мог оставить страницу занятой).
 	s.wg.Wait()
-	// connWG — прежде чем закрыть store (это делает вызывающий сразу после
-	// Close): дожидаемся, чтобы персист трафика каждой сессии (watchClient)
-	// успел записаться, а не оборвался на закрытой БД.
+	// Complete lane cleanup and in-memory traffic accounting before returning.
 	s.connWG.Wait()
 	return s.cfg.HubSession.Close()
 }
@@ -282,6 +277,18 @@ func (s *Server) Stats() ServerStats {
 	return st
 }
 
+// SetMaxLanes updates the cap for newly created bundles. Existing bundles keep
+// the limit negotiated in their authenticated assignment.
+func (s *Server) SetMaxLanes(max int) {
+	if max < 1 {
+		max = 1
+	}
+	if max > absoluteMaxBundleLanes {
+		max = absoluteMaxBundleLanes
+	}
+	s.maxLanes.Store(int64(max))
+}
+
 // StreamInfo — снимок одного открытого стрима внутри соединения клиента.
 type StreamInfo struct {
 	ID        uint32
@@ -316,7 +323,7 @@ type LaneInfo struct {
 // UserConnections возвращает снимок всех живых соединений пользователя userID
 // (для управления — просмотр активных подключений клиента). Пустой список —
 // клиент сейчас не подключён.
-func (s *Server) UserConnections(userID int64) []ConnectionInfo {
+func (s *Server) UserConnections(userID string) []ConnectionInfo {
 	s.mu.Lock()
 	sessions := make([]*mux.Session, 0, len(s.byUser[userID]))
 	bundleIDs := make(map[*mux.Session]bond.BundleID, len(s.byUser[userID]))
@@ -394,32 +401,6 @@ func (s *Server) releaseHello(id string) {
 	s.mu.Unlock()
 }
 
-func (s *Server) claimUserSession(userID int64) bool {
-	if s.cfg.MaxSessionsPerUser <= 0 {
-		return true
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.byUser[userID])+s.userClaims[userID] >= s.cfg.MaxSessionsPerUser {
-		return false
-	}
-	s.userClaims[userID]++
-	return true
-}
-
-func (s *Server) releaseUserSessionClaim(userID int64) {
-	if s.cfg.MaxSessionsPerUser <= 0 {
-		return
-	}
-	s.mu.Lock()
-	if s.userClaims[userID] <= 1 {
-		delete(s.userClaims, userID)
-	} else {
-		s.userClaims[userID]--
-	}
-	s.mu.Unlock()
-}
-
 func (s *Server) claimNewBundle(id bond.BundleID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -436,13 +417,13 @@ func (s *Server) releaseBundleClaim(id bond.BundleID) {
 	s.mu.Unlock()
 }
 
-func (s *Server) claimJoin(userID int64, req bundleRequest) (*liveBundle, bond.LaneID, bool) {
+func (s *Server) claimJoin(userID string, req bundleRequest) (*liveBundle, bond.LaneID, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b := s.bundles[req.id]
 	if b == nil || b.userID != userID || b.epoch != req.epoch ||
 		!b.token.Equal(req.token) || s.joinClaims[req.id] ||
-		len(b.lanes) >= s.maxLanes {
+		len(b.lanes) >= b.maxLanes {
 		return nil, 0, false
 	}
 	s.joinClaims[req.id] = true
@@ -679,15 +660,11 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 		s.putRV(encodeDenied(nonce))
 		return
 	}
-	user, err := s.cfg.Users.UserByPublicKey(s.ctx, resp.PeerStatic())
-	if err != nil || user.Status != store.UserActive {
-		log.Warn("hub: клиент не авторизован", "err", err, "status", user.Status)
+	user, err := s.cfg.Users.Authorize(s.ctx, resp.PeerStatic(), s.cfg.BoardTag)
+	if err != nil {
+		log.Warn("hub: клиент не авторизован", "err", err)
 		s.putRV(encodeDenied(nonce))
 		return
-	}
-	// Отмечаем «был в сети» — best-effort, вне критического пути рукопожатия.
-	if err := s.cfg.Users.TouchUser(s.ctx, user.ID); err != nil {
-		log.Warn("hub: не удалось отметить last_seen", "user", user.ID, "err", err)
 	}
 
 	var (
@@ -737,14 +714,27 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 			return
 		}
 	}
+	sessionAcquired := false
 	if !isJoin {
-		if !s.claimUserSession(user.ID) {
+		if !s.cfg.Users.AcquireSession(user.ID) {
 			log.Warn("hub: per-user session limit reached", "user", user.Name,
-				"limit", s.cfg.MaxSessionsPerUser)
+				"limit", user.MaxSessions)
 			s.putRV(encodeDenied(nonce))
 			return
 		}
-		defer s.releaseUserSessionClaim(user.ID)
+		sessionAcquired = true
+		defer func() {
+			if sessionAcquired {
+				s.cfg.Users.ReleaseSession(user.ID, 0, 0)
+			}
+		}()
+	}
+	bundleMaxLanes := int(s.maxLanes.Load())
+	if user.MaxLanes > 0 && user.MaxLanes < bundleMaxLanes {
+		bundleMaxLanes = user.MaxLanes
+	}
+	if isJoin {
+		bundleMaxLanes = existing.maxLanes
 	}
 
 	page, ok := s.pool.acquire()
@@ -765,7 +755,7 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 			lane:     bundleLane,
 			epoch:    bundleEpoch,
 			token:    bundleToken,
-			maxLanes: uint8(s.maxLanes),
+			maxLanes: uint8(bundleMaxLanes),
 			page:     page,
 		}, version)
 		if !valid {
@@ -858,13 +848,14 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 				StreamIdleTimeout: s.cfg.StreamIdleTimeout,
 			})
 			bundle = &liveBundle{
-				userID: user.ID,
-				epoch:  bundleEpoch,
-				token:  bundleToken,
-				bond:   bundleConn,
-				mux:    m,
-				lanes:  make(map[bond.LaneID]*liveLane),
-				nextID: bond.FirstLane + 1,
+				userID:   user.ID,
+				maxLanes: bundleMaxLanes,
+				epoch:    bundleEpoch,
+				token:    bundleToken,
+				bond:     bundleConn,
+				mux:      m,
+				lanes:    make(map[bond.LaneID]*liveLane),
+				nextID:   bond.FirstLane + 1,
 			}
 		}
 	} else {
@@ -877,10 +868,11 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 			StreamIdleTimeout: s.cfg.StreamIdleTimeout,
 		})
 		bundle = &liveBundle{
-			userID: user.ID,
-			mux:    m,
-			lanes:  make(map[bond.LaneID]*liveLane),
-			nextID: bond.FirstLane + 1,
+			userID:   user.ID,
+			maxLanes: 1,
+			mux:      m,
+			lanes:    make(map[bond.LaneID]*liveLane),
+			nextID:   bond.FirstLane + 1,
 		}
 	}
 	// Страницы пула переиспользуются между клиентами; если предыдущий сеанс на
@@ -949,6 +941,10 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 		}
 	}
 	s.mu.Unlock()
+	if !isJoin {
+		// The bundle watcher now owns the process-wide session claim.
+		sessionAcquired = false
+	}
 
 	// Every lane owns and releases its own page. Losing one lane only removes it
 	// from the bond; the mux remains alive while another lane exists.
@@ -1046,8 +1042,8 @@ func bundleLaneCount(s *Server, bundle *liveBundle) int {
 	return len(bundle.lanes)
 }
 
-// watchBundle owns logical-session bookkeeping and persists traffic exactly
-// once, independently of how many lane pages were attached.
+// watchBundle owns logical-session bookkeeping and reports since-start traffic
+// exactly once, independently of how many lane pages were attached.
 func (s *Server) watchBundle(bundleID bond.BundleID, bundle *liveBundle) {
 	defer s.connWG.Done()
 	select {
@@ -1074,22 +1070,14 @@ func (s *Server) watchBundle(bundleID bond.BundleID, bundle *liveBundle) {
 	}
 	s.mu.Unlock()
 
-	// Персист трафика — отдельным контекстом: s.ctx уже может быть отменён
-	// (штатное закрытие сервера), а Close дожидается connWG именно затем, чтобы
-	// эта запись успела дойти до store, прежде чем вызывающий его закроет.
-	tctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := s.cfg.Users.AddUserTraffic(tctx, bundle.userID, final.Received, final.Written); err != nil {
-		rvLog(s.cfg.Link.Log).Warn("hub: не удалось сохранить трафик клиента",
-			"user", bundle.userID, "err", err)
-	}
+	s.cfg.Users.ReleaseSession(bundle.userID, final.Received, final.Written)
 }
 
 // DisconnectUser корректно закрывает все живые сессии пользователя (каждая шлёт
 // GOAWAY) — используется при отключении клиента через управление. Возвращает
 // число закрытых сессий. Освобождение страниц и чистку трекинга доделает
 // watchClient каждой сессии, проснувшись на её закрытии.
-func (s *Server) DisconnectUser(_ context.Context, userID int64) int {
+func (s *Server) DisconnectUser(_ context.Context, userID string) int {
 	s.mu.Lock()
 	var sessions []*mux.Session
 	for m := range s.byUser[userID] {

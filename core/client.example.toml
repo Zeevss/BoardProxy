@@ -1,0 +1,39 @@
+# The local listener is an unauthenticated mixed SOCKS5/HTTP proxy. Keep it on
+# loopback unless access is restricted by another layer.
+listen = "127.0.0.1:1080"
+log = "info"
+
+# false keeps DNS resolution on the server side, inside the tunnel.
+local_dns = false
+system_proxy = false
+enable_udp = true
+
+# Keep a supervised client alive when the board or network is temporarily
+# unavailable during startup. Interactive CLI use may prefer false.
+retry_initial_connection = true
+
+# Fallback for old protocol versions. Protocol v5 receives the authoritative
+# per-user/per-board limit from the server. 0 uses the client default (8).
+max_lanes = 0
+
+# Go regular expressions. Matching destinations bypass BoardProxy and leave
+# directly through the client's network, so add entries deliberately.
+bypass = ['\.local$', '^127\.', '^\[::1\]$']
+
+# Preferred credentials form. Obtain it with:
+#   bproxy --control unix:///run/bproxy/control.sock users keylink alice
+keylink = "bproxy://REPLACE_WITH_USER_KEYLINK"
+
+# Optional overrides. Normally the board list comes from keylink and both
+# values below use Yandex/default deterministic discovery.
+# board = "REPLACE_WITH_ONE_BOARD_HASH"
+# api_base = "https://boards.yandex.ru/api"
+# hub_page = "REPLACE_WITH_HUB_SLIDE_HASH"
+
+# Alternative to `keylink`: comment out the keylink line above and uncomment
+# this section. Never configure both forms at the same time.
+# [keys]
+# client_private = "REPLACE_WITH_BASE64_32_BYTE_CLIENT_PRIVATE_KEY"
+# server_public = "REPLACE_WITH_BASE64_32_BYTE_SERVER_PUBLIC_KEY"
+# boards = ["REPLACE_WITH_BOARD_HASH"]
+# label = "alice"

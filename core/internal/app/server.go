@@ -2,533 +2,797 @@ package app
 
 import (
 	"context"
-	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
-	"os"
-	"strings"
+	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"bproxy-core/internal/board/yandex"
 	"bproxy-core/internal/codec"
-	"bproxy-core/internal/config"
+	"bproxy-core/internal/control"
+	"bproxy-core/internal/controlapi"
 	"bproxy-core/internal/crypto"
 	"bproxy-core/internal/egress"
 	"bproxy-core/internal/hub"
-	"bproxy-core/internal/link"
+	"bproxy-core/internal/keylink"
 	"bproxy-core/internal/logging"
 	"bproxy-core/internal/mgmt"
 	"bproxy-core/internal/netstats"
-	"bproxy-core/internal/store"
-	"bproxy-core/internal/store/sqlite"
+	"bproxy-core/internal/serverconfig"
+	"bproxy-core/internal/telemetry"
 )
 
-// webAPIShutdownTimeout bounds how long the web API's http.Server waits for
-// in-flight requests to finish on shutdown.
-const webAPIShutdownTimeout = 3 * time.Second
+const (
+	serverMetricsInterval = 30 * time.Second
+	boardRetryMinBackoff  = 500 * time.Millisecond
+	boardRetryMaxBackoff  = 30 * time.Second
+)
 
-// ErrRestart возвращается RunServer, когда через управляющий сокет запрошен
-// плавный перезапуск. Вызывающий (cmd serve) перезапускает RunServer в цикле,
-// заново резолвя доску (например, только что добавленную через `boards add`).
-var ErrRestart = errors.New("app: restart requested")
+var ErrRevisionConflict = errors.New("app: config revision conflict")
 
-// serverMetricsInterval — период лога агрегатной нагрузки сервера.
-const serverMetricsInterval = 30 * time.Second
+type BoardState string
 
-// Five successful reconnects per minute already means the connection is
-// cycling much faster than normal and may repeatedly download page snapshots.
-const reconnectStormPerMinute = 5
+const (
+	BoardStarting BoardState = "starting"
+	BoardActive   BoardState = "active"
+	BoardRetrying BoardState = "retrying"
+	BoardDraining BoardState = "draining"
+	BoardStopped  BoardState = "stopped"
+)
 
-// RunServer поднимает сервер: открывает store, резолвит обслуживаемую доску
-// (явный ‑board или первый активный хаб из store), поднимает хаб + egress и
-// управляющий сокет. Без доски стартует в board-less режиме — только
-// управляющий сокет, чтобы можно было добавить доску и перезапуститься.
-func RunServer(ctx context.Context, cfg config.Config, log *slog.Logger, logs *logging.Buffer) error {
-	serverStatic, err := serverKeypair(cfg.Server.KeyPath)
+type boardRuntime struct {
+	mu       sync.RWMutex
+	cfg      serverconfig.Board
+	state    BoardState
+	err      string
+	srv      *hub.Server
+	cancel   context.CancelFunc
+	done     chan struct{}
+	stopOnce sync.Once
+}
+
+func (b *boardRuntime) stop() {
+	b.stopOnce.Do(func() {
+		b.mu.Lock()
+		b.state = BoardDraining
+		cancel, srv, done := b.cancel, b.srv, b.done
+		b.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		if srv != nil {
+			_ = srv.Close()
+		}
+		if done != nil {
+			<-done
+		}
+		b.mu.Lock()
+		b.state = BoardStopped
+		b.mu.Unlock()
+	})
+}
+
+func (b *boardRuntime) snapshot() (serverconfig.Board, BoardState, string, *hub.Server) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.cfg, b.state, b.err, b.srv
+}
+
+func (b *boardRuntime) updateConfig(cfg serverconfig.Board) {
+	b.mu.Lock()
+	b.cfg = cfg
+	b.mu.Unlock()
+}
+
+// ServerRuntime owns all process-local desired and live state. It never writes
+// configuration or counters to disk. applyMu serializes config transactions;
+// mu protects short state snapshots and never surrounds network operations.
+type ServerRuntime struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	applyMu sync.Mutex
+	mu      sync.RWMutex
+	cfg     serverconfig.Config
+	source  string
+	boards  map[string]*boardRuntime
+
+	revision   atomic.Uint64
+	started    time.Time
+	log        *slog.Logger
+	logs       *logging.Buffer
+	registry   *control.Registry
+	serverKP   crypto.Keypair
+	network    *netstats.Monitor
+	reconnects *yandex.ReconnectMetrics
+	startBoard func(context.Context, serverconfig.Config, serverconfig.Board) (*hub.Server, string, int, error)
+}
+
+func NewServerRuntime(ctx context.Context, cfg serverconfig.Config, source string, log *slog.Logger, logs *logging.Buffer) (*ServerRuntime, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	private, err := serverconfig.DecodePrivateKey(cfg.Server.PrivateKey)
 	if err != nil {
-		return fmt.Errorf("server key: %w", err)
+		return nil, fmt.Errorf("server identity: %w", err)
 	}
-	// Отложенный импорт бэкапа: если панель загрузила дамп и запросила рестарт,
-	// он лежит staging-файлом рядом с БД — вносим его на место ДО открытия store.
-	if err := applyPendingRestore(cfg.Store.Path, log); err != nil {
-		return fmt.Errorf("apply pending restore: %w", err)
-	}
-	st, err := sqlite.Open(ctx, cfg.Store.Path)
+	serverKP, err := crypto.KeypairFromPrivate(private)
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return nil, fmt.Errorf("server identity: %w", err)
 	}
-	defer st.Close()
-
-	// runCtx отменяется либо родителем (shutdown), либо запросом рестарта — так
-	// перезапуск переиспользует весь штатный graceful-shutdown.
-	runCtx, cancelRun := context.WithCancelCause(ctx)
-	defer cancelRun(nil)
-	networkMetrics := netstats.Start(runCtx)
-	reconnectMetrics := yandex.NewReconnectMetrics()
-
-	// Набор досок для обслуживания: активные хабы из store плюс явно заданные в
-	// -board/BPROXY_BOARD (через запятую). Битая доска не валит остальные.
-	boards := resolveBoards(ctx, cfg.Board.Hash, st)
-	set := &hubSet{}
-	for _, board := range boards {
-		srv, err := startHub(runCtx, cfg, board, log, serverStatic, st, reconnectMetrics)
-		if err != nil {
-			log.Warn("skip board: hub failed to start", "board", board, "err", err)
+	registry, err := control.NewRegistry(cfg.Users)
+	if err != nil {
+		return nil, fmt.Errorf("compile users: %w", err)
+	}
+	rctx, cancel := context.WithCancel(ctx)
+	r := &ServerRuntime{
+		ctx: rctx, cancel: cancel, cfg: cloneConfig(cfg), source: source,
+		boards: make(map[string]*boardRuntime), started: time.Now(),
+		log: log, logs: logs, registry: registry, serverKP: serverKP,
+		reconnects: yandex.NewReconnectMetrics(),
+	}
+	r.startBoard = r.startBoardAttempt
+	if cfg.Observability.Enabled {
+		r.network = netstats.Start(rctx)
+	}
+	r.revision.Store(1)
+	for _, board := range cfg.Boards {
+		if !board.IsEnabled() {
+			r.boards[board.Tag] = &boardRuntime{cfg: board, state: BoardStopped}
 			continue
 		}
-		name := board
-		if hb, herr := hubByID(ctx, st, board); herr == nil && hb.Name != "" {
-			name = hb.Name
-		}
-		set.hubs = append(set.hubs, namedHub{board: board, name: name, srv: srv})
-		defer srv.Close()
+		r.boards[board.Tag] = r.launchBoard(cfg, board)
 	}
-	if set.empty() {
-		log.Warn("no board configured — add one with `boards add <hash>` then `restart` " +
-			"(or start with -b/--board); the management socket is up so you can do that now")
+	return r, nil
+}
+
+func (r *ServerRuntime) Close() {
+	r.cancel()
+	r.applyMu.Lock()
+	r.mu.Lock()
+	boards := make([]*boardRuntime, 0, len(r.boards))
+	for _, br := range r.boards {
+		boards = append(boards, br)
 	}
-
-	stats := statsFunc(st, set, networkMetrics, reconnectMetrics)
-	if cfg.Server.Socket != "" || cfg.Server.WebAPI != "" {
-		var disc mgmt.Disconnector
-		var conns mgmt.ConnectionsProvider
-		if !set.empty() {
-			disc = set
-			conns = set
-		}
-		h := mgmt.Handler(mgmt.Config{
-			Store:        st,
-			AccessKeys:   st,
-			ServerPublic: serverStatic.Public(),
-			Board:        cfg.Board.Hash,
-			Disconnector: disc,
-			Connections:  conns,
-			Restart:      func() { cancelRun(ErrRestart) },
-			Logs:         logsFunc(logs),
-			Stats:        stats,
-			Backup:       backupFunc(st),
-			Restore:      restoreFunc(cfg.Store.Path, func() { cancelRun(ErrRestart) }),
-		})
-
-		if cfg.Server.Socket != "" {
-			go func() {
-				if err := mgmt.Serve(runCtx, cfg.Server.Socket, h); err != nil {
-					log.Error("management api", "err", err)
-				}
-			}()
-			log.Info("management socket", "path", cfg.Server.Socket)
-		}
-
-		if cfg.Server.WebAPI != "" {
-			startWebAPI(runCtx, cfg, h, st, log)
-		}
+	r.mu.Unlock()
+	for _, br := range boards {
+		br.stop()
 	}
+	r.applyMu.Unlock()
+}
 
-	// egress на каждый поднятый хаб; сервер живёт, пока runCtx не отменён.
-	var wg sync.WaitGroup
-	for _, nh := range set.hubs {
-		wg.Add(1)
-		go func(nh namedHub) {
-			defer wg.Done()
-			if err := egress.Serve(runCtx, nh.srv, log, egress.Options{
-				AllowPrivate: cfg.Server.AllowPrivateEgress,
-			}); err != nil &&
-				!errors.Is(err, context.Canceled) {
-				log.Error("egress", "board", nh.board, "err", err)
+func (r *ServerRuntime) Revision() uint64        { return r.revision.Load() }
+func (r *ServerRuntime) Source() string          { return r.source }
+func (r *ServerRuntime) ServerPublicKey() []byte { return r.serverKP.Public() }
+
+func (r *ServerRuntime) Config() serverconfig.Config {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return cloneConfig(r.cfg)
+}
+
+func (r *ServerRuntime) Users() []control.UserView { return r.registry.List() }
+
+func (r *ServerRuntime) Reload(expected uint64) error {
+	if r.source == "stdin:" || r.source == "-" {
+		return errors.New("app: stdin configuration cannot be reloaded")
+	}
+	// Capture before file I/O. Otherwise expected=0 could silently overwrite a
+	// concurrent gRPC mutation that commits while the config is being read.
+	if expected == 0 {
+		expected = r.Revision()
+	}
+	cfg, err := serverconfig.Load(r.source, nil)
+	if err != nil {
+		return err
+	}
+	return r.ApplyConfig(expected, cfg)
+}
+
+func (r *ServerRuntime) Boards() []control.BoardView {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]control.BoardView, 0, len(r.boards))
+	for _, br := range r.boards {
+		cfg, state, errText, _ := br.snapshot()
+		out = append(out, control.BoardView{Config: cfg, State: string(state), Error: errText})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Config.Tag < out[j].Config.Tag })
+	return out
+}
+
+// launchBoard makes a board an independent lifecycle unit. Initial REST/socket
+// setup can take up to the board dial timeout, so it must not block gRPC,
+// config reconciliation or healthy boards.
+func (r *ServerRuntime) launchBoard(root serverconfig.Config, board serverconfig.Board) *boardRuntime {
+	bctx, cancel := context.WithCancel(r.ctx)
+	br := &boardRuntime{cfg: board, state: BoardStarting, cancel: cancel, done: make(chan struct{})}
+	go r.runBoard(bctx, root, board, br)
+	return br
+}
+
+func (r *ServerRuntime) runBoard(bctx context.Context, root serverconfig.Config, board serverconfig.Board, br *boardRuntime) {
+	defer close(br.done)
+	backoff := boardRetryMinBackoff
+	for {
+		if bctx.Err() != nil {
+			return
+		}
+		srv, hubSlide, pages, err := r.startBoard(bctx, root, board)
+		if err != nil {
+			if bctx.Err() != nil {
+				return
 			}
-		}(nh)
-	}
-	go serverMetricsLoop(runCtx, stats, log)
-	<-runCtx.Done()
-	wg.Wait()
+			br.mu.Lock()
+			if br.state != BoardDraining && br.state != BoardStopped {
+				br.state = BoardRetrying
+				br.err = err.Error()
+			}
+			br.mu.Unlock()
+			r.log.Warn("board unavailable; retrying", "tag", board.Tag, "hash", board.Hash, "err", err, "backoff", backoff)
+			if !waitBoardRetry(bctx, backoff) {
+				return
+			}
+			backoff = min(backoff*2, boardRetryMaxBackoff)
+			br.mu.Lock()
+			if br.state != BoardDraining && br.state != BoardStopped {
+				br.state = BoardStarting
+			}
+			br.mu.Unlock()
+			continue
+		}
 
-	if errors.Is(context.Cause(runCtx), ErrRestart) {
-		return ErrRestart
+		br.mu.Lock()
+		if bctx.Err() != nil || br.state == BoardDraining || br.state == BoardStopped {
+			br.mu.Unlock()
+			_ = srv.Close()
+			return
+		}
+		br.srv = srv
+		br.state = BoardActive
+		br.err = ""
+		br.mu.Unlock()
+		r.log.Info("board active", "tag", board.Tag, "hash", board.Hash, "hub", hubSlide,
+			"pages", pages, "max_lanes", board.MaxLanes)
+
+		err = egress.Serve(bctx, srv, r.log, egress.Options{AllowPrivate: root.Server.AllowPrivateEgress})
+		br.mu.Lock()
+		if br.srv == srv {
+			br.srv = nil
+		}
+		br.mu.Unlock()
+		_ = srv.Close()
+		if bctx.Err() != nil {
+			return
+		}
+		if err == nil {
+			err = errors.New("egress stopped unexpectedly")
+		}
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		br.mu.Lock()
+		if br.state != BoardDraining && br.state != BoardStopped {
+			br.state = BoardRetrying
+			br.err = fmt.Sprintf("egress stopped: %v", err)
+		}
+		br.mu.Unlock()
+		r.log.Warn("board egress stopped; retrying", "tag", board.Tag, "hash", board.Hash, "err", err,
+			"backoff", boardRetryMinBackoff)
+		if !waitBoardRetry(bctx, boardRetryMinBackoff) {
+			return
+		}
+		br.mu.Lock()
+		if br.state != BoardDraining && br.state != BoardStopped {
+			br.state = BoardStarting
+		}
+		br.mu.Unlock()
+		// A board that had reached active gets a fresh short retry window.
+		backoff = boardRetryMinBackoff
 	}
+}
+
+func (r *ServerRuntime) startBoardAttempt(bctx context.Context, root serverconfig.Config, board serverconfig.Board) (*hub.Server, string, int, error) {
+	laneOptions := boardOptions(board)
+	laneOptions.Role = "server-lane"
+	laneOptions.Metrics = r.reconnects
+	laneOptions.Log = r.log.With("component", "board", "role", "server-lane", "board", board.Tag)
+	hubOptions := laneOptions
+	hubOptions.ReconnectForever = true
+	hubOptions.Role = "hub-control"
+	hubOptions.Log = r.log.With("component", "board", "role", "hub-control", "board", board.Tag)
+	hubSession, err := yandex.Join(bctx, hubOptions)
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("join board: %w", err)
+	}
+	hubSlide, err := resolveHubSlide(board.HubSlide, hubSession)
+	if err != nil {
+		_ = hubSession.Close()
+		return nil, "", 0, fmt.Errorf("resolve hub page: %w", err)
+	}
+	pool := poolExcluding(hubSession.Slides(), hubSlide)
+	if len(pool) == 0 {
+		_ = hubSession.Close()
+		return nil, "", 0, errors.New("board has no free pages besides the hub slide")
+	}
+	srv, err := hub.NewServer(bctx, hub.ServerConfig{
+		BoardTag: board.Tag, HubSession: hubSession, HubSlide: hubSlide, Pool: pool,
+		Dialer: yandexDialer{laneOptions}, ServerStatic: r.serverKP, Users: r.registry,
+		Codec: codec.Z85Codec{}, Link: linkOptions(root, r.log),
+		MaxPayload: root.Transport.MaxFramePayload, StreamWindow: root.Transport.StreamWindow,
+		MaxStreamWindow: root.Transport.MaxStreamWindow, CoalesceTarget: root.Transport.CoalesceTarget,
+		StreamIdleTimeout: root.Transport.StreamIdleTimeout.Duration(), IdleTimeout: root.Server.IdleTimeout.Duration(),
+		MaxLanes: board.MaxLanes,
+	})
+	if err != nil {
+		_ = hubSession.Close()
+		return nil, "", 0, fmt.Errorf("start hub: %w", err)
+	}
+	return srv, hubSlide, len(pool), nil
+}
+
+func waitBoardRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// ApplyConfig reconciles a validated desired-state snapshot. User policy is
+// published atomically. Board resources are independently replaced and report
+// failed state without taking healthy boards down.
+func (r *ServerRuntime) ApplyConfig(expected uint64, candidate serverconfig.Config) error {
+	if err := candidate.Validate(); err != nil {
+		return err
+	}
+	r.applyMu.Lock()
+	defer r.applyMu.Unlock()
+	if expected != 0 && expected != r.Revision() {
+		return ErrRevisionConflict
+	}
+	private, err := serverconfig.DecodePrivateKey(candidate.Server.PrivateKey)
+	if err != nil {
+		return err
+	}
+	kp, err := crypto.KeypairFromPrivate(private)
+	if err != nil {
+		return err
+	}
+	if !equalBytes(kp.Public(), r.serverKP.Public()) {
+		return errors.New("app: server.private_key cannot be changed at runtime")
+	}
+
+	// Deny removed/disabled users before disconnecting their current sessions.
+	oldConfig := r.Config()
+	if oldConfig.Management != candidate.Management {
+		return errors.New("app: management listeners cannot be changed at runtime")
+	}
+	if oldConfig.Observability != candidate.Observability {
+		return errors.New("app: observability settings cannot be changed at runtime")
+	}
+	globalCompatible := runtimeGlobalsCompatible(oldConfig, candidate)
+	oldUsers := indexUsers(oldConfig.Users)
+	if err := r.registry.Replace(candidate.Users); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	oldBoards := r.boards
+	r.cfg = cloneConfig(candidate)
+	r.mu.Unlock()
+
+	for _, user := range candidate.Users {
+		old, existed := oldUsers[user.Tag]
+		if !user.IsEnabled() || (existed && userPolicyChanged(old, user)) {
+			r.disconnectUser(user.Tag)
+		}
+		delete(oldUsers, user.Tag)
+	}
+	for removed := range oldUsers {
+		r.disconnectUser(removed)
+	}
+	r.mu.Lock()
+	r.boards = make(map[string]*boardRuntime, len(candidate.Boards))
+	r.mu.Unlock()
+
+	for _, board := range candidate.Boards {
+		old := oldBoards[board.Tag]
+		delete(oldBoards, board.Tag)
+		if !board.IsEnabled() {
+			if old != nil {
+				old.stop()
+			}
+			r.mu.Lock()
+			r.boards[board.Tag] = &boardRuntime{cfg: board, state: BoardStopped}
+			r.mu.Unlock()
+			continue
+		}
+		oldCfg, oldState, _, oldServer := serverconfig.Board{}, BoardStopped, "", (*hub.Server)(nil)
+		if old != nil {
+			oldCfg, oldState, _, oldServer = old.snapshot()
+		}
+		if old != nil && globalCompatible && boardRuntimeCompatible(oldCfg, board) && oldState == BoardActive {
+			old.updateConfig(board)
+			oldServer.SetMaxLanes(board.MaxLanes)
+			r.mu.Lock()
+			r.boards[board.Tag] = old
+			r.mu.Unlock()
+			continue
+		}
+		if old != nil && globalCompatible && boardRuntimeCompatible(oldCfg, board) &&
+			oldCfg.MaxLanes == board.MaxLanes && (oldState == BoardStarting || oldState == BoardRetrying) {
+			old.updateConfig(board)
+			r.mu.Lock()
+			r.boards[board.Tag] = old
+			r.mu.Unlock()
+			continue
+		}
+		if old != nil {
+			old.stop()
+		}
+		br := r.launchBoard(candidate, board)
+		r.mu.Lock()
+		r.boards[board.Tag] = br
+		r.mu.Unlock()
+	}
+	for _, removed := range oldBoards {
+		removed.stop()
+	}
+	r.revision.Add(1)
 	return nil
 }
 
-// namedHub — поднятый хаб вместе с хэшем и именем обслуживаемой доски.
-type namedHub struct {
-	board string
-	name  string
-	srv   *hub.Server
+func (r *ServerRuntime) ReplaceUser(expected uint64, user serverconfig.User) error {
+	if expected == 0 {
+		expected = r.Revision()
+	}
+	cfg := r.Config()
+	replaced := false
+	for i := range cfg.Users {
+		if cfg.Users[i].Tag == user.Tag {
+			cfg.Users[i] = user
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		cfg.Users = append(cfg.Users, user)
+	}
+	return r.ApplyConfig(expected, cfg)
 }
 
-// hubSet — набор поднятых хабов одного сервера. Реализует mgmt.Disconnector и
-// mgmt.ConnectionsProvider фан-аутом по всем хабам (клиент может быть подключён к
-// нескольким доскам).
-type hubSet struct{ hubs []namedHub }
+func (r *ServerRuntime) SetUserEnabled(expected uint64, tag string, enabled bool) error {
+	if expected == 0 {
+		expected = r.Revision()
+	}
+	cfg := r.Config()
+	for i := range cfg.Users {
+		if cfg.Users[i].Tag == tag {
+			cfg.Users[i].Enabled = boolPointer(enabled)
+			return r.ApplyConfig(expected, cfg)
+		}
+	}
+	return fmt.Errorf("app: user %q not found", tag)
+}
 
-func (h *hubSet) empty() bool { return len(h.hubs) == 0 }
+func (r *ServerRuntime) RemoveUser(expected uint64, tag string) error {
+	if expected == 0 {
+		expected = r.Revision()
+	}
+	cfg := r.Config()
+	out := cfg.Users[:0]
+	found := false
+	for _, user := range cfg.Users {
+		if user.Tag == tag {
+			found = true
+			continue
+		}
+		out = append(out, user)
+	}
+	if !found {
+		return fmt.Errorf("app: user %q not found", tag)
+	}
+	cfg.Users = out
+	return r.ApplyConfig(expected, cfg)
+}
 
-// DisconnectUser рвёт живые сессии пользователя во всех хабах, возвращает сумму.
-func (h *hubSet) DisconnectUser(ctx context.Context, userID int64) int {
+func (r *ServerRuntime) ReplaceBoard(expected uint64, board serverconfig.Board) error {
+	if expected == 0 {
+		expected = r.Revision()
+	}
+	cfg := r.Config()
+	replaced := false
+	for i := range cfg.Boards {
+		if cfg.Boards[i].Tag == board.Tag {
+			cfg.Boards[i] = board
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		cfg.Boards = append(cfg.Boards, board)
+	}
+	return r.ApplyConfig(expected, cfg)
+}
+
+func (r *ServerRuntime) SetBoardEnabled(expected uint64, tag string, enabled bool) error {
+	if expected == 0 {
+		expected = r.Revision()
+	}
+	cfg := r.Config()
+	for i := range cfg.Boards {
+		if cfg.Boards[i].Tag == tag {
+			cfg.Boards[i].Enabled = boolPointer(enabled)
+			return r.ApplyConfig(expected, cfg)
+		}
+	}
+	return fmt.Errorf("app: board %q not found", tag)
+}
+
+func (r *ServerRuntime) ApplySnapshot(expected uint64, users []serverconfig.User, boards []serverconfig.Board) error {
+	if expected == 0 {
+		expected = r.Revision()
+	}
+	cfg := r.Config()
+	cfg.Users = make([]serverconfig.User, len(users))
+	for i, user := range users {
+		cfg.Users[i] = user
+		cfg.Users[i].Boards = append([]string(nil), user.Boards...)
+	}
+	cfg.Boards = append([]serverconfig.Board(nil), boards...)
+	return r.ApplyConfig(expected, cfg)
+}
+
+func (r *ServerRuntime) RemoveBoard(expected uint64, tag string) error {
+	if expected == 0 {
+		expected = r.Revision()
+	}
+	cfg := r.Config()
+	out := cfg.Boards[:0]
+	found := false
+	for _, board := range cfg.Boards {
+		if board.Tag == tag {
+			found = true
+			continue
+		}
+		out = append(out, board)
+	}
+	if !found {
+		return fmt.Errorf("app: board %q not found", tag)
+	}
+	cfg.Boards = out
+	return r.ApplyConfig(expected, cfg)
+}
+
+func (r *ServerRuntime) disconnectUser(tag string) int {
+	r.mu.RLock()
+	boards := make([]*boardRuntime, 0, len(r.boards))
+	for _, br := range r.boards {
+		_, _, _, srv := br.snapshot()
+		if srv != nil {
+			boards = append(boards, br)
+		}
+	}
+	r.mu.RUnlock()
 	total := 0
-	for _, nh := range h.hubs {
-		total += nh.srv.DisconnectUser(ctx, userID)
+	for _, br := range boards {
+		_, _, _, srv := br.snapshot()
+		total += srv.DisconnectUser(r.ctx, tag)
 	}
 	return total
 }
 
-// UserConnections собирает живые соединения пользователя по всем хабам.
-func (h *hubSet) UserConnections(userID int64) []hub.ConnectionInfo {
-	var out []hub.ConnectionInfo
-	for _, nh := range h.hubs {
-		out = append(out, nh.srv.UserConnections(userID)...)
+func (r *ServerRuntime) Keylink(tag string) (string, error) {
+	cfg := r.Config()
+	boardHashes := make(map[string]string, len(cfg.Boards))
+	for _, board := range cfg.Boards {
+		if board.IsEnabled() {
+			boardHashes[board.Tag] = board.Hash
+		}
+	}
+	for _, user := range cfg.Users {
+		if user.Tag != tag {
+			continue
+		}
+		identity, err := user.Identity()
+		if err != nil {
+			return "", err
+		}
+		if len(identity.Private) == 0 {
+			return "", errors.New("app: legacy public-key-only user has no recoverable keylink")
+		}
+		var boards []string
+		for _, boardTag := range user.Boards {
+			if hash := boardHashes[boardTag]; hash != "" {
+				boards = append(boards, hash)
+			}
+		}
+		return keylink.Build(identity.Private, r.serverKP.Public(), boards, user.Name)
+	}
+	return "", fmt.Errorf("app: user %q not found", tag)
+}
+
+func (r *ServerRuntime) Stats() telemetry.Stats {
+	r.mu.RLock()
+	cfg := cloneConfig(r.cfg)
+	boards := make(map[string]*boardRuntime, len(r.boards))
+	for tag, br := range r.boards {
+		boards[tag] = br
+	}
+	r.mu.RUnlock()
+	out := telemetry.Stats{StartedAt: r.started, Revision: r.Revision(), UsersConfigured: len(cfg.Users), BoardsConfigured: len(cfg.Boards)}
+	out.RXBytesSinceStart, out.TXBytesSinceStart = r.registry.Totals()
+	users := r.registry.List()
+	for _, user := range users {
+		us := telemetry.UserStats{
+			Tag: user.ID, Name: user.Name, Enabled: user.Enabled,
+			Connections: user.ActiveSessions, Online: user.ActiveSessions > 0,
+			RXBytes: user.RXBytes, TXBytes: user.TXBytes,
+			MaxSessions: user.MaxSessions, MaxLanes: user.MaxLanes,
+		}
+		if user.Enabled {
+			out.UsersEnabled++
+		}
+		if us.Online {
+			out.UsersOnline++
+		}
+		if !user.LastSeen.IsZero() {
+			last := user.LastSeen
+			us.LastSeen = &last
+		}
+		for _, br := range boards {
+			_, _, _, srv := br.snapshot()
+			if srv == nil {
+				continue
+			}
+			for _, conn := range srv.UserConnections(user.ID) {
+				us.RXBytes += conn.Received
+				us.TXBytes += conn.Written
+				us.Lanes += len(conn.Lanes)
+				us.Streams += len(conn.Streams)
+			}
+		}
+		out.ActiveConnections += us.Connections
+		out.ActiveLanes += us.Lanes
+		out.ActiveStreams += us.Streams
+		out.Users = append(out.Users, us)
+	}
+	for _, board := range cfg.Boards {
+		if board.IsEnabled() {
+			out.BoardsEnabled++
+		}
+		bs := telemetry.BoardStats{Tag: board.Tag, Name: board.Name, Hash: board.Hash, Enabled: board.IsEnabled()}
+		if br := boards[board.Tag]; br != nil {
+			_, state, errText, srv := br.snapshot()
+			bs.State, bs.Error = string(state), errText
+			if state == BoardActive {
+				out.BoardsRunning++
+			}
+			if srv != nil {
+				hs := srv.Stats()
+				bs.Clients, bs.FreePages = hs.Clients, hs.FreePages
+				bs.RXBytes, bs.TXBytes = hs.Received, hs.Written
+				out.RXBytesSinceStart += hs.Received
+				out.TXBytesSinceStart += hs.Written
+				bs.PageCleanupRuns, bs.PageCleanupDeleted = hs.PageCleanupRuns, hs.PageCleanupDeleted
+				bs.PageCleanupFailures, bs.PageCleanupQuarantined = hs.PageCleanupFailures, hs.PageCleanupQuarantined
+			}
+		}
+		out.Boards = append(out.Boards, bs)
+	}
+	if r.network != nil {
+		n := r.network.Snapshot()
+		out.Network = telemetry.NetworkStats{
+			Available: n.Available, Scope: n.Scope, Interfaces: n.Interfaces, SampledAt: n.SampledAt,
+			RXBytesSinceStart: n.RXBytesSinceStart, TXBytesSinceStart: n.TXBytesSinceStart,
+			RXBytesPerSecond: n.RXBytesPerSecond, TXBytesPerSecond: n.TXBytesPerSecond,
+		}
+	}
+	t := r.reconnects.Snapshot()
+	out.Transport = telemetry.TransportStats{
+		DisconnectsTotal: t.DisconnectsTotal, ReconnectsTotal: t.ReconnectsTotal,
+		ReconnectAttemptsFailed: t.ReconnectAttemptsFailed, CircuitOpenTotal: t.CircuitOpenTotal,
+		SnapshotObjectsTotal: t.SnapshotObjectsTotal, SnapshotBytesTotal: t.SnapshotBytesTotal,
+		ReconnectsLastMinute: t.ReconnectsLastMinute, SnapshotBytesLastMinute: t.SnapshotBytesLastMinute,
+		LastDisconnectAt: timePointer(t.LastDisconnectAt), LastDisconnectReason: t.LastDisconnectReason,
+		LastReconnectAt: timePointer(t.LastReconnectAt), LastDowntimeMillis: t.LastDowntime.Milliseconds(),
 	}
 	return out
 }
 
-// startWebAPI поднимает управляющий API поверх обычного TCP/HTTP (в дополнение
-// к unix-сокету) — для удалённого/скриптового доступа. Доступ разрешён по
-// статическому токену, UI-cookie либо одному из отзываемых ключей в store.
-func startWebAPI(ctx context.Context, cfg config.Config, h http.Handler, st *sqlite.Store, log *slog.Logger) {
-	h = mgmt.RemoteHandler(h)
-	// Аутентификация web-API: bearer-токен (для скриптов) и/или пароль веб-панели
-	// (сессионная cookie). Unix-сокет остаётся без неё — там граница файловые права.
-	h = mgmt.WebAuth(mgmt.WebAuthConfig{
-		Token:      cfg.Server.WebAPIToken,
-		UIPassword: cfg.Server.WebUIPassword,
-		TokenValidator: func(ctx context.Context, token string) bool {
-			digest := sha256.Sum256([]byte(token))
-			valid, err := st.AccessKeyValid(ctx, digest[:])
-			if err != nil {
-				log.Warn("validate management access key", "err", err)
-			}
-			return err == nil && valid
-		},
-	}, h)
-	srv := &http.Server{
-		Addr:              cfg.Server.WebAPI,
-		Handler:           h,
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    1 << 20,
-	}
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("web api", "err", err)
-		}
-	}()
-	go func() {
-		<-ctx.Done()
-		sctx, cancel := context.WithTimeout(context.Background(), webAPIShutdownTimeout)
-		defer cancel()
-		_ = srv.Shutdown(sctx)
-	}()
-	log.Info("web api listening", "addr", cfg.Server.WebAPI, "auth", true)
-}
-
-// resolveBoards возвращает набор досок для обслуживания: объединение активных
-// хабов из store и явно заданных во флаге (через запятую), с сохранением порядка
-// и без дублей. Пустой результат — board-less старт.
-func resolveBoards(ctx context.Context, flag string, st *sqlite.Store) []string {
-	seen := make(map[string]bool)
-	var out []string
-	add := func(id string) {
-		id = strings.TrimSpace(id)
-		if id == "" || seen[id] {
-			return
-		}
-		seen[id] = true
-		out = append(out, id)
-	}
-	// Активные хабы из store — приоритет по порядку создания (ListHubs сортирует).
-	if hubs, err := st.ListHubs(ctx); err == nil {
-		for _, h := range hubs {
-			if h.Status == store.HubActive {
-				add(h.ID)
-			}
-		}
-	}
-	// Явно заданные во флаге/env (через запятую) — добавляем и заводим, если новые.
-	for _, id := range strings.Split(flag, ",") {
-		add(id)
-	}
-	return out
-}
-
-// hubByID ищет запись хаба по id (store не отдаёт «по одному» — фильтруем список).
-func hubByID(ctx context.Context, st *sqlite.Store, id string) (store.Hub, error) {
-	hubs, err := st.ListHubs(ctx)
-	if err != nil {
-		return store.Hub{}, err
-	}
-	for _, h := range hubs {
-		if h.ID == id {
-			return h, nil
-		}
-	}
-	return store.Hub{}, store.ErrNotFound
-}
-
-// startHub присоединяется к доске board, поднимает хаб и регистрирует его в
-// store. board задаётся явно (а не берётся из cfg.Board.Hash) — так один сервер
-// поднимает несколько досок из общего cfg.
-func startHub(ctx context.Context, cfg config.Config, board string, log *slog.Logger, serverStatic crypto.Keypair, st *sqlite.Store, reconnectMetrics *yandex.ReconnectMetrics) (*hub.Server, error) {
-	// Локальная копия cfg с конкретной доской — boardOptions/resolveHubSlide
-	// читают cfg.Board.Hash.
-	bcfg := cfg
-	bcfg.Board.Hash = board
-	// Для уже известной доски лимит из панели имеет приоритет над глобальным
-	// дефолтом. Значение фиксируется на время жизни hub и меняется рестартом.
-	storedHub, hubLookupErr := hubByID(ctx, st, board)
-	hubWasStored := hubLookupErr == nil
-	if hubWasStored && storedHub.MaxLanes >= 1 && storedHub.MaxLanes <= 32 {
-		bcfg.Server.MaxLanes = storedHub.MaxLanes
-	}
-
-	laneOptions := boardOptions(bcfg)
-	laneOptions.Role = "server-lane"
-	laneOptions.Metrics = reconnectMetrics
-	laneOptions.Log = log.With("component", "board", "role", "server-lane", "board", board)
-	hubOptions := laneOptions
-	hubOptions.ReconnectForever = true
-	hubOptions.Role = "hub-control"
-	hubOptions.Log = log.With("component", "board", "role", "hub-control", "board", board)
-	hubSess, err := yandex.Join(ctx, hubOptions)
-	if err != nil {
-		return nil, fmt.Errorf("join board: %w", err)
-	}
-	hubSlide, err := resolveHubSlide(bcfg, hubSess)
-	if err != nil {
-		_ = hubSess.Close()
-		return nil, fmt.Errorf("resolve hub page: %w", err)
-	}
-	pool := poolExcluding(hubSess.Slides(), hubSlide)
-	if len(pool) == 0 {
-		_ = hubSess.Close()
-		return nil, fmt.Errorf("board has no free pages besides the hub slide")
-	}
-	srv, err := hub.NewServer(ctx, hub.ServerConfig{
-		HubSession:         hubSess,
-		HubSlide:           hubSlide,
-		Pool:               pool,
-		Dialer:             yandexDialer{laneOptions},
-		ServerStatic:       serverStatic,
-		Users:              st,
-		Codec:              codec.Z85Codec{},
-		Link:               linkOptions(bcfg, log),
-		MaxPayload:         cfg.Transport.MaxFramePayload,
-		StreamWindow:       cfg.Transport.StreamWindow,
-		MaxStreamWindow:    cfg.Transport.MaxStreamWindow,
-		CoalesceTarget:     cfg.Transport.CoalesceTarget,
-		StreamIdleTimeout:  cfg.Transport.StreamIdleTimeout,
-		IdleTimeout:        cfg.Server.IdleTimeout,
-		MaxLanes:           bcfg.Server.MaxLanes,
-		MaxSessionsPerUser: cfg.Server.MaxSessionsPerUser,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("start hub: %w", err)
-	}
-	// Регистрируем обслуживаемую доску (чтобы boards ls её показывал).
-	if _, err := st.UpsertHub(ctx, board, board, hubSlide); err != nil {
-		log.Warn("register hub", "err", err)
-	} else if !hubWasStored {
-		if err := st.SetHubMaxLanes(ctx, board, bcfg.Server.MaxLanes); err != nil {
-			log.Warn("persist hub max lanes", "err", err)
-		}
-	}
-	log.Info("server ready", "board", board, "hub", hubSlide, "pages", len(pool),
-		"window", link.ResolveRecvWindow(cfg.Transport.Window), "max_frame_payload", cfg.Transport.MaxFramePayload,
-		"stream_window", cfg.Transport.StreamWindow, "max_stream_window", cfg.Transport.MaxStreamWindow,
-		"max_lanes", bcfg.Server.MaxLanes, "coalesce_target", "adaptive", "coalesce_ceiling", cfg.Transport.CoalesceTarget,
-		"stream_idle_timeout", cfg.Transport.StreamIdleTimeout)
-	return srv, nil
-}
-
-// serverMetricsLoop logs the same aggregate snapshot exposed by GET /stats and
-// raises an explicit warning when successful reconnects form a storm.
-func serverMetricsLoop(ctx context.Context, stats func() mgmt.ServerStats, log *slog.Logger) {
-	t := time.NewTicker(serverMetricsInterval)
-	defer t.Stop()
+func (r *ServerRuntime) RunMetricsLog(ctx context.Context) {
+	ticker := time.NewTicker(serverMetricsInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
-			s := stats()
-			log.Info("server stats",
-				"hubs", s.HubsUp, "online_users", s.OnlineUsers,
-				"connections", s.ActiveConnections, "lanes", s.ActiveLanes,
-				"streams", s.ActiveStreams, "free_pages", s.FreePages,
-				"payload_rx_bytes", s.RxBytes, "payload_tx_bytes", s.TxBytes,
-				"network_scope", s.Network.Scope, "network_interfaces", strings.Join(s.Network.Interfaces, ","),
-				"network_rx_bytes", s.Network.RxBytes, "network_tx_bytes", s.Network.TxBytes,
-				"network_rx_bps", uint64(s.Network.RxBytesPerSecond),
-				"network_tx_bps", uint64(s.Network.TxBytesPerSecond),
-				"reconnects_1m", s.Transport.ReconnectsLastMinute,
-				"snapshot_bytes_1m", s.Transport.SnapshotBytesLastMinute,
-				"reconnect_circuit_open_total", s.Transport.CircuitOpenTotal,
-				"page_cleanup_runs", s.PageCleanupRuns,
-				"page_cleanup_deleted", s.PageCleanupDeleted,
-				"page_cleanup_failures", s.PageCleanupFailures,
-				"page_cleanup_quarantined", s.PageCleanupQuarantined)
-			if s.Transport.ReconnectsLastMinute >= reconnectStormPerMinute {
-				log.Warn("board reconnect storm",
-					"reconnects_1m", s.Transport.ReconnectsLastMinute,
-					"reconnects_5m", s.Transport.ReconnectsLastFiveMinutes,
-					"snapshot_bytes_1m", s.Transport.SnapshotBytesLastMinute,
-					"snapshot_bytes_5m", s.Transport.SnapshotBytesLastFiveMinutes,
-					"last_disconnect_reason", s.Transport.LastDisconnectReason)
-			}
+		case <-ticker.C:
+			s := r.Stats()
+			r.log.Info("server stats", "revision", s.Revision, "boards_running", s.BoardsRunning,
+				"online_users", s.UsersOnline, "connections", s.ActiveConnections,
+				"lanes", s.ActiveLanes, "streams", s.ActiveStreams,
+				"rx_bytes_since_start", s.RXBytesSinceStart, "tx_bytes_since_start", s.TXBytesSinceStart,
+				"reconnects_1m", s.Transport.ReconnectsLastMinute)
 		}
 	}
 }
 
-// storeStatsTimeout ограничивает запросы к store при сборке /stats — эти чтения
-// не должны подвешивать HTTP-ответ дашборда.
-const storeStatsTimeout = 3 * time.Second
-
-// logsFunc адаптирует кольцевой буфер лога к mgmt.Config.Logs. Nil-буфер
-// (например в тестах) даёт nil-функцию — эндпойнт /logs тогда отдаёт пустой
-// список.
-func logsFunc(buf *logging.Buffer) func(int) []mgmt.LogEntry {
-	if buf == nil {
+// RunServer starts the config-driven runtime and its two adapters: the gRPC
+// control plane and the optional read-only HTTP observability endpoint.
+func RunServer(ctx context.Context, cfg serverconfig.Config, source string, log *slog.Logger, logs *logging.Buffer) error {
+	runtime, err := NewServerRuntime(ctx, cfg, source, log, logs)
+	if err != nil {
+		return err
+	}
+	defer runtime.Close()
+	errCh := make(chan error, 2)
+	go func() { errCh <- controlapi.Serve(ctx, cfg.Management.GRPCListen, runtime, log) }()
+	if cfg.Management.HTTPListen != "" {
+		go func() {
+			log.Info("HTTP observability listening", "address", cfg.Management.HTTPListen)
+			errCh <- mgmt.Serve(ctx, cfg.Management.HTTPListen, mgmt.Handler(runtime, logs))
+		}()
+	}
+	if cfg.Observability.Enabled {
+		go runtime.RunMetricsLog(ctx)
+	}
+	select {
+	case <-ctx.Done():
 		return nil
-	}
-	return func(limit int) []mgmt.LogEntry {
-		entries := buf.Entries(limit)
-		out := make([]mgmt.LogEntry, len(entries))
-		for i, e := range entries {
-			out[i] = mgmt.LogEntry{Time: e.Time, Level: e.Level, Message: e.Message}
-		}
-		return out
+	case err := <-errCh:
+		return err
 	}
 }
 
-// statsFunc собирает агрегатную статистику для дашборда: персистентные счётчики
-// из store (клиенты, доски, суммарный трафик за завершённые сессии) плюс живой
-// снимок хаба (клиенты онлайн, свободные страницы, трафик активных сессий).
-func statsFunc(st *sqlite.Store, set *hubSet, network *netstats.Monitor, reconnects *yandex.ReconnectMetrics) func() mgmt.ServerStats {
-	return func() mgmt.ServerStats {
-		ctx, cancel := context.WithTimeout(context.Background(), storeStatsTimeout)
-		defer cancel()
-		out := mgmt.ServerStats{HubsUp: len(set.hubs)}
-		if users, err := st.ListUsers(ctx); err == nil {
-			out.Clients = len(users)
-			for _, u := range users {
-				if u.Status == store.UserActive {
-					out.ClientsActive++
-				}
-				out.RxBytes += u.RxBytes
-				out.TxBytes += u.TxBytes
-				connections := set.UserConnections(u.ID)
-				us := mgmt.UserStat{
-					ID: u.ID, Name: u.Name, Status: string(u.Status),
-					Connections: len(connections), RxBytes: u.RxBytes, TxBytes: u.TxBytes,
-				}
-				if !u.LastSeen.IsZero() {
-					lastSeen := u.LastSeen
-					us.LastSeen = &lastSeen
-				}
-				for _, conn := range connections {
-					us.ActiveRxBytes += conn.Received
-					us.ActiveTxBytes += conn.Written
-					us.Lanes += len(conn.Lanes)
-					us.Streams += len(conn.Streams)
-				}
-				us.Online = us.Connections > 0
-				if us.Online {
-					out.OnlineUsers++
-				}
-				us.RxBytes += us.ActiveRxBytes
-				us.TxBytes += us.ActiveTxBytes
-				out.ActiveConnections += us.Connections
-				out.ActiveLanes += us.Lanes
-				out.ActiveStreams += us.Streams
-				out.Users = append(out.Users, us)
-			}
-		}
-		if hubs, err := st.ListHubs(ctx); err == nil {
-			out.Boards = len(hubs)
-			for _, hb := range hubs {
-				if hb.Status == store.HubActive {
-					out.BoardsActive++
-				}
-			}
-		}
-		// Живой снимок по каждому поднятому хабу плюс агрегаты.
-		for _, nh := range set.hubs {
-			s := nh.srv.Stats()
-			out.ServingBoards = append(out.ServingBoards, nh.board)
-			out.ClientsOnline += s.Clients
-			out.FreePages += s.FreePages
-			out.PageCleanupRuns += s.PageCleanupRuns
-			out.PageCleanupDeleted += s.PageCleanupDeleted
-			out.PageCleanupFailures += s.PageCleanupFailures
-			out.PageCleanupQuarantined += s.PageCleanupQuarantined
-			// Трафик активных сессий ещё не осел в store — добавляем его к своду.
-			out.RxBytes += s.Received
-			out.TxBytes += s.Written
-			out.PerBoard = append(out.PerBoard, mgmt.BoardStat{
-				ID:                     nh.board,
-				Name:                   nh.name,
-				ClientsOnline:          s.Clients,
-				FreePages:              s.FreePages,
-				RxBytes:                s.Received,
-				TxBytes:                s.Written,
-				PageCleanupRuns:        s.PageCleanupRuns,
-				PageCleanupDeleted:     s.PageCleanupDeleted,
-				PageCleanupFailures:    s.PageCleanupFailures,
-				PageCleanupQuarantined: s.PageCleanupQuarantined,
-			})
-		}
-		if network != nil {
-			out.Network = networkStat(network.Snapshot())
-		}
-		out.Transport = transportStat(reconnects.Snapshot())
-		return out
-	}
-}
-
-func networkStat(s netstats.Snapshot) mgmt.NetworkStat {
-	return mgmt.NetworkStat{
-		Available: s.Available, Scope: s.Scope, Interfaces: s.Interfaces,
-		StartedAt: s.StartedAt, SampledAt: s.SampledAt,
-		RxBytes: s.RXBytes, TxBytes: s.TXBytes,
-		RxBytesSinceStart: s.RXBytesSinceStart, TxBytesSinceStart: s.TXBytesSinceStart,
-		RxBytesPerSecond: s.RXBytesPerSecond, TxBytesPerSecond: s.TXBytesPerSecond,
-	}
-}
-
-func transportStat(s yandex.ReconnectMetricsSnapshot) mgmt.TransportStat {
-	out := mgmt.TransportStat{
-		StartedAt:        s.StartedAt,
-		DisconnectsTotal: s.DisconnectsTotal, ReconnectsTotal: s.ReconnectsTotal,
-		ReconnectAttemptsFailed: s.ReconnectAttemptsFailed,
-		CircuitOpenTotal:        s.CircuitOpenTotal,
-		SnapshotObjectsTotal:    s.SnapshotObjectsTotal, SnapshotBytesTotal: s.SnapshotBytesTotal,
-		ReconnectsLastMinute:         s.ReconnectsLastMinute,
-		ReconnectsLastFiveMinutes:    s.ReconnectsLastFiveMinutes,
-		SnapshotBytesLastMinute:      s.SnapshotBytesLastMinute,
-		SnapshotBytesLastFiveMinutes: s.SnapshotBytesLastFiveMinutes,
-		LastDisconnectAt:             timePointer(s.LastDisconnectAt), LastDisconnectReason: s.LastDisconnectReason,
-		LastConnectedForMillis: s.LastConnectedFor.Milliseconds(),
-		LastReconnectAt:        timePointer(s.LastReconnectAt), LastDowntimeMillis: s.LastDowntime.Milliseconds(),
-		LastSnapshotObjects: s.LastSnapshotObjects, LastSnapshotBytes: s.LastSnapshotBytes,
-	}
-	for _, r := range s.PerRole {
-		out.PerRole = append(out.PerRole, mgmt.ReconnectRoleStat{
-			Role: r.Role, Board: r.Board,
-			DisconnectsTotal: r.DisconnectsTotal, ReconnectsTotal: r.ReconnectsTotal,
-			ReconnectAttemptsFailed: r.ReconnectAttemptsFailed,
-			CircuitOpenTotal:        r.CircuitOpenTotal,
-			SnapshotObjectsTotal:    r.SnapshotObjectsTotal, SnapshotBytesTotal: r.SnapshotBytesTotal,
-			ReconnectsLastMinute:    r.ReconnectsLastMinute,
-			SnapshotBytesLastMinute: r.SnapshotBytesLastMinute,
-			LastDisconnectAt:        timePointer(r.LastDisconnectAt), LastDisconnectReason: r.LastDisconnectReason,
-			LastConnectedForMillis: r.LastConnectedFor.Milliseconds(),
-			LastReconnectAt:        timePointer(r.LastReconnectAt), LastDowntimeMillis: r.LastDowntime.Milliseconds(),
-			LastSnapshotObjects: r.LastSnapshotObjects, LastSnapshotBytes: r.LastSnapshotBytes,
-		})
+func indexUsers(users []serverconfig.User) map[string]serverconfig.User {
+	out := make(map[string]serverconfig.User, len(users))
+	for _, user := range users {
+		out[user.Tag] = user
 	}
 	return out
+}
+
+func userPolicyChanged(a, b serverconfig.User) bool {
+	if a.IsEnabled() != b.IsEnabled() || a.MaxSessions != b.MaxSessions || a.MaxLanes != b.MaxLanes || len(a.Boards) != len(b.Boards) {
+		return true
+	}
+	for i := range a.Boards {
+		if a.Boards[i] != b.Boards[i] {
+			return true
+		}
+	}
+	return a.PrivateKey != b.PrivateKey || a.PublicKey != b.PublicKey
+}
+
+func boardRuntimeCompatible(a, b serverconfig.Board) bool {
+	return a.Hash == b.Hash && a.HubSlide == b.HubSlide && a.APIBase == b.APIBase && a.GuestName == b.GuestName
+}
+
+func runtimeGlobalsCompatible(a, b serverconfig.Config) bool {
+	return a.Server == b.Server && a.Transport == b.Transport
+}
+
+func cloneConfig(in serverconfig.Config) serverconfig.Config {
+	out := in
+	out.Boards = append([]serverconfig.Board(nil), in.Boards...)
+	out.Users = make([]serverconfig.User, len(in.Users))
+	for i, user := range in.Users {
+		out.Users[i] = user
+		out.Users[i].Boards = append([]string(nil), user.Boards...)
+	}
+	return out
+}
+
+func equalBytes(a, b []byte) bool {
+	return base64.RawStdEncoding.EncodeToString(a) == base64.RawStdEncoding.EncodeToString(b)
 }
 
 func timePointer(t time.Time) *time.Time {
@@ -538,105 +802,4 @@ func timePointer(t time.Time) *time.Time {
 	return &t
 }
 
-// backupFunc отдаёт консистентный снимок БД потоком. Снимок делается во
-// временный файл (VACUUM INTO), который удаляется при закрытии возвращённого
-// ReadCloser.
-func backupFunc(st *sqlite.Store) func(context.Context) (io.ReadCloser, int64, error) {
-	return func(ctx context.Context) (io.ReadCloser, int64, error) {
-		tmp, err := os.CreateTemp("", "bproxy-backup-*.db")
-		if err != nil {
-			return nil, 0, err
-		}
-		path := tmp.Name()
-		// VACUUM INTO сам создаёт файл и отказывается перезаписывать существующий,
-		// поэтому пустышку от CreateTemp убираем, оставляя только имя.
-		_ = tmp.Close()
-		_ = os.Remove(path)
-		if err := st.Backup(ctx, path); err != nil {
-			_ = os.Remove(path)
-			return nil, 0, err
-		}
-		f, err := os.Open(path)
-		if err != nil {
-			_ = os.Remove(path)
-			return nil, 0, err
-		}
-		var size int64
-		if fi, err := f.Stat(); err == nil {
-			size = fi.Size()
-		}
-		return &tempFileReader{File: f, path: path}, size, nil
-	}
-}
-
-// tempFileReader — открытый временный файл, который удаляет себя при Close.
-type tempFileReader struct {
-	*os.File
-	path string
-}
-
-func (t *tempFileReader) Close() error {
-	err := t.File.Close()
-	_ = os.Remove(t.path)
-	return err
-}
-
-// restoreFunc принимает загруженный дамп БД и кладёт его staging-файлом рядом с
-// БД (<path>.import), затем инициирует плавный перезапуск: фактическая подмена
-// файла происходит в applyPendingRestore при следующем старте, до открытия
-// store, чтобы не гонять запись по уже открытому файлу.
-func restoreFunc(dbPath string, restart func()) func(context.Context, io.Reader) error {
-	return func(ctx context.Context, r io.Reader) error {
-		staging := dbPath + ".import"
-		f, err := os.OpenFile(staging, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-		if err != nil {
-			return fmt.Errorf("create staging: %w", err)
-		}
-		if _, err := io.Copy(f, r); err != nil {
-			_ = f.Close()
-			_ = os.Remove(staging)
-			return fmt.Errorf("write staging: %w", err)
-		}
-		if err := f.Sync(); err != nil {
-			_ = f.Close()
-			_ = os.Remove(staging)
-			return fmt.Errorf("sync staging: %w", err)
-		}
-		if err := f.Close(); err != nil {
-			_ = os.Remove(staging)
-			return fmt.Errorf("close staging: %w", err)
-		}
-		if err := sqlite.Validate(ctx, staging); err != nil {
-			_ = os.Remove(staging)
-			return fmt.Errorf("validate staging: %w", err)
-		}
-		if restart != nil {
-			restart()
-		}
-		return nil
-	}
-}
-
-// applyPendingRestore вносит отложенный импорт БД: если рядом с БД лежит
-// staging-файл <path>.import, атомарно переносит его на место БД и удаляет
-// сопутствующие -wal/-shm (они относятся к прежнему файлу). Вызывается в начале
-// RunServer, до открытия store.
-func applyPendingRestore(dbPath string, log *slog.Logger) error {
-	staging := dbPath + ".import"
-	if _, err := os.Stat(staging); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	if err := os.Rename(staging, dbPath); err != nil {
-		return fmt.Errorf("swap in imported db: %w", err)
-	}
-	for _, sidecar := range []string{dbPath + "-wal", dbPath + "-shm"} {
-		if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
-			log.Warn("remove stale sqlite sidecar", "path", sidecar, "err", err)
-		}
-	}
-	log.Info("imported database applied", "path", dbPath)
-	return nil
-}
+func boolPointer(value bool) *bool { return &value }
