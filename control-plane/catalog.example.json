@@ -1,0 +1,64 @@
+{
+  "node": {
+    "id": "node-1",
+    "name": "Primary node",
+    "state": "enabled",
+    "core": {
+      "server": {
+        "private_key": "base64:REPLACE_WITH_32_BYTE_SERVER_PRIVATE_KEY",
+        "idle_timeout": "90s",
+        "allow_private_egress": false
+      },
+      "transport": {
+        "window": 0,
+        "max_frame_payload": 4194304,
+        "stream_window": 1048576,
+        "max_stream_window": 33554432,
+        "ack_timeout": "6s",
+        "coalesce_target": 0,
+        "stream_idle_timeout": "0s"
+      },
+      "management": {
+        "grpc_listen": "unix:///run/bproxy/control.sock",
+        "http_listen": ""
+      },
+      "observability": {
+        "enabled": true,
+        "log_level": "info"
+      }
+    }
+  },
+  "boards": [
+    {
+      "id": "primary",
+      "name": "Primary board",
+      "hash": "REPLACE_WITH_BOARD_HASH",
+      "hub_slide": "",
+      "api_base": "",
+      "guest_name": "",
+      "state": "enabled",
+      "max_lanes": 2
+    }
+  ],
+  "users": [
+    {
+      "id": "alice",
+      "name": "Alice",
+      "private_key": "base64:REPLACE_WITH_32_BYTE_USER_PRIVATE_KEY",
+      "public_key": "",
+      "state": "enabled",
+      "max_sessions": 2,
+      "max_lanes": 2
+    }
+  ],
+  "assignment": {
+    "node_id": "node-1",
+    "board_ids": ["primary"],
+    "users": [
+      {
+        "user_id": "alice",
+        "board_ids": ["primary"]
+      }
+    ]
+  }
+}

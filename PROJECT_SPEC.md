@@ -4,14 +4,16 @@
 
 BoardProxy — SOCKS5 TCP/UDP и HTTP-прокси, у которого транспортом служат текстовые объекты
 на страницах Yandex Board. Создание объекта передаёт пакет, удаление объекта
-подтверждает его получение. Репозиторий состоит из двух самостоятельных частей:
+подтверждает его получение. Репозиторий состоит из следующих частей:
 
-- `core/` — Go-бинарник `bproxy`: клиент, сервер и management API;
-- `panel/` — самостоятельная React/Go multi-node панель: gateway хранит реестр
-  нод и старый HTTP API; после stateless-рефакторинга он считается legacy и не
-  включён в штатный Compose до появления gRPC control-plane адаптера;
-- `docker-compose.yml` — запуск stateless core с read-only TOML и эфемерным
-  Unix gRPC-сокетом.
+- `core/` — stateless Go-бинарник `bproxy`: data plane и локальный management API;
+- `node-agent/` — агент ноды: запускает core, применяет desired config,
+  собирает два независимых потока трафика и гарантированно доставляет их хабу;
+- `control-plane/` — `bproxy-hub`: нормализованный control catalog, compiler,
+  immutable revisions, reconciler, enrollment, mTLS node stream и development
+  файловые адаптеры хранения;
+- `docker-compose.yml` — локальная/dev-связка hub + node; отдельного legacy
+  panel/gateway больше нет.
 
 Главный путь данных:
 
@@ -105,7 +107,7 @@ pingTimeout` считается обрывом даже без TCP EOF — эт�
 зашифрованном rendezvous assignment передаёт серверный `max_lanes` конкретной
 доски. Формат v4 сохранён для negotiated fallback при поэтапном обновлении.
 
-## 4. Desired state, gRPC и статистика
+## 4. Core, node-agent, control-plane и статистика
 
 TOML — единственный долговечный desired state core. gRPC применяет изменения к
 живому runtime без рестарта: пользовательская policy публикуется атомарно,
@@ -115,18 +117,57 @@ TOML — единственный долговечный desired state core. gRP
 заменяет весь срез пользователей и досок. Каждая mutation проверяет
 `expected_revision`. Изменения gRPC не
 записываются обратно: следующий `Reload` снова делает файл источником истины.
+Отдельные `AddUser`/`AddBoard` возвращают `ALREADY_EXISTS` при конфликте тега,
+тогда как `Replace*` предназначены для idempotent reconciliation. CLI после
+reactive add напоминает перенести ресурс в долговечный source-конфиг.
 
 Core не хранит историческую статистику. Он отдаёт active users/connections/
-lanes/streams, payload и network bytes since start, состояние pool/cleanup и
-transport reconnect counters. Для истории внешний control plane должен
-периодически scrape-ить gRPC `GetStats` или read-only `GET /stats`.
+lanes/streams, payload bytes since start по каждому пользователю, состояние
+pool/cleanup и transport reconnect counters. Интерфейсные Linux-счётчики из
+core удалены: это ответственность node-agent.
+
+Node-agent инициирует единственный исходящий bidirectional gRPC stream к хабу
+по mTLS. Одноразовый bootstrap secret содержит node ID, адрес хаба, token и CA,
+но не приватный ключ. Ключ ноды и CSR создаются локально; сертификат автоматически
+обновляется до истечения. Desired TOML приходит с монотонной revision и SHA-256,
+сначала проверяется `bproxy serve --test`, затем применяется через локальный
+Unix gRPC core. При несовместимом изменении агент перезапускает core, а при
+неудаче восстанавливает last-known-good config.
+
+Статистика идёт двумя раздельными потоками, которые нельзя складывать:
+
+1. `InterfaceTrafficBatch` — RX/TX bytes, packets, errors и drops выбранных
+   интерфейсов network namespace контейнера ноды. Сюда входит payload,
+   Board/API-транспорт, gRPC control traffic и прочий overhead контейнера.
+2. `UserTrafficBatch` — логический расшифрованный payload, атрибутированный core
+   по `user_tag`; RX означает upload от клиента, TX — download к клиенту.
+
+Node-agent считает дельты от kernel/core cumulative counters. Checkpoint и
+outbox event фиксируются одной SQLite-транзакцией в WAL с `synchronous=FULL`;
+хаб сначала идемпотентно
+сохраняет batch по UUID и только потом ACK-ает. После reconnect неподтверждённые
+batch отправляются повторно. Первый interface sample задаёт baseline, reset
+счётчика/рестарт core начинает новую эпоху без отрицательных дельт.
 HTTP `/healthz` проверяет только жизнь процесса, а `/readyz` возвращает 200,
 только когда активна хотя бы одна включённая доска.
 
-Старая панель опирается на удалённые SQLite, HTTP CRUD, backup и restart
-handlers. Она оставлена в репозитории как отдельный legacy-компонент, но не
-подключена к Compose. Масштабируемая замена должна владеть durable config,
-секретами и аудитом, а core — оставаться disposable runtime.
+Control-plane является владельцем per-node агрегата `Node + Board + User +
+NodeAssignment`. Ресурсы имеют optimistic version и состояния `enabled`,
+`disabled`, `revoked`; отзыв терминален, а секрет отозванного пользователя не
+попадает в следующий core snapshot. Каждая принятая mutation валидирует весь
+агрегат, детерминированно компилирует TOML и создаёт immutable revision с
+SHA-256 и ссылкой на предыдущую. Node status отдельно проецирует online,
+readiness, последний ApplyResult и desired/applied drift. In-process event bus
+будит подключённую ноду сразу, периодический reconcile страхует потерянные и
+cross-process уведомления.
+
+Начальный control-plane использует однопроцессный файловый adapter для catalog,
+revisions, status, append-only audit, одноразовых tokens, CA и двух деревьев
+protobuf traffic batches. Application layer зависит от узких портов, поэтому
+production-адаптеры PostgreSQL/ClickHouse можно добавить без изменения node
+protocol. Файловый adapter не даёт общей транзакции между catalog/audit/revision;
+reconciler чинит compiled desired, а транзакционная гарантия входит в следующий
+этап. Core при этом остаётся disposable.
 
 ## 5. Практический маршрут отладки
 
@@ -146,7 +187,6 @@ handlers. Она оставлена в репозитории как отдел�
    address, mux сохраняет границу сообщения, egress UDP socket возвращает ответ
    с исходным source address.
 
-Основные проверки: `cd core && make test` (или `go test ./...`), отдельно
-`go test -race ./...`; для панели — `cd panel && npm run build`. Live-тесты
-Yandex включаются переменными, описанными в `core/internal/boardtest` и
-`core/README.md`.
+Основные проверки: `go test ./...` отдельно в `core`, `node-agent` и
+`control-plane/backend`, затем `go test -race ./...`. Live-тесты Yandex включаются
+переменными, описанными в `core/internal/boardtest` и `core/README.md`.

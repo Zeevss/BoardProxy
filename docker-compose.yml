@@ -1,28 +1,29 @@
-# Stateless BoardProxy core. Copy core/config.example.toml to config.toml,
-# generate the keys and fill in the board hash before starting.
-
 services:
-  core:
-    build: ./core
+  hub:
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile
     restart: unless-stopped
-    command: ["serve", "--config", "/etc/bproxy/config.toml"]
-    environment:
-      # Raw RX/TX Linux bridge, read-only counters below.
-      BPROXY_NETWORK_STATS_DIR: /host-net-stats
-      BPROXY_NETWORK_INTERFACE: bproxy0
+    command: ["serve", "--listen", ":8443", "--server-names", "hub,localhost"]
+    ports:
+      - "${BPROXY_HUB_PORT:-8443}:8443"
     volumes:
-      - ${BPROXY_CONFIG:-./config.toml}:/etc/bproxy/config.toml:ro
-      - bproxy-run:/run/bproxy
-      - /sys/class/net/bproxy0/statistics:/host-net-stats:ro
-    networks:
-      - internal
+      - hub-data:/var/lib/bproxy-hub
+
+  node:
+    build:
+      context: .
+      dockerfile: node-agent/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - hub
+    environment:
+      BPROXY_NODE_SECRET: ${BPROXY_NODE_SECRET:-}
+      BPROXY_STATS_INTERFACES: ${BPROXY_STATS_INTERFACES:-eth0}
+      BPROXY_CORE_CONTROL: unix:///run/bproxy/control.sock
+    volumes:
+      - node-data:/var/lib/bproxy-node
 
 volumes:
-  bproxy-run:
-
-networks:
-  internal:
-    driver: bridge
-    # Stable name lets core read only the bridge counters, not Docker socket.
-    driver_opts:
-      com.docker.network.bridge.name: bproxy0
+  hub-data:
+  node-data:

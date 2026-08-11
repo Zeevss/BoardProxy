@@ -241,6 +241,7 @@ func reloadCmd(address *string) *cobra.Command {
 
 func usersCmd(address *string) *cobra.Command {
 	cmd := &cobra.Command{Use: "users", Short: "inspect or mutate runtime users over gRPC"}
+	cmd.AddCommand(addUserCmd(address))
 	cmd.AddCommand(&cobra.Command{Use: "list", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
 		return withControl(c.Context(), *address, func(client controlapi.ControlServiceClient) error {
 			resp, err := client.ListUsers(c.Context(), &emptypb.Empty{})
@@ -283,6 +284,7 @@ func usersCmd(address *string) *cobra.Command {
 
 func boardsCmd(address *string) *cobra.Command {
 	cmd := &cobra.Command{Use: "boards", Short: "inspect or mutate runtime boards over gRPC"}
+	cmd.AddCommand(addBoardCmd(address))
 	cmd.AddCommand(&cobra.Command{Use: "list", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
 		return withControl(c.Context(), *address, func(client controlapi.ControlServiceClient) error {
 			resp, err := client.ListBoards(c.Context(), &emptypb.Empty{})
@@ -313,6 +315,113 @@ func boardsCmd(address *string) *cobra.Command {
 		return err
 	}, address, false))
 	return cmd
+}
+
+func addUserCmd(address *string) *cobra.Command {
+	var (
+		name, privateKey, publicKey string
+		boards                      []string
+		maxSessions, maxLanes       int
+		disabled                    bool
+		revision                    uint64
+	)
+	cmd := &cobra.Command{
+		Use: "add <tag>", Short: "add a user to the live runtime", Args: cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			if name == "" {
+				name = args[0]
+			}
+			if (privateKey == "") == (publicKey == "") {
+				return errors.New("set exactly one of --private-key or --public-key")
+			}
+			if len(boards) == 0 {
+				return errors.New("at least one --boards value is required")
+			}
+			enabled := !disabled
+			return withControl(c.Context(), *address, func(client controlapi.ControlServiceClient) error {
+				result, err := client.AddUser(c.Context(), &controlapi.AddUserRequest{
+					ExpectedRevision: revision,
+					User: &controlapi.UserSpec{
+						Tag: args[0], Name: name, PrivateKey: privateKey, PublicKey: publicKey,
+						Enabled: &enabled, Boards: boards, MaxSessions: int32(maxSessions), MaxLanes: int32(maxLanes),
+					},
+				})
+				if err != nil {
+					return err
+				}
+				printRuntimeOnlyWarning(c.Context(), client, "user", args[0], result.Revision)
+				return nil
+			})
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&name, "name", "", "display name (defaults to tag)")
+	f.StringVar(&privateKey, "private-key", "", "base64:<32-byte-user-private-key>")
+	f.StringVar(&publicKey, "public-key", "", "migration-only base64:<32-byte-user-public-key>")
+	f.StringSliceVar(&boards, "boards", nil, "allowed board tags")
+	f.IntVar(&maxSessions, "max-sessions", 0, "maximum simultaneous sessions; 0 is unlimited")
+	f.IntVar(&maxLanes, "max-lanes", 1, "maximum lanes per session (1..32)")
+	f.BoolVar(&disabled, "disabled", false, "create the user disabled")
+	f.Uint64Var(&revision, "revision", 0, "expected runtime revision; 0 uses the current revision")
+	return cmd
+}
+
+func addBoardCmd(address *string) *cobra.Command {
+	var (
+		name, hash, hubSlide, apiBase, guestName string
+		maxLanes                                 int
+		disabled                                 bool
+		revision                                 uint64
+	)
+	cmd := &cobra.Command{
+		Use: "add <tag>", Short: "add a board to the live runtime", Args: cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			if name == "" {
+				name = args[0]
+			}
+			if hash == "" {
+				return errors.New("--hash is required")
+			}
+			enabled := !disabled
+			return withControl(c.Context(), *address, func(client controlapi.ControlServiceClient) error {
+				result, err := client.AddBoard(c.Context(), &controlapi.AddBoardRequest{
+					ExpectedRevision: revision,
+					Board: &controlapi.BoardSpec{
+						Tag: args[0], Name: name, Hash: hash, HubSlide: hubSlide, ApiBase: apiBase,
+						GuestName: guestName, Enabled: &enabled, MaxLanes: int32(maxLanes),
+					},
+				})
+				if err != nil {
+					return err
+				}
+				printRuntimeOnlyWarning(c.Context(), client, "board", args[0], result.Revision)
+				return nil
+			})
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&name, "name", "", "display name (defaults to tag)")
+	f.StringVar(&hash, "hash", "", "whiteboard hash")
+	f.StringVar(&hubSlide, "hub-slide", "", "fixed hub slide; empty uses deterministic discovery")
+	f.StringVar(&apiBase, "api-base", "", "board REST API base URL")
+	f.StringVar(&guestName, "guest-name", "", "board guest display-name prefix")
+	f.IntVar(&maxLanes, "max-lanes", 1, "maximum lanes per session (1..32)")
+	f.BoolVar(&disabled, "disabled", false, "create the board disabled")
+	f.Uint64Var(&revision, "revision", 0, "expected runtime revision; 0 uses the current revision")
+	return cmd
+}
+
+func printRuntimeOnlyWarning(ctx context.Context, client controlapi.ControlServiceClient, kind, tag string, revision uint64) {
+	source := "the durable desired-state config"
+	if runtime, err := client.GetRuntime(ctx, &emptypb.Empty{}); err == nil {
+		if runtime.ConfigSource == "stdin:" || runtime.ConfigSource == "-" {
+			source = "the hub/source that generated stdin"
+		} else if runtime.ConfigSource != "" {
+			source = runtime.ConfigSource
+		}
+	}
+	fmt.Printf("added %s %q at runtime revision %d\n", kind, tag, revision)
+	fmt.Fprintf(os.Stderr, "warning: runtime-only change; add this %s to %s or reload/restart will remove it\n", kind, source)
 }
 
 func setEnabledCmd(name string, call func(context.Context, controlapi.ControlServiceClient, *controlapi.SetEnabledRequest) error,

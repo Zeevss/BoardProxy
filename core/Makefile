@@ -1,12 +1,10 @@
-.PHONY: build test vet fmt tidy clean deploy all mobile-check mobile-aar
+.PHONY: all build windows test race vet fmt tidy clean mobile-check mobile-aar
 
 all: fmt vet test build
 
-deploy: build deploy-server
-
-build: client-cli client-windows-cli
-
 BIN_DIR := bin
+BINARY := $(BIN_DIR)/bproxy
+WINDOWS_BINARY := $(BIN_DIR)/bproxy.exe
 MOBILE_JAVA_PKG ?= io.boardproxy
 MOBILE_TARGETS ?= android/arm64,android/arm,android/amd64
 MOBILE_OUTPUT ?= bin/boardproxy.aar
@@ -14,15 +12,18 @@ MOBILE_ANDROID_API ?= 26
 MOBILE_CGO_LDFLAGS ?= -O2 -g -Wl,-z,max-page-size=16384
 MOBILE_GOFLAGS ?= -buildvcs=false
 
-client-cli:
-	go build -o $(BIN_DIR)/bproxy-cli ./cmd/bproxy
+build:
+	go build -o $(BINARY) ./cmd/bproxy
 
-client-windows-cli:
-	GOOS=windows GOARCH=amd64 go build -o $(BIN_DIR)/bproxy-cli.exe ./cmd/bproxy
+windows:
+	GOOS=windows GOARCH=amd64 go build -o $(WINDOWS_BINARY) ./cmd/bproxy
 
 
 test:
 	go test ./...
+
+race:
+	go test -race ./...
 
 vet:
 	go vet ./...
@@ -43,17 +44,4 @@ mobile-aar:
 	GOFLAGS="$(MOBILE_GOFLAGS)" CGO_LDFLAGS="$(MOBILE_CGO_LDFLAGS)" gomobile bind -target=$(MOBILE_TARGETS) -androidapi=$(MOBILE_ANDROID_API) -javapkg $(MOBILE_JAVA_PKG) -o $(MOBILE_OUTPUT) ./pkg/mobile
 
 clean:
-	rm -rf bin
-
-SERVER = michael
-
-pushing-server:
-	@echo "Pushing server..."
-	ssh ${SERVER} "pkill bproxy || true"
-	tar -C . -cf - . | ssh ${SERVER} "mkdir -p ~/bproxy && tar -xf - -C ~/bproxy"
-
-deploy-server:
-	@echo "Deploying the application..."
-	ssh ${SERVER} "pkill bproxy || true"
-	scp ./bin/bproxy ${SERVER}:~/bproxy-bin
-	ssh ${SERVER} "chmod +x ~/bproxy-bin && ~/bproxy-bin serve -b 085db13e3c6d5928cf4ea67cf07fbefc --log debug"
+	rm -f $(BINARY) $(WINDOWS_BINARY) $(MOBILE_OUTPUT)

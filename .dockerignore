@@ -1,0 +1,14 @@
+.git
+.idea
+.agents
+.codex
+.zcode
+android
+desktop-app
+**/node_modules
+**/dist
+**/build
+*.log
+.env
+config.toml
+client.toml

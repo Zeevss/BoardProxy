@@ -58,6 +58,40 @@ func TestRuntimeConfigMutationAndRevision(t *testing.T) {
 	}
 }
 
+func TestRuntimeAddsResourcesWithoutReplacingExistingTags(t *testing.T) {
+	cfg := runtimeTestConfig(t)
+	r, err := NewServerRuntime(context.Background(), cfg, "stdin:", slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if err := r.AddUser(1, cfg.Users[0]); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("duplicate user error = %v, want ErrAlreadyExists", err)
+	}
+	if err := r.AddBoard(1, cfg.Boards[0]); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("duplicate board error = %v, want ErrAlreadyExists", err)
+	}
+
+	board := cfg.Boards[0]
+	board.Tag, board.Name, board.Hash = "backup", "Backup", "backup-hash"
+	if err := r.AddBoard(1, board); err != nil {
+		t.Fatal(err)
+	}
+	user := cfg.Users[0]
+	user.Tag, user.Name, user.Boards = "bob", "Bob", []string{"backup"}
+	key, err := crypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	user.PrivateKey = "base64:" + base64.StdEncoding.EncodeToString(key.Private())
+	if err := r.AddUser(2, user); err != nil {
+		t.Fatal(err)
+	}
+	if r.Revision() != 3 || len(r.Config().Boards) != 2 || len(r.Config().Users) != 2 {
+		t.Fatalf("reactive additions missing: revision=%d config=%+v", r.Revision(), r.Config())
+	}
+}
+
 func TestRuntimeSnapshotMutationIsAtomic(t *testing.T) {
 	cfg := runtimeTestConfig(t)
 	r, err := NewServerRuntime(context.Background(), cfg, "stdin:", slog.New(slog.NewTextHandler(io.Discard, nil)), nil)

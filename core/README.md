@@ -83,8 +83,8 @@ defined in [`api/control/v1/control.proto`](api/control/v1/control.proto) and
 supports:
 
 - `GetRuntime`, `Reload`, atomic `ApplySnapshot`;
-- `ListUsers`, `ReplaceUser`, `SetUserEnabled`, `RemoveUser`, `GetKeylink`;
-- `ListBoards`, `ReplaceBoard`, `SetBoardEnabled`, `RemoveBoard`;
+- `ListUsers`, `AddUser`, `ReplaceUser`, `SetUserEnabled`, `RemoveUser`, `GetKeylink`;
+- `ListBoards`, `AddBoard`, `ReplaceBoard`, `SetBoardEnabled`, `RemoveBoard`;
 - `GetStats`.
 
 Every successful mutation increments a runtime revision. Clients may provide
@@ -101,6 +101,10 @@ reload because stdin is not replayable.
 Built-in CLI examples:
 
 ```sh
+bproxy --control unix:///run/bproxy/control.sock boards add backup \
+  --name "Backup board" --hash BOARD_HASH --max-lanes 2
+bproxy --control unix:///run/bproxy/control.sock users add bob \
+  --name Bob --private-key 'base64:…' --boards backup --max-lanes 2
 bproxy --control unix:///run/bproxy/control.sock users list
 bproxy --control unix:///run/bproxy/control.sock users keylink alice
 bproxy --control unix:///run/bproxy/control.sock users disable alice
@@ -113,6 +117,12 @@ bproxy --control unix:///run/bproxy/control.sock boards remove primary
 bproxy --control unix:///run/bproxy/control.sock reload
 bproxy --control unix:///run/bproxy/control.sock stats
 ```
+
+`AddUser` and `AddBoard` reject an existing tag with gRPC `ALREADY_EXISTS`;
+`ReplaceUser` and `ReplaceBoard` intentionally replace-or-create. After every
+CLI `add`, the command prints the runtime revision and warns which durable
+config source must also be updated. Otherwise a reload or process restart
+correctly removes that ephemeral resource.
 
 The protobuf API exposes full resource replacement and atomic user/board
 snapshots directly. The CLI deliberately keeps full specs out of flags:
@@ -134,7 +144,6 @@ keeps only values needed to operate the current runtime:
 - payload RX/TX totals since process start, globally and per user;
 - board pool/cleanup state and failures;
 - reconnect, circuit-breaker and snapshot counters;
-- network-interface counters relative to the process start sample;
 - the most recent disconnect/reconnect timestamps and reason.
 
 There are no billing totals, historical time series or per-target records.
@@ -186,21 +195,12 @@ enable the same behavior with `--retry-initial`; Android enables it by default.
 
 ## Docker
 
-The root Compose file mounts the desired state read-only and keeps only the
-ephemeral gRPC socket in a runtime volume:
-
-```sh
-cp core/config.example.toml config.toml
-# fill keys and board values
-docker compose run --rm core serve --config /etc/bproxy/config.toml --test
-docker compose up -d --build core
-docker compose exec core bproxy --control unix:///run/bproxy/control.sock stats
-```
-
-No `/data` volume is required. The old multi-node panel depended on the removed
-stateful HTTP CRUD API and is intentionally not wired into Compose. Its proper
-replacement is a separate control-plane reconciler that owns durable desired
-state and calls the gRPC API.
+In the root Compose topology core is not a standalone service. `node-agent`
+runs it as a child process, supplies the hub-owned desired TOML and keeps its
+Unix control socket private inside the node container. See
+[`../control-plane/README.md`](../control-plane/README.md) for the bootstrap
+sequence. A standalone core container remains useful for local data-plane
+development, but it has no durable database or statistics volume.
 
 ## Build and tests
 

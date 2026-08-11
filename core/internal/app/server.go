@@ -21,7 +21,6 @@ import (
 	"bproxy-core/internal/keylink"
 	"bproxy-core/internal/logging"
 	"bproxy-core/internal/mgmt"
-	"bproxy-core/internal/netstats"
 	"bproxy-core/internal/serverconfig"
 	"bproxy-core/internal/telemetry"
 )
@@ -33,6 +32,7 @@ const (
 )
 
 var ErrRevisionConflict = errors.New("app: config revision conflict")
+var ErrAlreadyExists = errors.New("app: resource already exists")
 
 type BoardState string
 
@@ -107,7 +107,6 @@ type ServerRuntime struct {
 	logs       *logging.Buffer
 	registry   *control.Registry
 	serverKP   crypto.Keypair
-	network    *netstats.Monitor
 	reconnects *yandex.ReconnectMetrics
 	startBoard func(context.Context, serverconfig.Config, serverconfig.Board) (*hub.Server, string, int, error)
 }
@@ -136,9 +135,6 @@ func NewServerRuntime(ctx context.Context, cfg serverconfig.Config, source strin
 		reconnects: yandex.NewReconnectMetrics(),
 	}
 	r.startBoard = r.startBoardAttempt
-	if cfg.Observability.Enabled {
-		r.network = netstats.Start(rctx)
-	}
 	r.revision.Store(1)
 	for _, board := range cfg.Boards {
 		if !board.IsEnabled() {
@@ -468,6 +464,20 @@ func (r *ServerRuntime) ReplaceUser(expected uint64, user serverconfig.User) err
 	return r.ApplyConfig(expected, cfg)
 }
 
+func (r *ServerRuntime) AddUser(expected uint64, user serverconfig.User) error {
+	if expected == 0 {
+		expected = r.Revision()
+	}
+	cfg := r.Config()
+	for _, existing := range cfg.Users {
+		if existing.Tag == user.Tag {
+			return fmt.Errorf("%w: user %q", ErrAlreadyExists, user.Tag)
+		}
+	}
+	cfg.Users = append(cfg.Users, user)
+	return r.ApplyConfig(expected, cfg)
+}
+
 func (r *ServerRuntime) SetUserEnabled(expected uint64, tag string, enabled bool) error {
 	if expected == 0 {
 		expected = r.Revision()
@@ -519,6 +529,20 @@ func (r *ServerRuntime) ReplaceBoard(expected uint64, board serverconfig.Board) 
 	if !replaced {
 		cfg.Boards = append(cfg.Boards, board)
 	}
+	return r.ApplyConfig(expected, cfg)
+}
+
+func (r *ServerRuntime) AddBoard(expected uint64, board serverconfig.Board) error {
+	if expected == 0 {
+		expected = r.Revision()
+	}
+	cfg := r.Config()
+	for _, existing := range cfg.Boards {
+		if existing.Tag == board.Tag {
+			return fmt.Errorf("%w: board %q", ErrAlreadyExists, board.Tag)
+		}
+	}
+	cfg.Boards = append(cfg.Boards, board)
 	return r.ApplyConfig(expected, cfg)
 }
 
@@ -686,14 +710,6 @@ func (r *ServerRuntime) Stats() telemetry.Stats {
 			}
 		}
 		out.Boards = append(out.Boards, bs)
-	}
-	if r.network != nil {
-		n := r.network.Snapshot()
-		out.Network = telemetry.NetworkStats{
-			Available: n.Available, Scope: n.Scope, Interfaces: n.Interfaces, SampledAt: n.SampledAt,
-			RXBytesSinceStart: n.RXBytesSinceStart, TXBytesSinceStart: n.TXBytesSinceStart,
-			RXBytesPerSecond: n.RXBytesPerSecond, TXBytesPerSecond: n.TXBytesPerSecond,
-		}
 	}
 	t := r.reconnects.Snapshot()
 	out.Transport = telemetry.TransportStats{

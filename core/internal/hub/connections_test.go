@@ -55,8 +55,8 @@ func TestUserConnectionsReportsLiveSession(t *testing.T) {
 }
 
 // TestSessionCloseAddsUserTraffic проверяет, что при закрытии клиентской
-// сессии hub персистит её финальный трафик через UserStore.AddUserTraffic —
-// и что после закрытия UserConnections для него снова пуст.
+// сессии hub передаёт финальный трафик process-local registry и что после
+// закрытия UserConnections для пользователя снова пуст.
 func TestSessionCloseAddsUserTraffic(t *testing.T) {
 	h := newTestHub(t, []string{"p1", "p2"})
 	serveEcho(h.srv)

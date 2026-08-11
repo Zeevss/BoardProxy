@@ -21,7 +21,6 @@ type Stats struct {
 	TXBytesSinceStart uint64         `json:"tx_bytes_since_start"`
 	Users             []UserStats    `json:"users"`
 	Boards            []BoardStats   `json:"boards"`
-	Network           NetworkStats   `json:"network"`
 	Transport         TransportStats `json:"transport"`
 }
 
@@ -55,17 +54,6 @@ type BoardStats struct {
 	PageCleanupDeleted     uint64 `json:"page_cleanup_deleted"`
 	PageCleanupFailures    uint64 `json:"page_cleanup_failures"`
 	PageCleanupQuarantined uint64 `json:"page_cleanup_quarantined"`
-}
-
-type NetworkStats struct {
-	Available         bool      `json:"available"`
-	Scope             string    `json:"scope"`
-	Interfaces        []string  `json:"interfaces"`
-	SampledAt         time.Time `json:"sampled_at"`
-	RXBytesSinceStart uint64    `json:"rx_bytes_since_start"`
-	TXBytesSinceStart uint64    `json:"tx_bytes_since_start"`
-	RXBytesPerSecond  float64   `json:"rx_bytes_per_second"`
-	TXBytesPerSecond  float64   `json:"tx_bytes_per_second"`
 }
 
 type TransportStats struct {

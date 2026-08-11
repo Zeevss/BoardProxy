@@ -24,11 +24,13 @@ const (
 	ControlService_Reload_FullMethodName          = "/bproxy.control.v1.ControlService/Reload"
 	ControlService_ApplySnapshot_FullMethodName   = "/bproxy.control.v1.ControlService/ApplySnapshot"
 	ControlService_ListUsers_FullMethodName       = "/bproxy.control.v1.ControlService/ListUsers"
+	ControlService_AddUser_FullMethodName         = "/bproxy.control.v1.ControlService/AddUser"
 	ControlService_ReplaceUser_FullMethodName     = "/bproxy.control.v1.ControlService/ReplaceUser"
 	ControlService_SetUserEnabled_FullMethodName  = "/bproxy.control.v1.ControlService/SetUserEnabled"
 	ControlService_RemoveUser_FullMethodName      = "/bproxy.control.v1.ControlService/RemoveUser"
 	ControlService_GetKeylink_FullMethodName      = "/bproxy.control.v1.ControlService/GetKeylink"
 	ControlService_ListBoards_FullMethodName      = "/bproxy.control.v1.ControlService/ListBoards"
+	ControlService_AddBoard_FullMethodName        = "/bproxy.control.v1.ControlService/AddBoard"
 	ControlService_ReplaceBoard_FullMethodName    = "/bproxy.control.v1.ControlService/ReplaceBoard"
 	ControlService_SetBoardEnabled_FullMethodName = "/bproxy.control.v1.ControlService/SetBoardEnabled"
 	ControlService_RemoveBoard_FullMethodName     = "/bproxy.control.v1.ControlService/RemoveBoard"
@@ -45,11 +47,15 @@ type ControlServiceClient interface {
 	// Server identity, transport and listener settings remain file-owned.
 	ApplySnapshot(ctx context.Context, in *ApplySnapshotRequest, opts ...grpc.CallOption) (*MutationResult, error)
 	ListUsers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListUsersResponse, error)
+	// Creates a missing user and fails with ALREADY_EXISTS for an existing tag.
+	AddUser(ctx context.Context, in *AddUserRequest, opts ...grpc.CallOption) (*MutationResult, error)
 	ReplaceUser(ctx context.Context, in *ReplaceUserRequest, opts ...grpc.CallOption) (*MutationResult, error)
 	SetUserEnabled(ctx context.Context, in *SetEnabledRequest, opts ...grpc.CallOption) (*MutationResult, error)
 	RemoveUser(ctx context.Context, in *ResourceRequest, opts ...grpc.CallOption) (*MutationResult, error)
 	GetKeylink(ctx context.Context, in *ResourceRequest, opts ...grpc.CallOption) (*KeylinkResponse, error)
 	ListBoards(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListBoardsResponse, error)
+	// Creates a missing board and fails with ALREADY_EXISTS for an existing tag.
+	AddBoard(ctx context.Context, in *AddBoardRequest, opts ...grpc.CallOption) (*MutationResult, error)
 	ReplaceBoard(ctx context.Context, in *ReplaceBoardRequest, opts ...grpc.CallOption) (*MutationResult, error)
 	SetBoardEnabled(ctx context.Context, in *SetEnabledRequest, opts ...grpc.CallOption) (*MutationResult, error)
 	RemoveBoard(ctx context.Context, in *ResourceRequest, opts ...grpc.CallOption) (*MutationResult, error)
@@ -98,6 +104,16 @@ func (c *controlServiceClient) ListUsers(ctx context.Context, in *emptypb.Empty,
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListUsersResponse)
 	err := c.cc.Invoke(ctx, ControlService_ListUsers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlServiceClient) AddUser(ctx context.Context, in *AddUserRequest, opts ...grpc.CallOption) (*MutationResult, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MutationResult)
+	err := c.cc.Invoke(ctx, ControlService_AddUser_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -154,6 +170,16 @@ func (c *controlServiceClient) ListBoards(ctx context.Context, in *emptypb.Empty
 	return out, nil
 }
 
+func (c *controlServiceClient) AddBoard(ctx context.Context, in *AddBoardRequest, opts ...grpc.CallOption) (*MutationResult, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MutationResult)
+	err := c.cc.Invoke(ctx, ControlService_AddBoard_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlServiceClient) ReplaceBoard(ctx context.Context, in *ReplaceBoardRequest, opts ...grpc.CallOption) (*MutationResult, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MutationResult)
@@ -204,11 +230,15 @@ type ControlServiceServer interface {
 	// Server identity, transport and listener settings remain file-owned.
 	ApplySnapshot(context.Context, *ApplySnapshotRequest) (*MutationResult, error)
 	ListUsers(context.Context, *emptypb.Empty) (*ListUsersResponse, error)
+	// Creates a missing user and fails with ALREADY_EXISTS for an existing tag.
+	AddUser(context.Context, *AddUserRequest) (*MutationResult, error)
 	ReplaceUser(context.Context, *ReplaceUserRequest) (*MutationResult, error)
 	SetUserEnabled(context.Context, *SetEnabledRequest) (*MutationResult, error)
 	RemoveUser(context.Context, *ResourceRequest) (*MutationResult, error)
 	GetKeylink(context.Context, *ResourceRequest) (*KeylinkResponse, error)
 	ListBoards(context.Context, *emptypb.Empty) (*ListBoardsResponse, error)
+	// Creates a missing board and fails with ALREADY_EXISTS for an existing tag.
+	AddBoard(context.Context, *AddBoardRequest) (*MutationResult, error)
 	ReplaceBoard(context.Context, *ReplaceBoardRequest) (*MutationResult, error)
 	SetBoardEnabled(context.Context, *SetEnabledRequest) (*MutationResult, error)
 	RemoveBoard(context.Context, *ResourceRequest) (*MutationResult, error)
@@ -235,6 +265,9 @@ func (UnimplementedControlServiceServer) ApplySnapshot(context.Context, *ApplySn
 func (UnimplementedControlServiceServer) ListUsers(context.Context, *emptypb.Empty) (*ListUsersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListUsers not implemented")
 }
+func (UnimplementedControlServiceServer) AddUser(context.Context, *AddUserRequest) (*MutationResult, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddUser not implemented")
+}
 func (UnimplementedControlServiceServer) ReplaceUser(context.Context, *ReplaceUserRequest) (*MutationResult, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReplaceUser not implemented")
 }
@@ -249,6 +282,9 @@ func (UnimplementedControlServiceServer) GetKeylink(context.Context, *ResourceRe
 }
 func (UnimplementedControlServiceServer) ListBoards(context.Context, *emptypb.Empty) (*ListBoardsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListBoards not implemented")
+}
+func (UnimplementedControlServiceServer) AddBoard(context.Context, *AddBoardRequest) (*MutationResult, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddBoard not implemented")
 }
 func (UnimplementedControlServiceServer) ReplaceBoard(context.Context, *ReplaceBoardRequest) (*MutationResult, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReplaceBoard not implemented")
@@ -355,6 +391,24 @@ func _ControlService_ListUsers_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ControlService_AddUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddUserRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).AddUser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_AddUser_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).AddUser(ctx, req.(*AddUserRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ControlService_ReplaceUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReplaceUserRequest)
 	if err := dec(in); err != nil {
@@ -441,6 +495,24 @@ func _ControlService_ListBoards_Handler(srv interface{}, ctx context.Context, de
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServiceServer).ListBoards(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlService_AddBoard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddBoardRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).AddBoard(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_AddBoard_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).AddBoard(ctx, req.(*AddBoardRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -541,6 +613,10 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ControlService_ListUsers_Handler,
 		},
 		{
+			MethodName: "AddUser",
+			Handler:    _ControlService_AddUser_Handler,
+		},
+		{
 			MethodName: "ReplaceUser",
 			Handler:    _ControlService_ReplaceUser_Handler,
 		},
@@ -559,6 +635,10 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListBoards",
 			Handler:    _ControlService_ListBoards_Handler,
+		},
+		{
+			MethodName: "AddBoard",
+			Handler:    _ControlService_AddBoard_Handler,
 		},
 		{
 			MethodName: "ReplaceBoard",

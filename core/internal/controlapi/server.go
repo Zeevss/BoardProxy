@@ -29,9 +29,11 @@ type Runtime interface {
 	ServerPublicKey() []byte
 	Users() []control.UserView
 	Boards() []control.BoardView
+	AddUser(expected uint64, user serverconfig.User) error
 	ReplaceUser(expected uint64, user serverconfig.User) error
 	SetUserEnabled(expected uint64, tag string, enabled bool) error
 	RemoveUser(expected uint64, tag string) error
+	AddBoard(expected uint64, board serverconfig.Board) error
 	ReplaceBoard(expected uint64, board serverconfig.Board) error
 	SetBoardEnabled(expected uint64, tag string, enabled bool) error
 	RemoveBoard(expected uint64, tag string) error
@@ -158,6 +160,16 @@ func (s *Server) ReplaceUser(_ context.Context, req *ReplaceUserRequest) (*Mutat
 	return &MutationResult{Revision: s.runtime.Revision()}, nil
 }
 
+func (s *Server) AddUser(_ context.Context, req *AddUserRequest) (*MutationResult, error) {
+	if req.GetUser() == nil {
+		return nil, status.Error(codes.InvalidArgument, "user is required")
+	}
+	if err := s.runtime.AddUser(req.GetExpectedRevision(), userConfig(req.GetUser())); err != nil {
+		return nil, rpcError(err)
+	}
+	return &MutationResult{Revision: s.runtime.Revision()}, nil
+}
+
 func (s *Server) SetUserEnabled(_ context.Context, req *SetEnabledRequest) (*MutationResult, error) {
 	if err := s.runtime.SetUserEnabled(req.GetExpectedRevision(), req.GetTag(), req.GetEnabled()); err != nil {
 		return nil, rpcError(err)
@@ -194,6 +206,16 @@ func (s *Server) ReplaceBoard(_ context.Context, req *ReplaceBoardRequest) (*Mut
 		return nil, status.Error(codes.InvalidArgument, "board is required")
 	}
 	if err := s.runtime.ReplaceBoard(req.GetExpectedRevision(), boardConfig(req.GetBoard())); err != nil {
+		return nil, rpcError(err)
+	}
+	return &MutationResult{Revision: s.runtime.Revision()}, nil
+}
+
+func (s *Server) AddBoard(_ context.Context, req *AddBoardRequest) (*MutationResult, error) {
+	if req.GetBoard() == nil {
+		return nil, status.Error(codes.InvalidArgument, "board is required")
+	}
+	if err := s.runtime.AddBoard(req.GetExpectedRevision(), boardConfig(req.GetBoard())); err != nil {
 		return nil, rpcError(err)
 	}
 	return &MutationResult{Revision: s.runtime.Revision()}, nil
@@ -255,11 +277,6 @@ func statsMessage(s telemetry.Stats) *RuntimeStats {
 		BoardsConfigured: int32(s.BoardsConfigured), BoardsEnabled: int32(s.BoardsEnabled), BoardsRunning: int32(s.BoardsRunning),
 		ActiveConnections: int32(s.ActiveConnections), ActiveLanes: int32(s.ActiveLanes), ActiveStreams: int32(s.ActiveStreams),
 		RxBytesSinceStart: s.RXBytesSinceStart, TxBytesSinceStart: s.TXBytesSinceStart,
-		Network: &NetworkStats{
-			Available: s.Network.Available, Scope: s.Network.Scope, Interfaces: s.Network.Interfaces,
-			RxBytesSinceStart: s.Network.RXBytesSinceStart, TxBytesSinceStart: s.Network.TXBytesSinceStart,
-			RxBytesPerSecond: s.Network.RXBytesPerSecond, TxBytesPerSecond: s.Network.TXBytesPerSecond,
-		},
 		Transport: &TransportStats{
 			DisconnectsTotal: s.Transport.DisconnectsTotal, ReconnectsTotal: s.Transport.ReconnectsTotal,
 			ReconnectAttemptsFailed: s.Transport.ReconnectAttemptsFailed, CircuitOpenTotal: s.Transport.CircuitOpenTotal,
@@ -267,9 +284,6 @@ func statsMessage(s telemetry.Stats) *RuntimeStats {
 			ReconnectsLastMinute: int32(s.Transport.ReconnectsLastMinute), SnapshotBytesLastMinute: s.Transport.SnapshotBytesLastMinute,
 			LastDisconnectReason: s.Transport.LastDisconnectReason, LastDowntimeMs: s.Transport.LastDowntimeMillis,
 		},
-	}
-	if !s.Network.SampledAt.IsZero() {
-		out.Network.SampledAt = timestamppb.New(s.Network.SampledAt)
 	}
 	if s.Transport.LastDisconnectAt != nil {
 		out.Transport.LastDisconnectAt = timestamppb.New(*s.Transport.LastDisconnectAt)
@@ -310,6 +324,9 @@ func rpcError(err error) error {
 	}
 	if strings.Contains(err.Error(), "not found") {
 		return status.Error(codes.NotFound, err.Error())
+	}
+	if strings.Contains(err.Error(), "already exists") {
+		return status.Error(codes.AlreadyExists, err.Error())
 	}
 	return status.Error(codes.InvalidArgument, fmt.Sprint(err))
 }

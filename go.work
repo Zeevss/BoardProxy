@@ -1,7 +1,8 @@
 go 1.26.5
 
 use (
+	./control-plane/backend
 	./core
 	./desktop-app
-	./panel/gateway
+	./node-agent
 )

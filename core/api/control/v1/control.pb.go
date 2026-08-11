@@ -435,6 +435,58 @@ func (x *ReplaceUserRequest) GetUser() *UserSpec {
 	return nil
 }
 
+type AddUserRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	ExpectedRevision uint64                 `protobuf:"varint,1,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
+	User             *UserSpec              `protobuf:"bytes,2,opt,name=user,proto3" json:"user,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *AddUserRequest) Reset() {
+	*x = AddUserRequest{}
+	mi := &file_api_control_v1_control_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddUserRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddUserRequest) ProtoMessage() {}
+
+func (x *AddUserRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_control_v1_control_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddUserRequest.ProtoReflect.Descriptor instead.
+func (*AddUserRequest) Descriptor() ([]byte, []int) {
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *AddUserRequest) GetExpectedRevision() uint64 {
+	if x != nil {
+		return x.ExpectedRevision
+	}
+	return 0
+}
+
+func (x *AddUserRequest) GetUser() *UserSpec {
+	if x != nil {
+		return x.User
+	}
+	return nil
+}
+
 type ApplySnapshotRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	ExpectedRevision uint64                 `protobuf:"varint,1,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
@@ -446,7 +498,7 @@ type ApplySnapshotRequest struct {
 
 func (x *ApplySnapshotRequest) Reset() {
 	*x = ApplySnapshotRequest{}
-	mi := &file_api_control_v1_control_proto_msgTypes[7]
+	mi := &file_api_control_v1_control_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -458,7 +510,7 @@ func (x *ApplySnapshotRequest) String() string {
 func (*ApplySnapshotRequest) ProtoMessage() {}
 
 func (x *ApplySnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_control_v1_control_proto_msgTypes[7]
+	mi := &file_api_control_v1_control_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -471,7 +523,7 @@ func (x *ApplySnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplySnapshotRequest.ProtoReflect.Descriptor instead.
 func (*ApplySnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_api_control_v1_control_proto_rawDescGZIP(), []int{7}
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ApplySnapshotRequest) GetExpectedRevision() uint64 {
@@ -514,7 +566,7 @@ type UserInfo struct {
 
 func (x *UserInfo) Reset() {
 	*x = UserInfo{}
-	mi := &file_api_control_v1_control_proto_msgTypes[8]
+	mi := &file_api_control_v1_control_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -526,7 +578,7 @@ func (x *UserInfo) String() string {
 func (*UserInfo) ProtoMessage() {}
 
 func (x *UserInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_api_control_v1_control_proto_msgTypes[8]
+	mi := &file_api_control_v1_control_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -539,7 +591,7 @@ func (x *UserInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserInfo.ProtoReflect.Descriptor instead.
 func (*UserInfo) Descriptor() ([]byte, []int) {
-	return file_api_control_v1_control_proto_rawDescGZIP(), []int{8}
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *UserInfo) GetTag() string {
@@ -629,7 +681,7 @@ type ListUsersResponse struct {
 
 func (x *ListUsersResponse) Reset() {
 	*x = ListUsersResponse{}
-	mi := &file_api_control_v1_control_proto_msgTypes[9]
+	mi := &file_api_control_v1_control_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -641,7 +693,7 @@ func (x *ListUsersResponse) String() string {
 func (*ListUsersResponse) ProtoMessage() {}
 
 func (x *ListUsersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_control_v1_control_proto_msgTypes[9]
+	mi := &file_api_control_v1_control_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -654,7 +706,7 @@ func (x *ListUsersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListUsersResponse.ProtoReflect.Descriptor instead.
 func (*ListUsersResponse) Descriptor() ([]byte, []int) {
-	return file_api_control_v1_control_proto_rawDescGZIP(), []int{9}
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ListUsersResponse) GetRevision() uint64 {
@@ -680,7 +732,7 @@ type KeylinkResponse struct {
 
 func (x *KeylinkResponse) Reset() {
 	*x = KeylinkResponse{}
-	mi := &file_api_control_v1_control_proto_msgTypes[10]
+	mi := &file_api_control_v1_control_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -692,7 +744,7 @@ func (x *KeylinkResponse) String() string {
 func (*KeylinkResponse) ProtoMessage() {}
 
 func (x *KeylinkResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_control_v1_control_proto_msgTypes[10]
+	mi := &file_api_control_v1_control_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -705,7 +757,7 @@ func (x *KeylinkResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeylinkResponse.ProtoReflect.Descriptor instead.
 func (*KeylinkResponse) Descriptor() ([]byte, []int) {
-	return file_api_control_v1_control_proto_rawDescGZIP(), []int{10}
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *KeylinkResponse) GetKeylink() string {
@@ -731,7 +783,7 @@ type BoardSpec struct {
 
 func (x *BoardSpec) Reset() {
 	*x = BoardSpec{}
-	mi := &file_api_control_v1_control_proto_msgTypes[11]
+	mi := &file_api_control_v1_control_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -743,7 +795,7 @@ func (x *BoardSpec) String() string {
 func (*BoardSpec) ProtoMessage() {}
 
 func (x *BoardSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_api_control_v1_control_proto_msgTypes[11]
+	mi := &file_api_control_v1_control_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -756,7 +808,7 @@ func (x *BoardSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BoardSpec.ProtoReflect.Descriptor instead.
 func (*BoardSpec) Descriptor() ([]byte, []int) {
-	return file_api_control_v1_control_proto_rawDescGZIP(), []int{11}
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *BoardSpec) GetTag() string {
@@ -825,7 +877,7 @@ type ReplaceBoardRequest struct {
 
 func (x *ReplaceBoardRequest) Reset() {
 	*x = ReplaceBoardRequest{}
-	mi := &file_api_control_v1_control_proto_msgTypes[12]
+	mi := &file_api_control_v1_control_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -837,7 +889,7 @@ func (x *ReplaceBoardRequest) String() string {
 func (*ReplaceBoardRequest) ProtoMessage() {}
 
 func (x *ReplaceBoardRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_control_v1_control_proto_msgTypes[12]
+	mi := &file_api_control_v1_control_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -850,7 +902,7 @@ func (x *ReplaceBoardRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReplaceBoardRequest.ProtoReflect.Descriptor instead.
 func (*ReplaceBoardRequest) Descriptor() ([]byte, []int) {
-	return file_api_control_v1_control_proto_rawDescGZIP(), []int{12}
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ReplaceBoardRequest) GetExpectedRevision() uint64 {
@@ -861,6 +913,58 @@ func (x *ReplaceBoardRequest) GetExpectedRevision() uint64 {
 }
 
 func (x *ReplaceBoardRequest) GetBoard() *BoardSpec {
+	if x != nil {
+		return x.Board
+	}
+	return nil
+}
+
+type AddBoardRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	ExpectedRevision uint64                 `protobuf:"varint,1,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
+	Board            *BoardSpec             `protobuf:"bytes,2,opt,name=board,proto3" json:"board,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *AddBoardRequest) Reset() {
+	*x = AddBoardRequest{}
+	mi := &file_api_control_v1_control_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddBoardRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddBoardRequest) ProtoMessage() {}
+
+func (x *AddBoardRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_control_v1_control_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddBoardRequest.ProtoReflect.Descriptor instead.
+func (*AddBoardRequest) Descriptor() ([]byte, []int) {
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *AddBoardRequest) GetExpectedRevision() uint64 {
+	if x != nil {
+		return x.ExpectedRevision
+	}
+	return 0
+}
+
+func (x *AddBoardRequest) GetBoard() *BoardSpec {
 	if x != nil {
 		return x.Board
 	}
@@ -878,7 +982,7 @@ type BoardInfo struct {
 
 func (x *BoardInfo) Reset() {
 	*x = BoardInfo{}
-	mi := &file_api_control_v1_control_proto_msgTypes[13]
+	mi := &file_api_control_v1_control_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -890,7 +994,7 @@ func (x *BoardInfo) String() string {
 func (*BoardInfo) ProtoMessage() {}
 
 func (x *BoardInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_api_control_v1_control_proto_msgTypes[13]
+	mi := &file_api_control_v1_control_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -903,7 +1007,7 @@ func (x *BoardInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BoardInfo.ProtoReflect.Descriptor instead.
 func (*BoardInfo) Descriptor() ([]byte, []int) {
-	return file_api_control_v1_control_proto_rawDescGZIP(), []int{13}
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *BoardInfo) GetConfig() *BoardSpec {
@@ -937,7 +1041,7 @@ type ListBoardsResponse struct {
 
 func (x *ListBoardsResponse) Reset() {
 	*x = ListBoardsResponse{}
-	mi := &file_api_control_v1_control_proto_msgTypes[14]
+	mi := &file_api_control_v1_control_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -949,7 +1053,7 @@ func (x *ListBoardsResponse) String() string {
 func (*ListBoardsResponse) ProtoMessage() {}
 
 func (x *ListBoardsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_control_v1_control_proto_msgTypes[14]
+	mi := &file_api_control_v1_control_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -962,7 +1066,7 @@ func (x *ListBoardsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBoardsResponse.ProtoReflect.Descriptor instead.
 func (*ListBoardsResponse) Descriptor() ([]byte, []int) {
-	return file_api_control_v1_control_proto_rawDescGZIP(), []int{14}
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ListBoardsResponse) GetRevision() uint64 {
@@ -996,7 +1100,6 @@ type RuntimeStats struct {
 	TxBytesSinceStart uint64                 `protobuf:"varint,13,opt,name=tx_bytes_since_start,json=txBytesSinceStart,proto3" json:"tx_bytes_since_start,omitempty"`
 	Users             []*UserRuntimeStats    `protobuf:"bytes,14,rep,name=users,proto3" json:"users,omitempty"`
 	Boards            []*BoardRuntimeStats   `protobuf:"bytes,15,rep,name=boards,proto3" json:"boards,omitempty"`
-	Network           *NetworkStats          `protobuf:"bytes,16,opt,name=network,proto3" json:"network,omitempty"`
 	Transport         *TransportStats        `protobuf:"bytes,17,opt,name=transport,proto3" json:"transport,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
@@ -1004,7 +1107,7 @@ type RuntimeStats struct {
 
 func (x *RuntimeStats) Reset() {
 	*x = RuntimeStats{}
-	mi := &file_api_control_v1_control_proto_msgTypes[15]
+	mi := &file_api_control_v1_control_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1016,7 +1119,7 @@ func (x *RuntimeStats) String() string {
 func (*RuntimeStats) ProtoMessage() {}
 
 func (x *RuntimeStats) ProtoReflect() protoreflect.Message {
-	mi := &file_api_control_v1_control_proto_msgTypes[15]
+	mi := &file_api_control_v1_control_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1029,7 +1132,7 @@ func (x *RuntimeStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeStats.ProtoReflect.Descriptor instead.
 func (*RuntimeStats) Descriptor() ([]byte, []int) {
-	return file_api_control_v1_control_proto_rawDescGZIP(), []int{15}
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *RuntimeStats) GetStartedAt() *timestamppb.Timestamp {
@@ -1137,13 +1240,6 @@ func (x *RuntimeStats) GetBoards() []*BoardRuntimeStats {
 	return nil
 }
 
-func (x *RuntimeStats) GetNetwork() *NetworkStats {
-	if x != nil {
-		return x.Network
-	}
-	return nil
-}
-
 func (x *RuntimeStats) GetTransport() *TransportStats {
 	if x != nil {
 		return x.Transport
@@ -1171,7 +1267,7 @@ type UserRuntimeStats struct {
 
 func (x *UserRuntimeStats) Reset() {
 	*x = UserRuntimeStats{}
-	mi := &file_api_control_v1_control_proto_msgTypes[16]
+	mi := &file_api_control_v1_control_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1183,7 +1279,7 @@ func (x *UserRuntimeStats) String() string {
 func (*UserRuntimeStats) ProtoMessage() {}
 
 func (x *UserRuntimeStats) ProtoReflect() protoreflect.Message {
-	mi := &file_api_control_v1_control_proto_msgTypes[16]
+	mi := &file_api_control_v1_control_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1196,7 +1292,7 @@ func (x *UserRuntimeStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserRuntimeStats.ProtoReflect.Descriptor instead.
 func (*UserRuntimeStats) Descriptor() ([]byte, []int) {
-	return file_api_control_v1_control_proto_rawDescGZIP(), []int{16}
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *UserRuntimeStats) GetTag() string {
@@ -1305,7 +1401,7 @@ type BoardRuntimeStats struct {
 
 func (x *BoardRuntimeStats) Reset() {
 	*x = BoardRuntimeStats{}
-	mi := &file_api_control_v1_control_proto_msgTypes[17]
+	mi := &file_api_control_v1_control_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1317,7 +1413,7 @@ func (x *BoardRuntimeStats) String() string {
 func (*BoardRuntimeStats) ProtoMessage() {}
 
 func (x *BoardRuntimeStats) ProtoReflect() protoreflect.Message {
-	mi := &file_api_control_v1_control_proto_msgTypes[17]
+	mi := &file_api_control_v1_control_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1330,7 +1426,7 @@ func (x *BoardRuntimeStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BoardRuntimeStats.ProtoReflect.Descriptor instead.
 func (*BoardRuntimeStats) Descriptor() ([]byte, []int) {
-	return file_api_control_v1_control_proto_rawDescGZIP(), []int{17}
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *BoardRuntimeStats) GetTag() string {
@@ -1431,106 +1527,6 @@ func (x *BoardRuntimeStats) GetPageCleanupQuarantined() uint64 {
 	return 0
 }
 
-type NetworkStats struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	Available         bool                   `protobuf:"varint,1,opt,name=available,proto3" json:"available,omitempty"`
-	Scope             string                 `protobuf:"bytes,2,opt,name=scope,proto3" json:"scope,omitempty"`
-	Interfaces        []string               `protobuf:"bytes,3,rep,name=interfaces,proto3" json:"interfaces,omitempty"`
-	SampledAt         *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=sampled_at,json=sampledAt,proto3" json:"sampled_at,omitempty"`
-	RxBytesSinceStart uint64                 `protobuf:"varint,5,opt,name=rx_bytes_since_start,json=rxBytesSinceStart,proto3" json:"rx_bytes_since_start,omitempty"`
-	TxBytesSinceStart uint64                 `protobuf:"varint,6,opt,name=tx_bytes_since_start,json=txBytesSinceStart,proto3" json:"tx_bytes_since_start,omitempty"`
-	RxBytesPerSecond  float64                `protobuf:"fixed64,7,opt,name=rx_bytes_per_second,json=rxBytesPerSecond,proto3" json:"rx_bytes_per_second,omitempty"`
-	TxBytesPerSecond  float64                `protobuf:"fixed64,8,opt,name=tx_bytes_per_second,json=txBytesPerSecond,proto3" json:"tx_bytes_per_second,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
-}
-
-func (x *NetworkStats) Reset() {
-	*x = NetworkStats{}
-	mi := &file_api_control_v1_control_proto_msgTypes[18]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *NetworkStats) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*NetworkStats) ProtoMessage() {}
-
-func (x *NetworkStats) ProtoReflect() protoreflect.Message {
-	mi := &file_api_control_v1_control_proto_msgTypes[18]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use NetworkStats.ProtoReflect.Descriptor instead.
-func (*NetworkStats) Descriptor() ([]byte, []int) {
-	return file_api_control_v1_control_proto_rawDescGZIP(), []int{18}
-}
-
-func (x *NetworkStats) GetAvailable() bool {
-	if x != nil {
-		return x.Available
-	}
-	return false
-}
-
-func (x *NetworkStats) GetScope() string {
-	if x != nil {
-		return x.Scope
-	}
-	return ""
-}
-
-func (x *NetworkStats) GetInterfaces() []string {
-	if x != nil {
-		return x.Interfaces
-	}
-	return nil
-}
-
-func (x *NetworkStats) GetSampledAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.SampledAt
-	}
-	return nil
-}
-
-func (x *NetworkStats) GetRxBytesSinceStart() uint64 {
-	if x != nil {
-		return x.RxBytesSinceStart
-	}
-	return 0
-}
-
-func (x *NetworkStats) GetTxBytesSinceStart() uint64 {
-	if x != nil {
-		return x.TxBytesSinceStart
-	}
-	return 0
-}
-
-func (x *NetworkStats) GetRxBytesPerSecond() float64 {
-	if x != nil {
-		return x.RxBytesPerSecond
-	}
-	return 0
-}
-
-func (x *NetworkStats) GetTxBytesPerSecond() float64 {
-	if x != nil {
-		return x.TxBytesPerSecond
-	}
-	return 0
-}
-
 type TransportStats struct {
 	state                   protoimpl.MessageState `protogen:"open.v1"`
 	DisconnectsTotal        uint64                 `protobuf:"varint,1,opt,name=disconnects_total,json=disconnectsTotal,proto3" json:"disconnects_total,omitempty"`
@@ -1551,7 +1547,7 @@ type TransportStats struct {
 
 func (x *TransportStats) Reset() {
 	*x = TransportStats{}
-	mi := &file_api_control_v1_control_proto_msgTypes[19]
+	mi := &file_api_control_v1_control_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1563,7 +1559,7 @@ func (x *TransportStats) String() string {
 func (*TransportStats) ProtoMessage() {}
 
 func (x *TransportStats) ProtoReflect() protoreflect.Message {
-	mi := &file_api_control_v1_control_proto_msgTypes[19]
+	mi := &file_api_control_v1_control_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1576,7 +1572,7 @@ func (x *TransportStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TransportStats.ProtoReflect.Descriptor instead.
 func (*TransportStats) Descriptor() ([]byte, []int) {
-	return file_api_control_v1_control_proto_rawDescGZIP(), []int{19}
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *TransportStats) GetDisconnectsTotal() uint64 {
@@ -1698,6 +1694,9 @@ const file_api_control_v1_control_proto_rawDesc = "" +
 	"\b_enabled\"r\n" +
 	"\x12ReplaceUserRequest\x12+\n" +
 	"\x11expected_revision\x18\x01 \x01(\x04R\x10expectedRevision\x12/\n" +
+	"\x04user\x18\x02 \x01(\v2\x1b.bproxy.control.v1.UserSpecR\x04user\"n\n" +
+	"\x0eAddUserRequest\x12+\n" +
+	"\x11expected_revision\x18\x01 \x01(\x04R\x10expectedRevision\x12/\n" +
 	"\x04user\x18\x02 \x01(\v2\x1b.bproxy.control.v1.UserSpecR\x04user\"\xac\x01\n" +
 	"\x14ApplySnapshotRequest\x12+\n" +
 	"\x11expected_revision\x18\x01 \x01(\x04R\x10expectedRevision\x121\n" +
@@ -1736,6 +1735,9 @@ const file_api_control_v1_control_proto_rawDesc = "" +
 	"\b_enabled\"v\n" +
 	"\x13ReplaceBoardRequest\x12+\n" +
 	"\x11expected_revision\x18\x01 \x01(\x04R\x10expectedRevision\x122\n" +
+	"\x05board\x18\x02 \x01(\v2\x1c.bproxy.control.v1.BoardSpecR\x05board\"r\n" +
+	"\x0fAddBoardRequest\x12+\n" +
+	"\x11expected_revision\x18\x01 \x01(\x04R\x10expectedRevision\x122\n" +
 	"\x05board\x18\x02 \x01(\v2\x1c.bproxy.control.v1.BoardSpecR\x05board\"m\n" +
 	"\tBoardInfo\x124\n" +
 	"\x06config\x18\x01 \x01(\v2\x1c.bproxy.control.v1.BoardSpecR\x06config\x12\x14\n" +
@@ -1743,7 +1745,7 @@ const file_api_control_v1_control_proto_rawDesc = "" +
 	"\x05error\x18\x03 \x01(\tR\x05error\"f\n" +
 	"\x12ListBoardsResponse\x12\x1a\n" +
 	"\brevision\x18\x01 \x01(\x04R\brevision\x124\n" +
-	"\x06boards\x18\x02 \x03(\v2\x1c.bproxy.control.v1.BoardInfoR\x06boards\"\xa3\x06\n" +
+	"\x06boards\x18\x02 \x03(\v2\x1c.bproxy.control.v1.BoardInfoR\x06boards\"\xee\x05\n" +
 	"\fRuntimeStats\x129\n" +
 	"\n" +
 	"started_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12\x1a\n" +
@@ -1761,9 +1763,8 @@ const file_api_control_v1_control_proto_rawDesc = "" +
 	"\x14rx_bytes_since_start\x18\f \x01(\x04R\x11rxBytesSinceStart\x12/\n" +
 	"\x14tx_bytes_since_start\x18\r \x01(\x04R\x11txBytesSinceStart\x129\n" +
 	"\x05users\x18\x0e \x03(\v2#.bproxy.control.v1.UserRuntimeStatsR\x05users\x12<\n" +
-	"\x06boards\x18\x0f \x03(\v2$.bproxy.control.v1.BoardRuntimeStatsR\x06boards\x129\n" +
-	"\anetwork\x18\x10 \x01(\v2\x1f.bproxy.control.v1.NetworkStatsR\anetwork\x12?\n" +
-	"\ttransport\x18\x11 \x01(\v2!.bproxy.control.v1.TransportStatsR\ttransport\"\xad\x03\n" +
+	"\x06boards\x18\x0f \x03(\v2$.bproxy.control.v1.BoardRuntimeStatsR\x06boards\x12?\n" +
+	"\ttransport\x18\x11 \x01(\v2!.bproxy.control.v1.TransportStatsR\ttransportJ\x04\b\x10\x10\x11\"\xad\x03\n" +
 	"\x10UserRuntimeStats\x12\x10\n" +
 	"\x03tag\x18\x01 \x01(\tR\x03tag\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
@@ -1794,19 +1795,7 @@ const file_api_control_v1_control_proto_rawDesc = "" +
 	"\x11page_cleanup_runs\x18\v \x01(\x04R\x0fpageCleanupRuns\x120\n" +
 	"\x14page_cleanup_deleted\x18\f \x01(\x04R\x12pageCleanupDeleted\x122\n" +
 	"\x15page_cleanup_failures\x18\r \x01(\x04R\x13pageCleanupFailures\x128\n" +
-	"\x18page_cleanup_quarantined\x18\x0e \x01(\x04R\x16pageCleanupQuarantined\"\xdd\x02\n" +
-	"\fNetworkStats\x12\x1c\n" +
-	"\tavailable\x18\x01 \x01(\bR\tavailable\x12\x14\n" +
-	"\x05scope\x18\x02 \x01(\tR\x05scope\x12\x1e\n" +
-	"\n" +
-	"interfaces\x18\x03 \x03(\tR\n" +
-	"interfaces\x129\n" +
-	"\n" +
-	"sampled_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tsampledAt\x12/\n" +
-	"\x14rx_bytes_since_start\x18\x05 \x01(\x04R\x11rxBytesSinceStart\x12/\n" +
-	"\x14tx_bytes_since_start\x18\x06 \x01(\x04R\x11txBytesSinceStart\x12-\n" +
-	"\x13rx_bytes_per_second\x18\a \x01(\x01R\x10rxBytesPerSecond\x12-\n" +
-	"\x13tx_bytes_per_second\x18\b \x01(\x01R\x10txBytesPerSecond\"\x9f\x05\n" +
+	"\x18page_cleanup_quarantined\x18\x0e \x01(\x04R\x16pageCleanupQuarantined\"\x9f\x05\n" +
 	"\x0eTransportStats\x12+\n" +
 	"\x11disconnects_total\x18\x01 \x01(\x04R\x10disconnectsTotal\x12)\n" +
 	"\x10reconnects_total\x18\x02 \x01(\x04R\x0freconnectsTotal\x12:\n" +
@@ -1820,13 +1809,14 @@ const file_api_control_v1_control_proto_rawDesc = "" +
 	"\x16last_disconnect_reason\x18\n" +
 	" \x01(\tR\x14lastDisconnectReason\x12F\n" +
 	"\x11last_reconnect_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\x0flastReconnectAt\x12(\n" +
-	"\x10last_downtime_ms\x18\f \x01(\x03R\x0elastDowntimeMs2\xcd\b\n" +
+	"\x10last_downtime_ms\x18\f \x01(\x03R\x0elastDowntimeMs2\xf1\t\n" +
 	"\x0eControlService\x12D\n" +
 	"\n" +
 	"GetRuntime\x12\x16.google.protobuf.Empty\x1a\x1e.bproxy.control.v1.RuntimeInfo\x12O\n" +
 	"\x06Reload\x12\".bproxy.control.v1.RevisionRequest\x1a!.bproxy.control.v1.MutationResult\x12[\n" +
 	"\rApplySnapshot\x12'.bproxy.control.v1.ApplySnapshotRequest\x1a!.bproxy.control.v1.MutationResult\x12I\n" +
-	"\tListUsers\x12\x16.google.protobuf.Empty\x1a$.bproxy.control.v1.ListUsersResponse\x12W\n" +
+	"\tListUsers\x12\x16.google.protobuf.Empty\x1a$.bproxy.control.v1.ListUsersResponse\x12O\n" +
+	"\aAddUser\x12!.bproxy.control.v1.AddUserRequest\x1a!.bproxy.control.v1.MutationResult\x12W\n" +
 	"\vReplaceUser\x12%.bproxy.control.v1.ReplaceUserRequest\x1a!.bproxy.control.v1.MutationResult\x12Y\n" +
 	"\x0eSetUserEnabled\x12$.bproxy.control.v1.SetEnabledRequest\x1a!.bproxy.control.v1.MutationResult\x12S\n" +
 	"\n" +
@@ -1834,7 +1824,8 @@ const file_api_control_v1_control_proto_rawDesc = "" +
 	"\n" +
 	"GetKeylink\x12\".bproxy.control.v1.ResourceRequest\x1a\".bproxy.control.v1.KeylinkResponse\x12K\n" +
 	"\n" +
-	"ListBoards\x12\x16.google.protobuf.Empty\x1a%.bproxy.control.v1.ListBoardsResponse\x12Y\n" +
+	"ListBoards\x12\x16.google.protobuf.Empty\x1a%.bproxy.control.v1.ListBoardsResponse\x12Q\n" +
+	"\bAddBoard\x12\".bproxy.control.v1.AddBoardRequest\x1a!.bproxy.control.v1.MutationResult\x12Y\n" +
 	"\fReplaceBoard\x12&.bproxy.control.v1.ReplaceBoardRequest\x1a!.bproxy.control.v1.MutationResult\x12Z\n" +
 	"\x0fSetBoardEnabled\x12$.bproxy.control.v1.SetEnabledRequest\x1a!.bproxy.control.v1.MutationResult\x12T\n" +
 	"\vRemoveBoard\x12\".bproxy.control.v1.ResourceRequest\x1a!.bproxy.control.v1.MutationResult\x12C\n" +
@@ -1852,7 +1843,7 @@ func file_api_control_v1_control_proto_rawDescGZIP() []byte {
 	return file_api_control_v1_control_proto_rawDescData
 }
 
-var file_api_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_api_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_api_control_v1_control_proto_goTypes = []any{
 	(*RuntimeInfo)(nil),           // 0: bproxy.control.v1.RuntimeInfo
 	(*RevisionRequest)(nil),       // 1: bproxy.control.v1.RevisionRequest
@@ -1861,68 +1852,73 @@ var file_api_control_v1_control_proto_goTypes = []any{
 	(*SetEnabledRequest)(nil),     // 4: bproxy.control.v1.SetEnabledRequest
 	(*UserSpec)(nil),              // 5: bproxy.control.v1.UserSpec
 	(*ReplaceUserRequest)(nil),    // 6: bproxy.control.v1.ReplaceUserRequest
-	(*ApplySnapshotRequest)(nil),  // 7: bproxy.control.v1.ApplySnapshotRequest
-	(*UserInfo)(nil),              // 8: bproxy.control.v1.UserInfo
-	(*ListUsersResponse)(nil),     // 9: bproxy.control.v1.ListUsersResponse
-	(*KeylinkResponse)(nil),       // 10: bproxy.control.v1.KeylinkResponse
-	(*BoardSpec)(nil),             // 11: bproxy.control.v1.BoardSpec
-	(*ReplaceBoardRequest)(nil),   // 12: bproxy.control.v1.ReplaceBoardRequest
-	(*BoardInfo)(nil),             // 13: bproxy.control.v1.BoardInfo
-	(*ListBoardsResponse)(nil),    // 14: bproxy.control.v1.ListBoardsResponse
-	(*RuntimeStats)(nil),          // 15: bproxy.control.v1.RuntimeStats
-	(*UserRuntimeStats)(nil),      // 16: bproxy.control.v1.UserRuntimeStats
-	(*BoardRuntimeStats)(nil),     // 17: bproxy.control.v1.BoardRuntimeStats
-	(*NetworkStats)(nil),          // 18: bproxy.control.v1.NetworkStats
-	(*TransportStats)(nil),        // 19: bproxy.control.v1.TransportStats
-	(*timestamppb.Timestamp)(nil), // 20: google.protobuf.Timestamp
-	(*emptypb.Empty)(nil),         // 21: google.protobuf.Empty
+	(*AddUserRequest)(nil),        // 7: bproxy.control.v1.AddUserRequest
+	(*ApplySnapshotRequest)(nil),  // 8: bproxy.control.v1.ApplySnapshotRequest
+	(*UserInfo)(nil),              // 9: bproxy.control.v1.UserInfo
+	(*ListUsersResponse)(nil),     // 10: bproxy.control.v1.ListUsersResponse
+	(*KeylinkResponse)(nil),       // 11: bproxy.control.v1.KeylinkResponse
+	(*BoardSpec)(nil),             // 12: bproxy.control.v1.BoardSpec
+	(*ReplaceBoardRequest)(nil),   // 13: bproxy.control.v1.ReplaceBoardRequest
+	(*AddBoardRequest)(nil),       // 14: bproxy.control.v1.AddBoardRequest
+	(*BoardInfo)(nil),             // 15: bproxy.control.v1.BoardInfo
+	(*ListBoardsResponse)(nil),    // 16: bproxy.control.v1.ListBoardsResponse
+	(*RuntimeStats)(nil),          // 17: bproxy.control.v1.RuntimeStats
+	(*UserRuntimeStats)(nil),      // 18: bproxy.control.v1.UserRuntimeStats
+	(*BoardRuntimeStats)(nil),     // 19: bproxy.control.v1.BoardRuntimeStats
+	(*TransportStats)(nil),        // 20: bproxy.control.v1.TransportStats
+	(*timestamppb.Timestamp)(nil), // 21: google.protobuf.Timestamp
+	(*emptypb.Empty)(nil),         // 22: google.protobuf.Empty
 }
 var file_api_control_v1_control_proto_depIdxs = []int32{
 	5,  // 0: bproxy.control.v1.ReplaceUserRequest.user:type_name -> bproxy.control.v1.UserSpec
-	5,  // 1: bproxy.control.v1.ApplySnapshotRequest.users:type_name -> bproxy.control.v1.UserSpec
-	11, // 2: bproxy.control.v1.ApplySnapshotRequest.boards:type_name -> bproxy.control.v1.BoardSpec
-	20, // 3: bproxy.control.v1.UserInfo.last_seen_since_start:type_name -> google.protobuf.Timestamp
-	8,  // 4: bproxy.control.v1.ListUsersResponse.users:type_name -> bproxy.control.v1.UserInfo
-	11, // 5: bproxy.control.v1.ReplaceBoardRequest.board:type_name -> bproxy.control.v1.BoardSpec
-	11, // 6: bproxy.control.v1.BoardInfo.config:type_name -> bproxy.control.v1.BoardSpec
-	13, // 7: bproxy.control.v1.ListBoardsResponse.boards:type_name -> bproxy.control.v1.BoardInfo
-	20, // 8: bproxy.control.v1.RuntimeStats.started_at:type_name -> google.protobuf.Timestamp
-	16, // 9: bproxy.control.v1.RuntimeStats.users:type_name -> bproxy.control.v1.UserRuntimeStats
-	17, // 10: bproxy.control.v1.RuntimeStats.boards:type_name -> bproxy.control.v1.BoardRuntimeStats
-	18, // 11: bproxy.control.v1.RuntimeStats.network:type_name -> bproxy.control.v1.NetworkStats
-	19, // 12: bproxy.control.v1.RuntimeStats.transport:type_name -> bproxy.control.v1.TransportStats
-	20, // 13: bproxy.control.v1.UserRuntimeStats.last_seen_since_start:type_name -> google.protobuf.Timestamp
-	20, // 14: bproxy.control.v1.NetworkStats.sampled_at:type_name -> google.protobuf.Timestamp
-	20, // 15: bproxy.control.v1.TransportStats.last_disconnect_at:type_name -> google.protobuf.Timestamp
-	20, // 16: bproxy.control.v1.TransportStats.last_reconnect_at:type_name -> google.protobuf.Timestamp
-	21, // 17: bproxy.control.v1.ControlService.GetRuntime:input_type -> google.protobuf.Empty
+	5,  // 1: bproxy.control.v1.AddUserRequest.user:type_name -> bproxy.control.v1.UserSpec
+	5,  // 2: bproxy.control.v1.ApplySnapshotRequest.users:type_name -> bproxy.control.v1.UserSpec
+	12, // 3: bproxy.control.v1.ApplySnapshotRequest.boards:type_name -> bproxy.control.v1.BoardSpec
+	21, // 4: bproxy.control.v1.UserInfo.last_seen_since_start:type_name -> google.protobuf.Timestamp
+	9,  // 5: bproxy.control.v1.ListUsersResponse.users:type_name -> bproxy.control.v1.UserInfo
+	12, // 6: bproxy.control.v1.ReplaceBoardRequest.board:type_name -> bproxy.control.v1.BoardSpec
+	12, // 7: bproxy.control.v1.AddBoardRequest.board:type_name -> bproxy.control.v1.BoardSpec
+	12, // 8: bproxy.control.v1.BoardInfo.config:type_name -> bproxy.control.v1.BoardSpec
+	15, // 9: bproxy.control.v1.ListBoardsResponse.boards:type_name -> bproxy.control.v1.BoardInfo
+	21, // 10: bproxy.control.v1.RuntimeStats.started_at:type_name -> google.protobuf.Timestamp
+	18, // 11: bproxy.control.v1.RuntimeStats.users:type_name -> bproxy.control.v1.UserRuntimeStats
+	19, // 12: bproxy.control.v1.RuntimeStats.boards:type_name -> bproxy.control.v1.BoardRuntimeStats
+	20, // 13: bproxy.control.v1.RuntimeStats.transport:type_name -> bproxy.control.v1.TransportStats
+	21, // 14: bproxy.control.v1.UserRuntimeStats.last_seen_since_start:type_name -> google.protobuf.Timestamp
+	21, // 15: bproxy.control.v1.TransportStats.last_disconnect_at:type_name -> google.protobuf.Timestamp
+	21, // 16: bproxy.control.v1.TransportStats.last_reconnect_at:type_name -> google.protobuf.Timestamp
+	22, // 17: bproxy.control.v1.ControlService.GetRuntime:input_type -> google.protobuf.Empty
 	1,  // 18: bproxy.control.v1.ControlService.Reload:input_type -> bproxy.control.v1.RevisionRequest
-	7,  // 19: bproxy.control.v1.ControlService.ApplySnapshot:input_type -> bproxy.control.v1.ApplySnapshotRequest
-	21, // 20: bproxy.control.v1.ControlService.ListUsers:input_type -> google.protobuf.Empty
-	6,  // 21: bproxy.control.v1.ControlService.ReplaceUser:input_type -> bproxy.control.v1.ReplaceUserRequest
-	4,  // 22: bproxy.control.v1.ControlService.SetUserEnabled:input_type -> bproxy.control.v1.SetEnabledRequest
-	2,  // 23: bproxy.control.v1.ControlService.RemoveUser:input_type -> bproxy.control.v1.ResourceRequest
-	2,  // 24: bproxy.control.v1.ControlService.GetKeylink:input_type -> bproxy.control.v1.ResourceRequest
-	21, // 25: bproxy.control.v1.ControlService.ListBoards:input_type -> google.protobuf.Empty
-	12, // 26: bproxy.control.v1.ControlService.ReplaceBoard:input_type -> bproxy.control.v1.ReplaceBoardRequest
-	4,  // 27: bproxy.control.v1.ControlService.SetBoardEnabled:input_type -> bproxy.control.v1.SetEnabledRequest
-	2,  // 28: bproxy.control.v1.ControlService.RemoveBoard:input_type -> bproxy.control.v1.ResourceRequest
-	21, // 29: bproxy.control.v1.ControlService.GetStats:input_type -> google.protobuf.Empty
-	0,  // 30: bproxy.control.v1.ControlService.GetRuntime:output_type -> bproxy.control.v1.RuntimeInfo
-	3,  // 31: bproxy.control.v1.ControlService.Reload:output_type -> bproxy.control.v1.MutationResult
-	3,  // 32: bproxy.control.v1.ControlService.ApplySnapshot:output_type -> bproxy.control.v1.MutationResult
-	9,  // 33: bproxy.control.v1.ControlService.ListUsers:output_type -> bproxy.control.v1.ListUsersResponse
-	3,  // 34: bproxy.control.v1.ControlService.ReplaceUser:output_type -> bproxy.control.v1.MutationResult
-	3,  // 35: bproxy.control.v1.ControlService.SetUserEnabled:output_type -> bproxy.control.v1.MutationResult
-	3,  // 36: bproxy.control.v1.ControlService.RemoveUser:output_type -> bproxy.control.v1.MutationResult
-	10, // 37: bproxy.control.v1.ControlService.GetKeylink:output_type -> bproxy.control.v1.KeylinkResponse
-	14, // 38: bproxy.control.v1.ControlService.ListBoards:output_type -> bproxy.control.v1.ListBoardsResponse
-	3,  // 39: bproxy.control.v1.ControlService.ReplaceBoard:output_type -> bproxy.control.v1.MutationResult
-	3,  // 40: bproxy.control.v1.ControlService.SetBoardEnabled:output_type -> bproxy.control.v1.MutationResult
-	3,  // 41: bproxy.control.v1.ControlService.RemoveBoard:output_type -> bproxy.control.v1.MutationResult
-	15, // 42: bproxy.control.v1.ControlService.GetStats:output_type -> bproxy.control.v1.RuntimeStats
-	30, // [30:43] is the sub-list for method output_type
-	17, // [17:30] is the sub-list for method input_type
+	8,  // 19: bproxy.control.v1.ControlService.ApplySnapshot:input_type -> bproxy.control.v1.ApplySnapshotRequest
+	22, // 20: bproxy.control.v1.ControlService.ListUsers:input_type -> google.protobuf.Empty
+	7,  // 21: bproxy.control.v1.ControlService.AddUser:input_type -> bproxy.control.v1.AddUserRequest
+	6,  // 22: bproxy.control.v1.ControlService.ReplaceUser:input_type -> bproxy.control.v1.ReplaceUserRequest
+	4,  // 23: bproxy.control.v1.ControlService.SetUserEnabled:input_type -> bproxy.control.v1.SetEnabledRequest
+	2,  // 24: bproxy.control.v1.ControlService.RemoveUser:input_type -> bproxy.control.v1.ResourceRequest
+	2,  // 25: bproxy.control.v1.ControlService.GetKeylink:input_type -> bproxy.control.v1.ResourceRequest
+	22, // 26: bproxy.control.v1.ControlService.ListBoards:input_type -> google.protobuf.Empty
+	14, // 27: bproxy.control.v1.ControlService.AddBoard:input_type -> bproxy.control.v1.AddBoardRequest
+	13, // 28: bproxy.control.v1.ControlService.ReplaceBoard:input_type -> bproxy.control.v1.ReplaceBoardRequest
+	4,  // 29: bproxy.control.v1.ControlService.SetBoardEnabled:input_type -> bproxy.control.v1.SetEnabledRequest
+	2,  // 30: bproxy.control.v1.ControlService.RemoveBoard:input_type -> bproxy.control.v1.ResourceRequest
+	22, // 31: bproxy.control.v1.ControlService.GetStats:input_type -> google.protobuf.Empty
+	0,  // 32: bproxy.control.v1.ControlService.GetRuntime:output_type -> bproxy.control.v1.RuntimeInfo
+	3,  // 33: bproxy.control.v1.ControlService.Reload:output_type -> bproxy.control.v1.MutationResult
+	3,  // 34: bproxy.control.v1.ControlService.ApplySnapshot:output_type -> bproxy.control.v1.MutationResult
+	10, // 35: bproxy.control.v1.ControlService.ListUsers:output_type -> bproxy.control.v1.ListUsersResponse
+	3,  // 36: bproxy.control.v1.ControlService.AddUser:output_type -> bproxy.control.v1.MutationResult
+	3,  // 37: bproxy.control.v1.ControlService.ReplaceUser:output_type -> bproxy.control.v1.MutationResult
+	3,  // 38: bproxy.control.v1.ControlService.SetUserEnabled:output_type -> bproxy.control.v1.MutationResult
+	3,  // 39: bproxy.control.v1.ControlService.RemoveUser:output_type -> bproxy.control.v1.MutationResult
+	11, // 40: bproxy.control.v1.ControlService.GetKeylink:output_type -> bproxy.control.v1.KeylinkResponse
+	16, // 41: bproxy.control.v1.ControlService.ListBoards:output_type -> bproxy.control.v1.ListBoardsResponse
+	3,  // 42: bproxy.control.v1.ControlService.AddBoard:output_type -> bproxy.control.v1.MutationResult
+	3,  // 43: bproxy.control.v1.ControlService.ReplaceBoard:output_type -> bproxy.control.v1.MutationResult
+	3,  // 44: bproxy.control.v1.ControlService.SetBoardEnabled:output_type -> bproxy.control.v1.MutationResult
+	3,  // 45: bproxy.control.v1.ControlService.RemoveBoard:output_type -> bproxy.control.v1.MutationResult
+	17, // 46: bproxy.control.v1.ControlService.GetStats:output_type -> bproxy.control.v1.RuntimeStats
+	32, // [32:47] is the sub-list for method output_type
+	17, // [17:32] is the sub-list for method input_type
 	17, // [17:17] is the sub-list for extension type_name
 	17, // [17:17] is the sub-list for extension extendee
 	0,  // [0:17] is the sub-list for field type_name
@@ -1934,14 +1930,14 @@ func file_api_control_v1_control_proto_init() {
 		return
 	}
 	file_api_control_v1_control_proto_msgTypes[5].OneofWrappers = []any{}
-	file_api_control_v1_control_proto_msgTypes[11].OneofWrappers = []any{}
+	file_api_control_v1_control_proto_msgTypes[12].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_control_v1_control_proto_rawDesc), len(file_api_control_v1_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   20,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

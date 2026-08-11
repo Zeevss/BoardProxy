@@ -36,6 +36,7 @@ func (f *fakeRuntime) Stats() telemetry.Stats                        { return te
 func (f *fakeRuntime) Keylink(string) (string, error)                { return "bproxy://test", f.err }
 func (f *fakeRuntime) Reload(uint64) error                           { return f.err }
 func (f *fakeRuntime) RemoveUser(uint64, string) error               { return f.err }
+func (f *fakeRuntime) AddBoard(uint64, serverconfig.Board) error     { return f.err }
 func (f *fakeRuntime) ReplaceBoard(uint64, serverconfig.Board) error { return f.err }
 func (f *fakeRuntime) SetBoardEnabled(uint64, string, bool) error    { return f.err }
 func (f *fakeRuntime) RemoveBoard(uint64, string) error              { return f.err }
@@ -50,6 +51,9 @@ func (f *fakeRuntime) ReplaceUser(_ uint64, user serverconfig.User) error {
 	f.replaced = user
 	f.revision++
 	return nil
+}
+func (f *fakeRuntime) AddUser(expected uint64, user serverconfig.User) error {
+	return f.ReplaceUser(expected, user)
 }
 
 func TestPublicGRPCClientCanMutateRuntime(t *testing.T) {
@@ -72,7 +76,7 @@ func TestPublicGRPCClientCanMutateRuntime(t *testing.T) {
 	defer conn.Close()
 	client := controlv1.NewControlServiceClient(conn)
 
-	result, err := client.ReplaceUser(ctx, &controlv1.ReplaceUserRequest{
+	result, err := client.AddUser(ctx, &controlv1.AddUserRequest{
 		ExpectedRevision: 4,
 		User: &controlv1.UserSpec{Tag: "alice", Name: "Alice", PrivateKey: "base64:key",
 			Boards: []string{"main"}, MaxSessions: 2, MaxLanes: 2},
@@ -86,6 +90,14 @@ func TestPublicGRPCClientCanMutateRuntime(t *testing.T) {
 	stats, err := client.GetStats(ctx, &emptypb.Empty{})
 	if err != nil || stats.Revision != 5 {
 		t.Fatalf("stats round trip: stats=%+v err=%v", stats, err)
+	}
+}
+
+func TestAlreadyExistsMapsToGRPCCode(t *testing.T) {
+	runtime := &fakeRuntime{err: errors.New("app: resource already exists: user alice")}
+	_, err := NewServer(runtime).AddUser(context.Background(), &AddUserRequest{User: &UserSpec{Tag: "alice"}})
+	if status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("code = %v, want %v (err=%v)", status.Code(err), codes.AlreadyExists, err)
 	}
 }
 
