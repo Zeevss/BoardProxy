@@ -1,99 +1,76 @@
-# План развития BoardProxy Control Plane
+# BoardProxy Control Plane — выполненные этапы
 
-## Инварианты архитектуры
+## Архитектурные инварианты
 
-- core остаётся disposable runtime без БД и истории;
-- node-agent хранит только локальное операционное состояние в SQLite;
-- control-plane является единственным владельцем business desired state;
-- node gRPC и browser API остаются разными контрактами;
-- изменение пользователя или доски создаёт новую immutable config revision;
-- интерфейсный и пользовательский трафик хранятся как разные метрики.
+- core — disposable runtime из TOML/stdin, без БД и business history;
+- node-agent хранит только сертификат, checkpoints и ограниченный telemetry outbox в SQLite;
+- Kotlin control-plane — единственный владелец desired state и истории;
+- browser HTTP/SSE и node mTLS gRPC — разные контракты;
+- каждое изменение каталога создаёт immutable config revision;
+- interface traffic и per-user payload никогда не смешиваются.
 
-## Текущая точка
+## 1. Granular management и история — выполнено
 
-Работают enrollment, mTLS node stream, доставка целого TOML snapshot,
-ApplyResult и надёжная telemetry outbox. Control-plane владеет нормализованным
-каталогом, компилирует его в immutable TOML revisions и ведёт read model
-состояния ноды. Однопроцессный filesystem adapter оставлен только для
-development; frontend не начат намеренно.
+- отдельные commands для node, board, user и assignment;
+- `ETag`/`If-Match`, pagination/filtering fleet списка;
+- encrypted catalog snapshots, history, safe diff без private keys;
+- rollback создаёт новую монотонную версию, не переписывает прошлое;
+- изменение создаёт revision, audit и outbox в одной транзакции.
 
-Node-agent использует versioned SQLite schema, WAL и `synchronous=FULL`.
-Checkpoint коллектора и новые outbox events фиксируются одной транзакцией.
+## 2. Traffic analytics и limits — выполнено
 
-## Этап 1. Control domain и reconciler — выполнен
+- раздельные interface/user series с настраиваемым bucket;
+- идемпотентные hourly rollups;
+- retention: raw 31 день и rollups 730 дней по умолчанию;
+- daily/monthly per-user quotas;
+- безопасный default `alert`, явный `disable` меняет desired user state;
+- локальный node outbox ограничен по байтам; при backpressure checkpoint не продвигается.
 
-Сделать control-plane владельцем нормализованных сущностей:
+## 3. Fleet и security hardening — выполнено
 
-- `Node`, `Board`, `User`, `NodeAssignment`, `ConfigRevision`, `AuditEvent`;
-- явные enabled/disabled/revoked состояния;
-- optimistic version для конкурентных административных операций;
-- детерминированный compiler сущностей в core `config.toml`;
-- immutable revision с SHA-256 и ссылкой на предыдущую ревизию;
-- desired/applied drift и сохранение последнего ApplyResult;
-- event-driven уведомление node stream о новой ревизии плюс периодический
-  reconcile как страховка.
+- one-time enrollment, локальная private key ноды, CSR и 30-дневный сертификат;
+- TLS 1.3/mTLS, fingerprint inventory, revocation и emergency node disable;
+- API token hashes, roles и `lastUsedAt`;
+- request body limit для declared и streamed/chunked тела;
+- per-token/IP rate limit и explicit CORS allowlist;
+- AES-GCM keyring с несколькими master keys и active key id;
+- private credentials остаются write-only и не попадают в diff/API/events.
 
-Широкий `Repository` разделён на узкие порты enrollment, catalog, desired
-revisions, node status, audit, notification и traffic ingestion. CLI
-`catalog seed|node|board|user|assignment|reconcile|history` предоставляет
-временную административную границу до появления HTTP API.
+## 4. HA и reliable delivery — выполнено
 
-Критерии готовности:
+- PostgreSQL node leases разрешают одну активную сессию на node;
+- fencing token блокирует late writes старой server replica;
+- lease renewal/release привязаны к owner, session и fence;
+- outbox использует row lock и backoff, после 10 ошибок — dead letter;
+- admin API показывает dead letters и явно возвращает их в retry;
+- stale online status автоматически истекает;
+- replicas получают desired/runtime/status через PostgreSQL `LISTEN/NOTIFY`.
 
-- unit-тесты доменных инвариантов и TOML compiler golden tests;
-- тест конкурентного обновления одной сущности;
-- application-тест `change -> revision -> node apply -> applied projection`;
-- reconnect ноды всегда приводит desired/applied к одному состоянию.
+## 5. Production frontend — выполнено
 
-Все критерии закрыты unit, golden, optimistic concurrency, reconnect и
-application flow тестами. Event bus ускоряет доставку внутри процесса, а
-периодический reconcile восстанавливает её после потерянного уведомления или
-изменения через отдельный CLI-процесс.
+- React/TypeScript dashboard внутри production Spring Boot image;
+- overview, node drift, runtime sessions/boards, activity и оба traffic вида;
+- users/boards add, enable/disable/remove и node enable/disable;
+- authenticated fetch SSE без polling;
+- bearer token хранится только в `sessionStorage`;
+- desktop/mobile layout, accessible navigation, tests, ESLint и browser QA.
 
-## Этап 2. Production backend API и хранилище
+## 6. Verification и recovery — выполнено
 
-- PostgreSQL adapter и версионированные SQL migrations;
-- шифрование приватных ключей envelope encryption, ключ шифрования вне БД;
-- versioned HTTP API `/api/v1` для frontend;
-- OpenAPI как проверяемый контракт;
-- authentication, RBAC и append-only audit log;
-- node list/read models: online, last seen, core readiness, version и drift;
-- SSE для UI-обновлений; node gRPC браузеру не раскрывается.
+- unit/application/architecture/migration suites;
+- Testcontainers contract на PostgreSQL 18 для Flyway V1–V7 и lease fencing;
+- runtime rebuild из authoritative snapshot и следующих decoded facts;
+- Go test suites core и node-agent;
+- frontend test/lint/build и headless Chromium interaction test;
+- multi-stage production image build;
+- GitHub Actions для Go, Kotlin/PostgreSQL, frontend и Docker image.
 
-Критерии готовности: repository contract suite выполняется для in-memory и
-PostgreSQL adapters, API имеет authorization/validation tests, миграции
-проверяются как с чистой БД, так и с предыдущей версии.
+## Следующая эксплуатационная работа
 
-## Этап 3. Статистика
+Это не незакрытые части шести этапов, а production rollout процедуры:
 
-- идемпотентный ingestion по `(node_id, batch_id)`;
-- ClickHouse для временных рядов и retention policy;
-- отдельные таблицы interface traffic и per-user payload;
-- hourly/daily rollups без сложения двух типов трафика;
-- запросы для графиков, экспорта и лимитов пользователей;
-- backpressure и ограничение локального outbox на ноде.
-
-Тесты включают duplicate delivery, out-of-order batches, counter reset, restart
-core, restart network namespace и недоступность telemetry storage.
-
-## Этап 4. Frontend
-
-После стабилизации read models:
-
-- dashboard и alerts;
-- ноды и desired/applied drift;
-- пользователи, доски и assignments;
-- история config revisions, diff и rollback;
-- раздельные traffic charts;
-- enrollment, certificates, audit и RBAC-aware actions.
-
-## Этап 5. Production hardening
-
-- несколько backend replicas и shared event delivery;
-- certificate revocation/rotation и emergency node disable;
-- rate limits, request size limits и secret redaction;
-- backup/restore drills;
-- rolling upgrades node/core;
-- E2E с реальной доской, TCP/UDP клиентом и проверкой обеих метрик;
-- failure tests: crash между persist/ACK, потеря hub и повреждённый desired
-  snapshot.
+- настроить backup/restore drill и алерты под конкретную инфраструктуру;
+- провести soak/load test на целевом количестве nodes/users;
+- выполнить rolling-upgrade/chaos drill в staging;
+- после фактических объёмов выбрать PostgreSQL partitioning или ClickHouse;
+- расширить UI для assignment, history/diff/rollback, certificates, tokens и dead-letter operations — backend endpoints уже готовы.

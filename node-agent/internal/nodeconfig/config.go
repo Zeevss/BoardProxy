@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -22,6 +23,7 @@ type Config struct {
 	SysClassNet     string
 	CollectInterval time.Duration
 	Heartbeat       time.Duration
+	MaxOutboxBytes  int64
 }
 
 func Parse(args []string) (Config, error) {
@@ -34,13 +36,14 @@ func Parse(args []string) (Config, error) {
 	sysClassNet := flags.String("sys-class-net", env("BPROXY_SYS_CLASS_NET", "/sys/class/net"), "network counter root")
 	collectInterval := flags.Duration("collect-interval", defaultCollectInterval, "traffic collection interval")
 	heartbeat := flags.Duration("heartbeat-interval", defaultHeartbeatInterval, "hub heartbeat interval")
+	maxOutboxBytes := flags.Int64("max-outbox-bytes", envInt64("BPROXY_MAX_OUTBOX_BYTES", 256<<20), "maximum durable telemetry backlog")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
 	config := Config{
 		DataDirectory: *data, BootstrapSecret: *secret, CoreBinary: *coreBinary, CoreControl: *coreControl,
 		Interfaces: split(*interfaces), SysClassNet: *sysClassNet,
-		CollectInterval: *collectInterval, Heartbeat: *heartbeat,
+		CollectInterval: *collectInterval, Heartbeat: *heartbeat, MaxOutboxBytes: *maxOutboxBytes,
 	}
 	if err := config.Validate(); err != nil {
 		return Config{}, err
@@ -52,13 +55,25 @@ func (c Config) Validate() error {
 	if c.DataDirectory == "" || c.CoreBinary == "" || c.CoreControl == "" {
 		return errors.New("data directory, core binary and core control address are required")
 	}
-	if c.CollectInterval <= 0 || c.Heartbeat <= 0 {
+	if c.CollectInterval <= 0 || c.Heartbeat <= 0 || c.MaxOutboxBytes <= 0 {
 		return errors.New("collection and heartbeat intervals must be positive")
 	}
 	if len(c.Interfaces) == 0 {
 		return errors.New("at least one statistics interface is required")
 	}
 	return nil
+}
+
+func envInt64(key string, fallback int64) int64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return value
 }
 
 func split(raw string) []string {

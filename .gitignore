@@ -1,6 +1,10 @@
 bin/
 dist/
 build/
+node_modules/
+*.tsbuildinfo
+/control-plane/frontend/vite.config.js
+/control-plane/frontend/vite.config.d.ts
 
 .idea/
 .vscode/

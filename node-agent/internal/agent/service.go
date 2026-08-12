@@ -36,6 +36,7 @@ type stateStore interface {
 	PutCheckpoint(string, []byte) error
 	Pending() ([]localstore.Pending, error)
 	Ack(string) error
+	Changes() <-chan struct{}
 }
 
 type coreRuntime interface {
@@ -44,7 +45,7 @@ type coreRuntime interface {
 }
 
 func Run(ctx context.Context, config nodeconfig.Config, version string, stdout, stderr io.Writer, log *slog.Logger) error {
-	store, err := localstore.Open(config.DataDirectory)
+	store, err := localstore.OpenWithOutboxLimit(config.DataDirectory, config.MaxOutboxBytes)
 	if err != nil {
 		return err
 	}
@@ -62,6 +63,7 @@ func Run(ctx context.Context, config nodeconfig.Config, version string, stdout, 
 	collector := statscollector.New(config.Interfaces, config.SysClassNet, config.CoreControl, store)
 	go collectTraffic(ctx, store, collector, config.CollectInterval, log)
 	go superviseCore(ctx, core, log)
+	go collectCoreRuntimeEvents(ctx, core, store, log)
 	return service.reconnect(ctx)
 }
 

@@ -1,91 +1,120 @@
 # BoardProxy Control Plane
 
-`bproxy-hub` owns node enrollment and durable desired state. Nodes always dial
-out to one TLS 1.3 bidirectional gRPC endpoint; core itself is never exposed to
-the network.
+The control plane is the Spring Boot modular monolith in [`server`](server/).
+It owns durable desired state in PostgreSQL. Nodes dial its TLS 1.3 gRPC port;
+core remains private to node-agent and has no database.
 
-The control plane is split into two deployable components:
+```text
+frontend -> authenticated HTTP :8080 -> Kotlin server -> PostgreSQL
+                                            |
+                                            +-- mTLS gRPC :8443 <- node-agent -> core
+```
 
-- [`backend`](backend/) — Go application, node contract and infrastructure adapters;
-- [`frontend`](frontend/) — reserved UI boundary; its read models and commands
-  will be designed before selecting and implementing the frontend stack.
-
-This mirrors the useful Remnawave component boundary while keeping our node
-transport different: BoardProxy nodes initiate a durable outbound mTLS stream.
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) for dependency direction.
-The staged backend, telemetry and frontend work is tracked in
-[`ROADMAP.md`](ROADMAP.md).
+The canonical protobuf source and standalone generated Go client module live
+under [`contracts`](contracts/). The old Go control-plane implementation has
+been removed.
 
 ## Local Docker bootstrap
 
-Prepare the environment and build the two runtime images:
+Generate two independent secrets and keep the master key stable for the
+lifetime of the database and PKI volume:
 
 ```sh
 cp .env.example .env
-docker compose build hub node
-docker compose up -d hub
+openssl rand -base64 32 # CONTROL_MASTER_KEY
+openssl rand -base64 32 # CONTROL_BOOTSTRAP_ADMIN_TOKEN
+docker compose up -d --build postgres hub
 ```
 
-Generate a one-time, node-bound bootstrap secret from the same persistent hub
-volume. Paste the output as `BPROXY_NODE_SECRET` in `.env`:
+Open `http://localhost:8080/`. The production image serves the React login
+shell publicly, while every `/api/v1` request remains bearer-authenticated.
+
+Use the bootstrap token to create a persistent admin token. Its plaintext is
+returned exactly once; the database stores only its SHA-256 hash.
 
 ```sh
-docker compose run --rm --no-deps hub token \
-  --node node-1 --hub-url hub:8443 --server-names hub,localhost
+export BOOTSTRAP_TOKEN='<CONTROL_BOOTSTRAP_ADMIN_TOKEN>'
+curl -X POST http://localhost:8080/api/v1/access/tokens \
+  -H "Authorization: Bearer $BOOTSTRAP_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{"name":"local-admin","role":"ADMIN"}'
 ```
 
-Create a normalized catalog, which compiles and publishes the initial desired
-state, then start the node:
+Save the returned `secret` as `ADMIN_TOKEN`. After at least one persistent
+admin token exists, `CONTROL_BOOTSTRAP_ADMIN_TOKEN` may be cleared and hub
+restarted.
+
+Create the first catalog:
 
 ```sh
 cp control-plane/catalog.example.json catalog.json
-# Replace the board hash and both private-key placeholders first.
-docker compose run --rm --no-deps -T hub catalog seed \
-  --file - --actor operator < catalog.json
-docker compose up -d node
+# Replace board hash and both private-key placeholders.
+curl -X POST http://localhost:8080/api/v1/catalogs \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data-binary @catalog.json
 ```
 
-`catalog node|board|user|assignment` replaces one resource using
-`--expected-version`; every successful change validates the whole aggregate,
-creates an immutable core config revision and wakes a connected node. The
-legacy `config` command remains a break-glass raw TOML publisher and prints a
-warning because it bypasses the normalized catalog.
-
-Use `state: "disabled"` for reversible suspension and `state: "revoked"` for
-terminal revocation. Revoked users and their private keys are omitted from the
-compiled node config. The node validates every revision before activation,
-hot-reloads compatible changes and restarts core only for immutable
-listener/server changes.
-
-Inspect immutable revision metadata without printing TOML/private keys:
+Issue the one-time node secret:
 
 ```sh
-docker compose run --rm --no-deps hub catalog history --node node-1
+curl -X POST http://localhost:8080/api/v1/nodes/node-1/enrollment-tokens \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{"hubUrl":"hub:8443","ttlSeconds":900}'
 ```
 
-For separate hosts, issue the hub server certificate with the public DNS name,
-publish port 8443, generate the secret with `--hub-url dns-name:8443`, and run
-only the node container on the node host. The Compose name `hub` is intended for
-the one-host development topology.
+Copy `nodeSecret` into `BPROXY_NODE_SECRET` in `.env`, then start the node:
 
-## Security and state
+```sh
+docker compose up -d --build node
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://localhost:8080/api/v1/nodes/node-1/status
+```
 
-The bootstrap token is random, expires after 15 minutes by default, is bound to
-one node ID and is consumed once. The agent generates its ECDSA private key
-locally; the hub receives only a CSR. The resulting client certificate is valid
-for 30 days and is automatically rotated seven days before expiry over existing
-mTLS. If it has already expired, issue a new enrollment token and replace
-`BPROXY_NODE_SECRET`; the agent then performs a fresh enrollment automatically.
+Updating the catalog with its current `ETag` wakes the connected node stream
+immediately. Compatible user/board changes are hot-applied by core; listener or
+server changes may require node-agent to restart core.
 
-The single-instance development filesystem adapter stores:
+```sh
+curl -X PUT http://localhost:8080/api/v1/catalogs/node-1 \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'If-Match: "1"' \
+  --data-binary @catalog.json
+```
 
-- normalized catalogs, immutable desired revision logs, node-status projections,
-  audit events, CA/server keys and enrollment tokens under `/var/lib/bproxy-hub`;
-- interface batches under `traffic/interface/<node>/`;
-- per-user batches under `traffic/user/<node>/`.
+Use `state: "disabled"` for reversible suspension and `state: "revoked"` for
+terminal revocation. Revoked resources and private credentials are omitted
+from compiled node configuration.
 
-Traffic files are protobuf messages named by batch UUID and created with
-exclusive semantics, so a retry is idempotent. The adapter is intentionally not
-a production database: catalog, audit and revision writes are repaired by the
-reconciler but are not one cross-file transaction. PostgreSQL and transactional
-outbox delivery are the next stage.
+Granular example:
+
+```sh
+curl -X PUT http://localhost:8080/api/v1/nodes/node-1/users/alice \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'If-Match: "1"' \
+  -H 'Content-Type: application/json' \
+  --data '{"name":"Alice","privateKey":"...","state":"enabled","maxSessions":2,"maxLanes":4}'
+```
+
+## HTTP access
+
+- `VIEWER` reads catalogs, status, traffic and frontend events;
+- `OPERATOR` also mutates catalogs and creates enrollment secrets;
+- `ADMIN` also creates, lists and revokes API tokens and reads protected
+  actuator endpoints.
+
+OpenAPI JSON is available at `/v3/api-docs`, Swagger UI at
+`/swagger-ui/index.html`, and frontend SSE at `/api/v1/events`. Health remains
+public at `/actuator/health`; all business endpoints require a bearer token.
+
+Current core runtime state is available at
+`/api/v1/nodes/{nodeId}/runtime`; decoded facts are available at the sibling
+`/runtime/events` endpoint. Forward event pagination must include both
+`coreBootId` and `afterSequence`. Runtime projection changes are also emitted
+as `runtime.projection.changed` through the frontend SSE stream.
+
+Catalog history/diff/rollback, traffic quotas, certificate revocation and
+outbox dead-letter recovery are documented in generated OpenAPI.
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`ROADMAP.md`](ROADMAP.md).

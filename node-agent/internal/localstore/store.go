@@ -20,13 +20,28 @@ import (
 const (
 	databaseName       = "node.sqlite3"
 	legacyDatabaseName = "node.db"
+	defaultOutboxLimit = int64(256 << 20)
 )
 
 var ErrLegacyDatabase = errors.New("localstore: legacy bbolt database requires explicit migration")
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db             *sql.DB
+	changes        chan struct{}
+	maxOutboxBytes int64
+}
 
 func Open(dataDirectory string) (*Store, error) {
+	return OpenWithOutboxLimit(dataDirectory, defaultOutboxLimit)
+}
+
+// OpenWithOutboxLimit bounds the durable telemetry backlog. The collector
+// checkpoint and outbox insert share a transaction, so hitting the limit pauses
+// collection without silently skipping an interval.
+func OpenWithOutboxLimit(dataDirectory string, maxOutboxBytes int64) (*Store, error) {
+	if maxOutboxBytes <= 0 {
+		return nil, errors.New("localstore: outbox byte limit must be positive")
+	}
 	if err := os.MkdirAll(dataDirectory, 0o700); err != nil {
 		return nil, fmt.Errorf("localstore: create data directory: %w", err)
 	}
@@ -48,7 +63,7 @@ func Open(dataDirectory string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
-	store := &Store{db: db}
+	store := &Store{db: db, changes: make(chan struct{}, 1), maxOutboxBytes: maxOutboxBytes}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := store.initialize(ctx); err != nil {
@@ -102,6 +117,17 @@ func (s *Store) initialize(ctx context.Context) error {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+// Changes is a coalescing wake-up signal. Durable outbox rows remain the
+// source of truth; consumers always rescan after receiving a hint.
+func (s *Store) Changes() <-chan struct{} { return s.changes }
+
+func (s *Store) notifyChange() {
+	select {
+	case s.changes <- struct{}{}:
+	default:
+	}
+}
 
 func (s *Store) Checkpoint(key string) ([]byte, error) {
 	if key == "" {

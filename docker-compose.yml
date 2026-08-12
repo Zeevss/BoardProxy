@@ -1,14 +1,46 @@
 services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: boardproxy
+      POSTGRES_USER: boardproxy
+      POSTGRES_PASSWORD: ${CONTROL_DB_PASSWORD:-boardproxy}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U boardproxy -d boardproxy"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - control-db:/var/lib/postgresql
+
   hub:
     build:
       context: .
-      dockerfile: control-plane/Dockerfile
+      dockerfile: control-plane/server/Dockerfile
     restart: unless-stopped
-    command: ["serve", "--listen", ":8443", "--server-names", "hub,localhost"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CONTROL_DB_URL: jdbc:postgresql://postgres:5432/boardproxy
+      CONTROL_DB_USER: boardproxy
+      CONTROL_DB_PASSWORD: ${CONTROL_DB_PASSWORD:-boardproxy}
+      CONTROL_MASTER_KEY: ${CONTROL_MASTER_KEY:?CONTROL_MASTER_KEY must be set to a base64-encoded 32-byte key}
+      CONTROL_MASTER_KEY_ID: ${CONTROL_MASTER_KEY_ID:-control-master-v1}
+      CONTROL_MASTER_KEYS: ${CONTROL_MASTER_KEYS:-}
+      CONTROL_BOOTSTRAP_ADMIN_TOKEN: ${CONTROL_BOOTSTRAP_ADMIN_TOKEN:-}
+      CONTROL_GRPC_SERVER_NAMES: ${CONTROL_GRPC_SERVER_NAMES:-hub,localhost}
+      CONTROL_ALLOWED_ORIGINS: ${CONTROL_ALLOWED_ORIGINS:-}
+      CONTROL_REQUESTS_PER_MINUTE: ${CONTROL_REQUESTS_PER_MINUTE:-300}
+      CONTROL_MAXIMUM_BODY_BYTES: ${CONTROL_MAXIMUM_BODY_BYTES:-2097152}
+      CONTROL_RAW_RETENTION_DAYS: ${CONTROL_RAW_RETENTION_DAYS:-31}
+      CONTROL_ROLLUP_RETENTION_DAYS: ${CONTROL_ROLLUP_RETENTION_DAYS:-730}
     ports:
       - "${BPROXY_HUB_PORT:-8443}:8443"
+      - "${BPROXY_CONTROL_HTTP_PORT:-8080}:8080"
     volumes:
-      - hub-data:/var/lib/bproxy-hub
+      - control-pki:/var/lib/boardproxy-control/pki
 
   node:
     build:
@@ -21,9 +53,11 @@ services:
       BPROXY_NODE_SECRET: ${BPROXY_NODE_SECRET:-}
       BPROXY_STATS_INTERFACES: ${BPROXY_STATS_INTERFACES:-eth0}
       BPROXY_CORE_CONTROL: unix:///run/bproxy/control.sock
+      BPROXY_MAX_OUTBOX_BYTES: ${BPROXY_MAX_OUTBOX_BYTES:-268435456}
     volumes:
       - node-data:/var/lib/bproxy-node
 
 volumes:
-  hub-data:
+  control-db:
+  control-pki:
   node-data:

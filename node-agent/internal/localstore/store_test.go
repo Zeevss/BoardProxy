@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	nodev1 "bproxy-control-plane/api/node/v1"
+	nodev1 "bproxy-node-contracts/node/v1"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -73,6 +73,32 @@ func TestStoreSurvivesReopen(t *testing.T) {
 	}
 }
 
+func TestPendingPreservesInsertionOrderWhenTimestampsCollide(t *testing.T) {
+	store := openTestStore(t)
+	// Reverse lexical order catches the old created_at,batch_id ordering. Force
+	// the same timestamp to make the test deterministic.
+	for _, batchID := range []string{"batch-z", "batch-a"} {
+		raw, err := proto.Marshal(interfaceEvent(batchID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.Exec(`INSERT INTO outbox (batch_id, event, created_at) VALUES (?, ?, 1)`, batchID, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending, err := store.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(pending))
+	for _, item := range pending {
+		ids = append(ids, item.BatchID)
+	}
+	if len(pending) != 2 || pending[0].BatchID != "batch-z" || pending[1].BatchID != "batch-a" {
+		t.Fatalf("pending order=%v", ids)
+	}
+}
+
 func TestCommitCollectionRollsBackOnBatchConflict(t *testing.T) {
 	store := openTestStore(t)
 	if err := store.CommitCollection(
@@ -109,6 +135,25 @@ func TestCommitCollectionRejectsMismatchedBatchIDBeforeWrite(t *testing.T) {
 	checkpoint, readErr := store.Checkpoint("interface")
 	if readErr != nil || checkpoint != nil {
 		t.Fatalf("checkpoint=%q err=%v, validation must happen before transaction", checkpoint, readErr)
+	}
+}
+
+func TestOutboxLimitRollsBackCollectorCheckpoint(t *testing.T) {
+	store, err := OpenWithOutboxLimit(t.TempDir(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	err = store.CommitCollection(
+		map[string][]byte{"interface": []byte("must-not-advance")},
+		map[string]*nodev1.NodeEvent{"batch-1": interfaceEvent("batch-1")},
+	)
+	if !errors.Is(err, ErrOutboxFull) {
+		t.Fatalf("error=%v, want ErrOutboxFull", err)
+	}
+	checkpoint, readErr := store.Checkpoint("interface")
+	if readErr != nil || checkpoint != nil {
+		t.Fatalf("checkpoint=%q err=%v", checkpoint, readErr)
 	}
 }
 

@@ -7,8 +7,8 @@ import (
 	"errors"
 	"testing"
 
-	nodev1 "bproxy-control-plane/api/node/v1"
 	"bproxy-node-agent/internal/localstore"
+	nodev1 "bproxy-node-contracts/node/v1"
 )
 
 type fakeCore struct {
@@ -35,6 +35,7 @@ func (f *fakeStore) PutCheckpoint(_ string, value []byte) error {
 }
 func (*fakeStore) Pending() ([]localstore.Pending, error) { return nil, nil }
 func (*fakeStore) Ack(string) error                       { return nil }
+func (*fakeStore) Changes() <-chan struct{}               { return nil }
 
 func TestActivateDesiredPersistsStateAfterCoreApply(t *testing.T) {
 	config := []byte("version = 1")

@@ -1,0 +1,42 @@
+spring:
+  application:
+    name: boardproxy-control-plane
+  datasource:
+    url: ${CONTROL_DB_URL:jdbc:postgresql://localhost:5432/boardproxy}
+    username: ${CONTROL_DB_USER:boardproxy}
+    password: ${CONTROL_DB_PASSWORD:boardproxy}
+  flyway:
+    enabled: true
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+control:
+  instance-id: ${CONTROL_INSTANCE_ID:}
+  security:
+    master-key: ${CONTROL_MASTER_KEY:}
+    master-key-id: ${CONTROL_MASTER_KEY_ID:control-master-v1}
+    master-keys: ${CONTROL_MASTER_KEYS:}
+  access:
+    bootstrap-admin-token: ${CONTROL_BOOTSTRAP_ADMIN_TOKEN:}
+  pki:
+    directory: ${CONTROL_PKI_DIRECTORY:/var/lib/boardproxy-control/pki}
+  grpc:
+    port: ${CONTROL_GRPC_PORT:8443}
+    server-names: ${CONTROL_GRPC_SERVER_NAMES:hub,localhost}
+  http:
+    allowed-origins: ${CONTROL_ALLOWED_ORIGINS:}
+    requests-per-minute: ${CONTROL_REQUESTS_PER_MINUTE:300}
+    maximum-body-bytes: ${CONTROL_MAXIMUM_BODY_BYTES:2097152}
+  telemetry:
+    raw-retention-days: ${CONTROL_RAW_RETENTION_DAYS:31}
+    rollup-retention-days: ${CONTROL_ROLLUP_RETENTION_DAYS:730}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+
+server:
+  port: ${CONTROL_HTTP_PORT:8080}
+  shutdown: graceful

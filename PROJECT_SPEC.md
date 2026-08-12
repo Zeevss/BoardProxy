@@ -9,11 +9,11 @@ BoardProxy — SOCKS5 TCP/UDP и HTTP-прокси, у которого тран
 - `core/` — stateless Go-бинарник `bproxy`: data plane и локальный management API;
 - `node-agent/` — агент ноды: запускает core, применяет desired config,
   собирает два независимых потока трафика и гарантированно доставляет их хабу;
-- `control-plane/` — `bproxy-hub`: нормализованный control catalog, compiler,
-  immutable revisions, reconciler, enrollment, mTLS node stream и development
-  файловые адаптеры хранения;
-- `docker-compose.yml` — локальная/dev-связка hub + node; отдельного legacy
-  panel/gateway больше нет.
+- `control-plane/` — Kotlin/Spring Boot modular monolith: нормализованный control
+  catalog, compiler, immutable revisions, reconciler, enrollment, mTLS node
+  stream и PostgreSQL-хранилище;
+- `docker-compose.yml` — локальная/dev-связка PostgreSQL + control-plane + node;
+  отдельного panel/gateway и старого Go control-plane больше нет.
 
 Главный путь данных:
 
@@ -151,6 +151,13 @@ batch отправляются повторно. Первый interface sample �
 HTTP `/healthz` проверяет только жизнь процесса, а `/readyz` возвращает 200,
 только когда активна хотя бы одна включённая доска.
 
+Кроме telemetry batches node-agent держит отдельный server-streaming gRPC
+канал к core для runtime events. Cursor и событие попадают в SQLite outbox
+атомарно, а подключённый hub stream просыпается сразу — polling не участвует в
+обычной доставке. При потере части bounded-журнала core явно сообщает reset,
+после чего node-agent отправляет авторитетный runtime snapshot. Hub применяет
+его как replacement projection и затем принимает только более новые sequence.
+
 Control-plane является владельцем per-node агрегата `Node + Board + User +
 NodeAssignment`. Ресурсы имеют optimistic version и состояния `enabled`,
 `disabled`, `revoked`; отзыв терминален, а секрет отозванного пользователя не
@@ -161,13 +168,12 @@ readiness, последний ApplyResult и desired/applied drift. In-process e
 будит подключённую ноду сразу, периодический reconcile страхует потерянные и
 cross-process уведомления.
 
-Начальный control-plane использует однопроцессный файловый adapter для catalog,
-revisions, status, append-only audit, одноразовых tokens, CA и двух деревьев
-protobuf traffic batches. Application layer зависит от узких портов, поэтому
-production-адаптеры PostgreSQL/ClickHouse можно добавить без изменения node
-protocol. Файловый adapter не даёт общей транзакции между catalog/audit/revision;
-reconciler чинит compiled desired, а транзакционная гарантия входит в следующий
-этап. Core при этом остаётся disposable.
+Активный Kotlin control-plane сохраняет catalog, encrypted revision, audit и
+outbox атомарно в PostgreSQL. Он также хранит одноразовые enrollment tokens,
+node status, два независимых дерева traffic deltas и сырые runtime event batches.
+Application layer зависит от узких портов; gRPC, REST, SQL, PKI и TOML остаются
+во внешних адаптерах. Go filesystem backend сохранён только как migration
+reference и Compose его не запускает. Core при этом остаётся disposable.
 
 ## 5. Практический маршрут отладки
 
@@ -187,6 +193,8 @@ reconciler чинит compiled desired, а транзакционная гара
    address, mux сохраняет границу сообщения, egress UDP socket возвращает ответ
    с исходным source address.
 
-Основные проверки: `go test ./...` отдельно в `core`, `node-agent` и
-`control-plane/backend`, затем `go test -race ./...`. Live-тесты Yandex включаются
-переменными, описанными в `core/internal/boardtest` и `core/README.md`.
+Основные проверки: `go test ./...` отдельно в `core` и `node-agent`, затем
+`go test -race ./...`; standalone Go protobuf SDK находится в
+`control-plane/contracts/gen/go`. Для control-plane — `./gradlew clean test
+bootJar` в `control-plane/server`. Live-тесты Yandex включаются переменными,
+описанными в `core/internal/boardtest` и `core/README.md`.

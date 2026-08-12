@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"time"
 
-	nodev1 "bproxy-control-plane/api/node/v1"
 	corev1 "bproxy-core/api/control/v1"
+	nodev1 "bproxy-node-contracts/node/v1"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

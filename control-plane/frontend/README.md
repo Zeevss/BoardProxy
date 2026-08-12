@@ -1,19 +1,23 @@
-# BoardProxy Control Plane Frontend
+# BoardProxy Control Plane UI
 
-The frontend is intentionally not implemented yet. This directory marks a
-separate deployable component, following the useful Remnawave boundary between
-backend and frontend without coupling the browser to the node protocol.
+React/TypeScript operations UI for the Kotlin control-plane. The production
+Docker image builds it into Spring Boot static resources, so browser API and
+SSE calls remain same-origin. Development Vite proxies `/api` and `/actuator`
+to `localhost:8080`.
 
-The future UI will consume a versioned HTTP API exposed by `backend`; it will
-never call node gRPC directly. Before choosing a frontend stack we will define
-the panel read models and commands together:
+```bash
+npm ci --include=dev
+npm run test
+npm run lint
+npm run build
+npm run dev
+```
 
-- overview and alerts;
-- nodes, connectivity and applied/desired revision drift;
-- users, boards and config revisions;
-- interface traffic and per-user payload as separate charts;
-- enrollment, certificate state and audit events;
-- operational actions with explicit confirmation and RBAC.
+The bearer token is stored in `sessionStorage`, never persistent browser
+storage. Runtime activity uses an authenticated fetch stream because native
+`EventSource` cannot attach the Authorization header. All desired-state
+mutations include the current catalog version in `If-Match`; a concurrent edit
+is surfaced rather than overwritten.
 
-No REST DTOs are frozen yet: the backend currently exposes only the stable node
-contract. This avoids designing the API around an imagined UI.
+The UI deliberately displays interface traffic and per-user payload as separate
+series. User private keys are write-only and are never returned by the API.

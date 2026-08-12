@@ -39,6 +39,19 @@ type Manager struct {
 	lastErr        error
 }
 
+type RuntimeEventStream interface {
+	Recv() (*corev1.CoreRuntimeEvent, error)
+	Close() error
+}
+
+type grpcRuntimeEventStream struct {
+	connection *grpc.ClientConn
+	stream     grpc.ServerStreamingClient[corev1.CoreRuntimeEvent]
+}
+
+func (s *grpcRuntimeEventStream) Recv() (*corev1.CoreRuntimeEvent, error) { return s.stream.Recv() }
+func (s *grpcRuntimeEventStream) Close() error                            { return s.connection.Close() }
+
 func New(binary, dataDir, controlAddress string, stdout, stderr io.Writer, log *slog.Logger) *Manager {
 	coreDir := filepath.Join(dataDir, "core")
 	return &Manager{
@@ -216,6 +229,32 @@ func (m *Manager) Status(ctx context.Context) (running, ready bool, errText stri
 		return true, false, err.Error()
 	}
 	return true, stats.GetBoardsEnabled() > 0 && stats.GetBoardsRunning() > 0, ""
+}
+
+func (m *Manager) WatchEvents(ctx context.Context, bootID string, afterSequence uint64) (RuntimeEventStream, error) {
+	connection, err := grpc.NewClient(m.controlAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, err
+	}
+	stream, err := corev1.NewControlServiceClient(connection).WatchRuntimeEvents(ctx, &corev1.WatchRuntimeEventsRequest{
+		BootId: bootID, AfterSequence: afterSequence,
+	})
+	if err != nil {
+		connection.Close()
+		return nil, err
+	}
+	return &grpcRuntimeEventStream{connection: connection, stream: stream}, nil
+}
+
+func (m *Manager) RuntimeSnapshot(ctx context.Context) (*corev1.RuntimeSnapshot, error) {
+	connection, err := grpc.NewClient(m.controlAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, err
+	}
+	defer connection.Close()
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return corev1.NewControlServiceClient(connection).GetRuntimeSnapshot(callCtx, &emptypb.Empty{})
 }
 
 func (m *Manager) runningLocked() bool {

@@ -3,7 +3,7 @@ module bproxy-node-agent
 go 1.26.5
 
 require (
-	bproxy-control-plane v0.0.0
+	bproxy-node-contracts v0.0.0
 	bproxy-core v0.0.0
 	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
@@ -25,6 +25,6 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace bproxy-control-plane => ../control-plane/backend
+replace bproxy-node-contracts => ../control-plane/contracts/gen/go
 
 replace bproxy-core => ../core

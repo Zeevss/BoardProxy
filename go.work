@@ -1,7 +1,7 @@
 go 1.26.5
 
 use (
-	./control-plane/backend
+	./control-plane/contracts/gen/go
 	./core
 	./desktop-app
 	./node-agent

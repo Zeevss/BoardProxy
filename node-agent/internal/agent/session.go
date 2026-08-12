@@ -4,14 +4,15 @@ import (
 	"context"
 	"time"
 
-	nodev1 "bproxy-control-plane/api/node/v1"
+	nodev1 "bproxy-node-contracts/node/v1"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const outboxScanInterval = time.Second
+const outboxReconcileInterval = 30 * time.Second
+const outboxAcknowledgementTimeout = 30 * time.Second
 
 type receivedCommand struct {
 	command *nodev1.HubCommand
@@ -32,15 +33,17 @@ func (s *Service) connect(ctx context.Context) error {
 		return err
 	}
 	s.log.Info("hub stream connected", "hub", s.identity.HubURL, "node", s.identity.NodeID)
+	sent := make(map[string]time.Time)
+	if err := s.flushOutbox(stream, sent); err != nil {
+		return err
+	}
 	commands := receiveCommands(stream)
 	heartbeats := time.NewTicker(s.config.Heartbeat)
 	defer heartbeats.Stop()
-	outbox := time.NewTicker(outboxScanInterval)
+	outbox := time.NewTicker(outboxReconcileInterval)
 	defer outbox.Stop()
 	renewal := time.NewTimer(time.Until(s.identity.RenewAt))
 	defer renewal.Stop()
-	sent := make(map[string]bool)
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -59,6 +62,10 @@ func (s *Service) connect(ctx context.Context) error {
 				return err
 			}
 		case <-outbox.C:
+			if err := s.flushOutbox(stream, sent); err != nil {
+				return err
+			}
+		case <-s.store.Changes():
 			if err := s.flushOutbox(stream, sent); err != nil {
 				return err
 			}
@@ -99,7 +106,7 @@ func receiveCommands(stream grpc.BidiStreamingClient[nodev1.NodeEvent, nodev1.Hu
 	return commands
 }
 
-func (s *Service) handleCommand(ctx context.Context, stream grpc.BidiStreamingClient[nodev1.NodeEvent, nodev1.HubCommand], command *nodev1.HubCommand, sent map[string]bool) error {
+func (s *Service) handleCommand(ctx context.Context, stream grpc.BidiStreamingClient[nodev1.NodeEvent, nodev1.HubCommand], command *nodev1.HubCommand, sent map[string]time.Time) error {
 	if desired := command.GetDesiredState(); desired != nil {
 		if err := s.applyDesired(ctx, stream, desired); err != nil {
 			s.log.Warn("desired state rejected", "revision", desired.GetRevision(), "err", err)
@@ -111,22 +118,29 @@ func (s *Service) handleCommand(ctx context.Context, stream grpc.BidiStreamingCl
 		}
 		delete(sent, acknowledgement.GetBatchId())
 	}
+	if acknowledgement := command.GetRuntimeEventAck(); acknowledgement != nil {
+		if err := s.store.Ack(acknowledgement.GetBatchId()); err != nil {
+			return err
+		}
+		delete(sent, acknowledgement.GetBatchId())
+	}
 	return nil
 }
 
-func (s *Service) flushOutbox(stream grpc.BidiStreamingClient[nodev1.NodeEvent, nodev1.HubCommand], sent map[string]bool) error {
+func (s *Service) flushOutbox(stream grpc.BidiStreamingClient[nodev1.NodeEvent, nodev1.HubCommand], sent map[string]time.Time) error {
 	pending, err := s.store.Pending()
 	if err != nil {
 		return err
 	}
+	now := time.Now()
 	for _, item := range pending {
-		if sent[item.BatchID] {
+		if sentAt, exists := sent[item.BatchID]; exists && now.Sub(sentAt) < outboxAcknowledgementTimeout {
 			continue
 		}
 		if err := stream.Send(item.Event); err != nil {
 			return err
 		}
-		sent[item.BatchID] = true
+		sent[item.BatchID] = now
 	}
 	return nil
 }

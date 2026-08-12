@@ -1,0 +1,218 @@
+syntax = "proto3";
+
+package bproxy.node.v1;
+
+option go_package = "bproxy-node-contracts/node/v1;nodev1";
+
+import "google/protobuf/timestamp.proto";
+
+service NodeControlService {
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+  rpc Renew(RenewRequest) returns (EnrollResponse);
+  rpc Connect(stream NodeEvent) returns (stream HubCommand);
+}
+
+message EnrollRequest {
+  string node_id = 1;
+  string token = 2;
+  bytes csr_pem = 3;
+  string agent_version = 4;
+}
+
+message EnrollResponse {
+  bytes certificate_pem = 1;
+  bytes ca_certificate_pem = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+message RenewRequest {
+  bytes csr_pem = 1;
+  string agent_version = 2;
+}
+
+message NodeEvent {
+  oneof payload {
+    NodeHello hello = 1;
+    ApplyResult apply_result = 2;
+    NodeHeartbeat heartbeat = 3;
+    InterfaceTrafficBatch interface_traffic = 4;
+    UserTrafficBatch user_traffic = 5;
+    RuntimeEventBatch runtime_events = 6;
+  }
+}
+
+message HubCommand {
+  oneof payload {
+    DesiredState desired_state = 1;
+    TrafficAck traffic_ack = 2;
+    RuntimeEventAck runtime_event_ack = 3;
+  }
+}
+
+message NodeHello {
+  string node_id = 1;
+  string boot_id = 2;
+  string agent_version = 3;
+  string core_version = 4;
+  uint64 applied_revision = 5;
+  string config_sha256 = 6;
+}
+
+message DesiredState {
+  uint64 revision = 1;
+  bytes config_toml = 2;
+  string config_sha256 = 3;
+}
+
+message ApplyResult {
+  uint64 desired_revision = 1;
+  uint64 runtime_revision = 2;
+  string config_sha256 = 3;
+  string error = 4;
+  google.protobuf.Timestamp applied_at = 5;
+}
+
+message NodeHeartbeat {
+  google.protobuf.Timestamp sampled_at = 1;
+  bool core_running = 2;
+  bool core_ready = 3;
+  uint64 applied_revision = 4;
+  string error = 5;
+}
+
+// Raw traffic of the node container network namespace. This includes
+// BoardProxy payload, board transport and control-plane overhead.
+message InterfaceTrafficBatch {
+  string batch_id = 1;
+  google.protobuf.Timestamp interval_start = 2;
+  google.protobuf.Timestamp interval_end = 3;
+  repeated InterfaceTrafficDelta interfaces = 4;
+}
+
+message InterfaceTrafficDelta {
+  string interface = 1;
+  uint64 rx_bytes = 2;
+  uint64 tx_bytes = 3;
+  uint64 rx_packets = 4;
+  uint64 tx_packets = 5;
+  uint64 rx_errors = 6;
+  uint64 tx_errors = 7;
+  uint64 rx_dropped = 8;
+  uint64 tx_dropped = 9;
+}
+
+// Decrypted BoardProxy payload attributed by core. It is never summed with
+// InterfaceTrafficBatch.
+message UserTrafficBatch {
+  string batch_id = 1;
+  google.protobuf.Timestamp interval_start = 2;
+  google.protobuf.Timestamp interval_end = 3;
+  repeated UserTrafficDelta users = 4;
+}
+
+message UserTrafficDelta {
+  string user_tag = 1;
+  uint64 rx_bytes = 2; // client upload
+  uint64 tx_bytes = 3; // client download
+}
+
+message TrafficAck { string batch_id = 1; }
+
+// Runtime events are observed facts from core. They are delivered at least
+// once by node-agent and deduplicated by (node_id, core_boot_id, sequence).
+message RuntimeEventBatch {
+  string batch_id = 1;
+  repeated CoreRuntimeEvent events = 2;
+  RuntimeSnapshot snapshot = 3;
+}
+
+// Snapshot is sent after a stream reset/gap. It is an authoritative point-in-
+// time replacement for projections; events at or below latest_sequence are
+// then harmless replays.
+message RuntimeSnapshot {
+  string core_boot_id = 1;
+  uint64 latest_sequence = 2;
+  uint64 runtime_revision = 3;
+  google.protobuf.Timestamp captured_at = 4;
+  repeated RuntimeUserSnapshot users = 5;
+  repeated RuntimeBoardSnapshot boards = 6;
+}
+
+message RuntimeUserSnapshot {
+  string user_tag = 1;
+  uint64 active_sessions = 2;
+  uint64 rx_bytes = 3;
+  uint64 tx_bytes = 4;
+}
+
+message RuntimeBoardSnapshot {
+  string board_tag = 1;
+  string state = 2;
+  string error = 3;
+}
+
+message CoreRuntimeEvent {
+  string event_id = 1;
+  string core_boot_id = 2;
+  uint64 sequence = 3;
+  google.protobuf.Timestamp occurred_at = 4;
+  uint64 runtime_revision = 5;
+  oneof payload {
+    ResourceChanged resource_changed = 6;
+    BoardStateChanged board_state_changed = 7;
+    ClientSessionOpened client_session_opened = 8;
+    ClientSessionClosed client_session_closed = 9;
+    EventStreamReset stream_reset = 10;
+  }
+}
+
+enum ResourceKind {
+  RESOURCE_KIND_UNSPECIFIED = 0;
+  RESOURCE_KIND_USER = 1;
+  RESOURCE_KIND_BOARD = 2;
+}
+
+enum ResourceOperation {
+  RESOURCE_OPERATION_UNSPECIFIED = 0;
+  RESOURCE_OPERATION_ADDED = 1;
+  RESOURCE_OPERATION_UPDATED = 2;
+  RESOURCE_OPERATION_ENABLED = 3;
+  RESOURCE_OPERATION_DISABLED = 4;
+  RESOURCE_OPERATION_REMOVED = 5;
+}
+
+message ResourceChanged {
+  ResourceKind kind = 1;
+  ResourceOperation operation = 2;
+  string tag = 3;
+}
+
+message BoardStateChanged {
+  string board_tag = 1;
+  string previous_state = 2;
+  string state = 3;
+  string error = 4;
+}
+
+message ClientSessionOpened {
+  string user_tag = 1;
+  string board_tag = 2;
+  string bundle_id = 3;
+}
+
+message ClientSessionClosed {
+  string user_tag = 1;
+  string board_tag = 2;
+  string bundle_id = 3;
+  uint64 rx_bytes = 4;
+  uint64 tx_bytes = 5;
+  string reason = 6;
+}
+
+message EventStreamReset {
+  string reason = 1;
+  uint64 oldest_available_sequence = 2;
+  uint64 latest_sequence = 3;
+}
+
+message RuntimeEventAck { string batch_id = 1; }
