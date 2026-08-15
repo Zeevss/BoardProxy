@@ -537,6 +537,9 @@ func (s *Session) reconnect() bool {
 			downtime := time.Since(started)
 			s.metrics.recordReconnect(s.hash, s.metricRole(), downtime,
 				result.snapshotObjects, result.snapshotBytes)
+			if result.hasSubscription {
+				s.deliverReconnect(result.snapshot)
+			}
 			s.logger().Info("board websocket reconnected",
 				"attempts", attempt, "downtime", downtime,
 				"snapshot_objects", result.snapshotObjects,
@@ -587,6 +590,8 @@ func (s *Session) logger() *slog.Logger {
 type redialResult struct {
 	snapshotObjects int
 	snapshotBytes   uint64
+	snapshot        []board.Object
+	hasSubscription bool
 }
 
 func (s *Session) redial() (redialResult, error) {
@@ -602,8 +607,8 @@ func (s *Session) redial() (redialResult, error) {
 	s.mu.Unlock()
 
 	var result redialResult
-	var snapshot []board.Object
 	if page != "" {
+		result.hasSubscription = true
 		args, err := sio.Emit(ctx, "dashboard", s.subscribeEnvelope(page))
 		if err != nil {
 			_ = sio.Close()
@@ -612,14 +617,11 @@ func (s *Session) redial() (redialResult, error) {
 		for _, arg := range args {
 			result.snapshotBytes += uint64(len(arg))
 		}
-		snapshot = parseSnapshot(args)
-		result.snapshotObjects = len(snapshot)
+		result.snapshot = parseSnapshot(args)
+		result.snapshotObjects = len(result.snapshot)
 	}
 	if !s.setConnected(sio) {
 		return redialResult{}, board.ErrClosed
-	}
-	if page != "" {
-		s.deliverReconnect(snapshot)
 	}
 	return result, nil
 }

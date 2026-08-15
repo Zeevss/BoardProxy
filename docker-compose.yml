@@ -36,6 +36,11 @@ services:
       CONTROL_MAXIMUM_BODY_BYTES: ${CONTROL_MAXIMUM_BODY_BYTES:-2097152}
       CONTROL_RAW_RETENTION_DAYS: ${CONTROL_RAW_RETENTION_DAYS:-31}
       CONTROL_ROLLUP_RETENTION_DAYS: ${CONTROL_ROLLUP_RETENTION_DAYS:-730}
+      CONTROL_SUBSCRIPTION_ENABLED: ${CONTROL_SUBSCRIPTION_ENABLED:-false}
+      CONTROL_SUBSCRIPTION_PUBLIC_URL: ${CONTROL_SUBSCRIPTION_PUBLIC_URL:-}
+      CONTROL_SUBSCRIPTION_YANDEX_EDITOR_URL: ${CONTROL_SUBSCRIPTION_YANDEX_EDITOR_URL:-}
+      CONTROL_SUBSCRIPTION_RECOVERY_KEY_ID: ${CONTROL_SUBSCRIPTION_RECOVERY_KEY_ID:-}
+      CONTROL_SUBSCRIPTION_RECOVERY_SERVER_PUBLIC_KEY: ${CONTROL_SUBSCRIPTION_RECOVERY_SERVER_PUBLIC_KEY:-}
     ports:
       - "${BPROXY_HUB_PORT:-8443}:8443"
       - "${BPROXY_CONTROL_HTTP_PORT:-8080}:8080"
@@ -56,6 +61,18 @@ services:
       BPROXY_MAX_OUTBOX_BYTES: ${BPROXY_MAX_OUTBOX_BYTES:-268435456}
     volumes:
       - node-data:/var/lib/bproxy-node
+
+  subscribe:
+    profiles: ["subscribe"]
+    build:
+      context: ./subscribe
+    restart: unless-stopped
+    depends_on:
+      - hub
+    ports:
+      - "${BPROXY_SUBSCRIBE_PORT:-8090}:8090"
+    volumes:
+      - "${BPROXY_SUBSCRIBE_CONFIG:-./subscribe/config.toml}:/etc/boardproxy-subscribe/config.toml:ro"
 
 volumes:
   control-db:

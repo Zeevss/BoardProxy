@@ -21,6 +21,7 @@ import (
 	"bproxy-core/internal/keylink"
 	"bproxy-core/internal/logging"
 	"bproxy-core/internal/mgmt"
+	"bproxy-core/internal/runtimeevents"
 	"bproxy-core/internal/serverconfig"
 	"bproxy-core/internal/telemetry"
 )
@@ -29,6 +30,7 @@ const (
 	serverMetricsInterval = 30 * time.Second
 	boardRetryMinBackoff  = 500 * time.Millisecond
 	boardRetryMaxBackoff  = 30 * time.Second
+	runtimeEventCapacity  = 4096
 )
 
 var ErrRevisionConflict = errors.New("app: config revision conflict")
@@ -108,6 +110,7 @@ type ServerRuntime struct {
 	registry   *control.Registry
 	serverKP   crypto.Keypair
 	reconnects *yandex.ReconnectMetrics
+	events     *runtimeevents.Journal
 	startBoard func(context.Context, serverconfig.Config, serverconfig.Board) (*hub.Server, string, int, error)
 }
 
@@ -132,7 +135,7 @@ func NewServerRuntime(ctx context.Context, cfg serverconfig.Config, source strin
 		ctx: rctx, cancel: cancel, cfg: cloneConfig(cfg), source: source,
 		boards: make(map[string]*boardRuntime), started: time.Now(),
 		log: log, logs: logs, registry: registry, serverKP: serverKP,
-		reconnects: yandex.NewReconnectMetrics(),
+		reconnects: yandex.NewReconnectMetrics(), events: runtimeevents.New(runtimeEventCapacity),
 	}
 	r.startBoard = r.startBoardAttempt
 	r.revision.Store(1)
@@ -156,7 +159,7 @@ func (r *ServerRuntime) Close() {
 	}
 	r.mu.Unlock()
 	for _, br := range boards {
-		br.stop()
+		r.stopBoard(br)
 	}
 	r.applyMu.Unlock()
 }
@@ -172,6 +175,12 @@ func (r *ServerRuntime) Config() serverconfig.Config {
 }
 
 func (r *ServerRuntime) Users() []control.UserView { return r.registry.List() }
+
+func (r *ServerRuntime) SubscribeEvents(bootID string, afterSequence uint64) runtimeevents.Subscription {
+	return r.events.Subscribe(bootID, afterSequence)
+}
+
+func (r *ServerRuntime) EventPosition() (string, uint64) { return r.events.Position() }
 
 func (r *ServerRuntime) Reload(expected uint64) error {
 	if r.source == "stdin:" || r.source == "-" {
@@ -207,8 +216,20 @@ func (r *ServerRuntime) Boards() []control.BoardView {
 func (r *ServerRuntime) launchBoard(root serverconfig.Config, board serverconfig.Board) *boardRuntime {
 	bctx, cancel := context.WithCancel(r.ctx)
 	br := &boardRuntime{cfg: board, state: BoardStarting, cancel: cancel, done: make(chan struct{})}
+	r.publishBoardState(board.Tag, BoardStopped, BoardStarting, "")
 	go r.runBoard(bctx, root, board, br)
 	return br
+}
+
+func (r *ServerRuntime) stopBoard(board *boardRuntime) {
+	config, previous, _, _ := board.snapshot()
+	if previous != BoardDraining && previous != BoardStopped {
+		r.publishBoardState(config.Tag, previous, BoardDraining, "")
+	}
+	board.stop()
+	if previous != BoardStopped {
+		r.publishBoardState(config.Tag, BoardDraining, BoardStopped, "")
+	}
 }
 
 func (r *ServerRuntime) runBoard(bctx context.Context, root serverconfig.Config, board serverconfig.Board, br *boardRuntime) {
@@ -224,21 +245,35 @@ func (r *ServerRuntime) runBoard(bctx context.Context, root serverconfig.Config,
 				return
 			}
 			br.mu.Lock()
+			previous := br.state
+			previousError := br.err
+			changed := false
 			if br.state != BoardDraining && br.state != BoardStopped {
 				br.state = BoardRetrying
 				br.err = err.Error()
+				changed = previous != br.state || previousError != br.err
 			}
 			br.mu.Unlock()
+			if changed {
+				r.publishBoardState(board.Tag, previous, BoardRetrying, err.Error())
+			}
 			r.log.Warn("board unavailable; retrying", "tag", board.Tag, "hash", board.Hash, "err", err, "backoff", backoff)
 			if !waitBoardRetry(bctx, backoff) {
 				return
 			}
 			backoff = min(backoff*2, boardRetryMaxBackoff)
 			br.mu.Lock()
+			previous = br.state
+			changed = false
 			if br.state != BoardDraining && br.state != BoardStopped {
 				br.state = BoardStarting
+				br.err = ""
+				changed = previous != br.state
 			}
 			br.mu.Unlock()
+			if changed {
+				r.publishBoardState(board.Tag, previous, BoardStarting, "")
+			}
 			continue
 		}
 
@@ -248,10 +283,12 @@ func (r *ServerRuntime) runBoard(bctx context.Context, root serverconfig.Config,
 			_ = srv.Close()
 			return
 		}
+		previous := br.state
 		br.srv = srv
 		br.state = BoardActive
 		br.err = ""
 		br.mu.Unlock()
+		r.publishBoardState(board.Tag, previous, BoardActive, "")
 		r.log.Info("board active", "tag", board.Tag, "hash", board.Hash, "hub", hubSlide,
 			"pages", pages, "max_lanes", board.MaxLanes)
 
@@ -272,21 +309,35 @@ func (r *ServerRuntime) runBoard(bctx context.Context, root serverconfig.Config,
 			return
 		}
 		br.mu.Lock()
+		previous = br.state
+		previousError := br.err
+		changed := false
 		if br.state != BoardDraining && br.state != BoardStopped {
 			br.state = BoardRetrying
 			br.err = fmt.Sprintf("egress stopped: %v", err)
+			changed = previous != br.state || previousError != br.err
 		}
 		br.mu.Unlock()
+		if changed {
+			r.publishBoardState(board.Tag, previous, BoardRetrying, fmt.Sprintf("egress stopped: %v", err))
+		}
 		r.log.Warn("board egress stopped; retrying", "tag", board.Tag, "hash", board.Hash, "err", err,
 			"backoff", boardRetryMinBackoff)
 		if !waitBoardRetry(bctx, boardRetryMinBackoff) {
 			return
 		}
 		br.mu.Lock()
+		previous = br.state
+		changed = false
 		if br.state != BoardDraining && br.state != BoardStopped {
 			br.state = BoardStarting
+			br.err = ""
+			changed = previous != br.state
 		}
 		br.mu.Unlock()
+		if changed {
+			r.publishBoardState(board.Tag, previous, BoardStarting, "")
+		}
 		// A board that had reached active gets a fresh short retry window.
 		backoff = boardRetryMinBackoff
 	}
@@ -318,7 +369,8 @@ func (r *ServerRuntime) startBoardAttempt(bctx context.Context, root serverconfi
 	srv, err := hub.NewServer(bctx, hub.ServerConfig{
 		BoardTag: board.Tag, HubSession: hubSession, HubSlide: hubSlide, Pool: pool,
 		Dialer: yandexDialer{laneOptions}, ServerStatic: r.serverKP, Users: r.registry,
-		Codec: codec.Z85Codec{}, Link: linkOptions(root, r.log),
+		Events: r,
+		Codec:  codec.Z85Codec{}, Link: linkOptions(root, r.log),
 		MaxPayload: root.Transport.MaxFramePayload, StreamWindow: root.Transport.StreamWindow,
 		MaxStreamWindow: root.Transport.MaxStreamWindow, CoalesceTarget: root.Transport.CoalesceTarget,
 		StreamIdleTimeout: root.Transport.StreamIdleTimeout.Duration(), IdleTimeout: root.Server.IdleTimeout.Duration(),
@@ -329,6 +381,31 @@ func (r *ServerRuntime) startBoardAttempt(bctx context.Context, root serverconfi
 		return nil, "", 0, fmt.Errorf("start hub: %w", err)
 	}
 	return srv, hubSlide, len(pool), nil
+}
+
+func (r *ServerRuntime) SessionOpened(event hub.SessionOpened) {
+	r.events.Publish(runtimeevents.Event{
+		Type: runtimeevents.ClientSessionOpened, RuntimeRevision: r.Revision(),
+		UserTag: event.UserID, BoardTag: event.BoardTag, BundleID: event.BundleID,
+	})
+}
+
+func (r *ServerRuntime) SessionClosed(event hub.SessionClosed) {
+	r.events.Publish(runtimeevents.Event{
+		Type: runtimeevents.ClientSessionClosed, RuntimeRevision: r.Revision(),
+		UserTag: event.UserID, BoardTag: event.BoardTag, BundleID: event.BundleID,
+		RXBytes: event.RXBytes, TXBytes: event.TXBytes, Reason: event.Reason,
+	})
+}
+
+func (r *ServerRuntime) publishBoardState(tag string, previous, current BoardState, errText string) {
+	if previous == current && errText == "" {
+		return
+	}
+	r.events.Publish(runtimeevents.Event{
+		Type: runtimeevents.BoardStateChanged, RuntimeRevision: r.Revision(),
+		BoardTag: tag, PreviousState: string(previous), State: string(current), Error: errText,
+	})
 }
 
 func waitBoardRetry(ctx context.Context, delay time.Duration) bool {
@@ -403,7 +480,7 @@ func (r *ServerRuntime) ApplyConfig(expected uint64, candidate serverconfig.Conf
 		delete(oldBoards, board.Tag)
 		if !board.IsEnabled() {
 			if old != nil {
-				old.stop()
+				r.stopBoard(old)
 			}
 			r.mu.Lock()
 			r.boards[board.Tag] = &boardRuntime{cfg: board, state: BoardStopped}
@@ -431,7 +508,7 @@ func (r *ServerRuntime) ApplyConfig(expected uint64, candidate serverconfig.Conf
 			continue
 		}
 		if old != nil {
-			old.stop()
+			r.stopBoard(old)
 		}
 		br := r.launchBoard(candidate, board)
 		r.mu.Lock()
@@ -439,10 +516,55 @@ func (r *ServerRuntime) ApplyConfig(expected uint64, candidate serverconfig.Conf
 		r.mu.Unlock()
 	}
 	for _, removed := range oldBoards {
-		removed.stop()
+		r.stopBoard(removed)
 	}
-	r.revision.Add(1)
+	revision := r.revision.Add(1)
+	r.publishConfigChanges(oldConfig, candidate, revision)
 	return nil
+}
+
+// ApplyChanges builds a candidate configuration in memory and commits it with
+// one ApplyConfig call. A validation or revision failure leaves every resource
+// untouched.
+func (r *ServerRuntime) ApplyChanges(expected uint64, changes []serverconfig.Change) error {
+	if expected == 0 {
+		expected = r.Revision()
+	}
+	cfg := r.Config()
+	seen := make(map[string]bool, len(changes))
+	for index, change := range changes {
+		if change.ID == "" || seen[change.ID] {
+			return fmt.Errorf("app: changes[%d] has an empty or duplicate id", index)
+		}
+		seen[change.ID] = true
+		var err error
+		switch change.Kind {
+		case serverconfig.UpsertUser:
+			if change.User == nil {
+				return fmt.Errorf("app: changes[%d] user is required", index)
+			}
+			cfg.Users = upsertUser(cfg.Users, *change.User)
+		case serverconfig.RemoveUser:
+			cfg.Users, err = removeUser(cfg.Users, change.Tag)
+		case serverconfig.SetUserEnabled:
+			err = setUserEnabled(cfg.Users, change.Tag, change.Enabled)
+		case serverconfig.UpsertBoard:
+			if change.Board == nil {
+				return fmt.Errorf("app: changes[%d] board is required", index)
+			}
+			cfg.Boards = upsertBoard(cfg.Boards, *change.Board)
+		case serverconfig.RemoveBoard:
+			cfg.Boards, err = removeBoard(cfg.Boards, change.Tag)
+		case serverconfig.SetBoardEnabled:
+			err = setBoardEnabled(cfg.Boards, change.Tag, change.Enabled)
+		default:
+			return fmt.Errorf("app: changes[%d] has unsupported kind %q", index, change.Kind)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return r.ApplyConfig(expected, cfg)
 }
 
 func (r *ServerRuntime) ReplaceUser(expected uint64, user serverconfig.User) error {
@@ -786,6 +908,139 @@ func userPolicyChanged(a, b serverconfig.User) bool {
 		}
 	}
 	return a.PrivateKey != b.PrivateKey || a.PublicKey != b.PublicKey
+}
+
+func upsertUser(users []serverconfig.User, candidate serverconfig.User) []serverconfig.User {
+	for index := range users {
+		if users[index].Tag == candidate.Tag {
+			users[index] = candidate
+			return users
+		}
+	}
+	return append(users, candidate)
+}
+
+func removeUser(users []serverconfig.User, tag string) ([]serverconfig.User, error) {
+	for index := range users {
+		if users[index].Tag == tag {
+			return append(users[:index], users[index+1:]...), nil
+		}
+	}
+	return users, fmt.Errorf("app: user %q not found", tag)
+}
+
+func setUserEnabled(users []serverconfig.User, tag string, enabled bool) error {
+	for index := range users {
+		if users[index].Tag == tag {
+			users[index].Enabled = boolPointer(enabled)
+			return nil
+		}
+	}
+	return fmt.Errorf("app: user %q not found", tag)
+}
+
+func upsertBoard(boards []serverconfig.Board, candidate serverconfig.Board) []serverconfig.Board {
+	for index := range boards {
+		if boards[index].Tag == candidate.Tag {
+			boards[index] = candidate
+			return boards
+		}
+	}
+	return append(boards, candidate)
+}
+
+func removeBoard(boards []serverconfig.Board, tag string) ([]serverconfig.Board, error) {
+	for index := range boards {
+		if boards[index].Tag == tag {
+			return append(boards[:index], boards[index+1:]...), nil
+		}
+	}
+	return boards, fmt.Errorf("app: board %q not found", tag)
+}
+
+func setBoardEnabled(boards []serverconfig.Board, tag string, enabled bool) error {
+	for index := range boards {
+		if boards[index].Tag == tag {
+			boards[index].Enabled = boolPointer(enabled)
+			return nil
+		}
+	}
+	return fmt.Errorf("app: board %q not found", tag)
+}
+
+func (r *ServerRuntime) publishConfigChanges(before, after serverconfig.Config, revision uint64) {
+	oldUsers := indexUsers(before.Users)
+	for _, user := range after.Users {
+		old, exists := oldUsers[user.Tag]
+		operation := "added"
+		if exists {
+			operation = "updated"
+			if old.IsEnabled() != user.IsEnabled() {
+				if user.IsEnabled() {
+					operation = "enabled"
+				} else {
+					operation = "disabled"
+				}
+			} else if !userConfigChanged(old, user) {
+				delete(oldUsers, user.Tag)
+				continue
+			}
+		}
+		r.events.Publish(runtimeevents.Event{
+			Type: runtimeevents.ResourceChanged, RuntimeRevision: revision,
+			ResourceKind: "user", ResourceOperation: operation, Tag: user.Tag,
+		})
+		delete(oldUsers, user.Tag)
+	}
+	for tag := range oldUsers {
+		r.events.Publish(runtimeevents.Event{
+			Type: runtimeevents.ResourceChanged, RuntimeRevision: revision,
+			ResourceKind: "user", ResourceOperation: "removed", Tag: tag,
+		})
+	}
+
+	oldBoards := make(map[string]serverconfig.Board, len(before.Boards))
+	for _, board := range before.Boards {
+		oldBoards[board.Tag] = board
+	}
+	for _, board := range after.Boards {
+		old, exists := oldBoards[board.Tag]
+		operation := "added"
+		if exists {
+			operation = "updated"
+			if old.IsEnabled() != board.IsEnabled() {
+				if board.IsEnabled() {
+					operation = "enabled"
+				} else {
+					operation = "disabled"
+				}
+			} else if !boardConfigChanged(old, board) {
+				delete(oldBoards, board.Tag)
+				continue
+			}
+		}
+		r.events.Publish(runtimeevents.Event{
+			Type: runtimeevents.ResourceChanged, RuntimeRevision: revision,
+			ResourceKind: "board", ResourceOperation: operation, Tag: board.Tag,
+		})
+		delete(oldBoards, board.Tag)
+	}
+	for tag := range oldBoards {
+		r.events.Publish(runtimeevents.Event{
+			Type: runtimeevents.ResourceChanged, RuntimeRevision: revision,
+			ResourceKind: "board", ResourceOperation: "removed", Tag: tag,
+		})
+	}
+}
+
+func userConfigChanged(a, b serverconfig.User) bool {
+	return a.Name != b.Name || userPolicyChanged(a, b)
+}
+
+func boardConfigChanged(a, b serverconfig.Board) bool {
+	return a.Name != b.Name || a.Hash != b.Hash || a.HubSlide != b.HubSlide ||
+		a.APIBase != b.APIBase || a.GuestName != b.GuestName ||
+		a.IsEnabled() != b.IsEnabled() || a.MaxLanes != b.MaxLanes
 }
 
 func boardRuntimeCompatible(a, b serverconfig.Board) bool {

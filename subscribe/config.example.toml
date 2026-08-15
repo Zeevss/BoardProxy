@@ -1,0 +1,19 @@
+[server]
+listen = ":8090"
+public_url = "https://subscribe.example.com"
+
+[control_plane]
+url = "http://control-plane:8080"
+token = "replace-with-subscriber-api-token"
+timeout = "10s"
+
+[yandex]
+editor_url = "https://disk.yandex.ru/edit/disk/..."
+
+[recovery]
+key_id = "recovery-2026-01"
+private_key = "base64:replace-with-32-byte-base64url-key"
+
+[[apps]]
+name = "BoardProxy for Android"
+url = "https://example.com/android"

@@ -77,4 +77,15 @@ class MigrationContractTest {
         assertContains(sql, "ADD COLUMN snapshot jsonb")
         assertContains(sql, "WHERE snapshot IS NOT NULL")
     }
+
+    @Test
+    fun `subscription migration stores only token hashes and supports multiple ordered keys`() {
+        val sql = requireNotNull(javaClass.getResource("/db/migration/V8__subscriptions.sql")).readText()
+        assertContains(sql, "CREATE TABLE subscriptions")
+        assertContains(sql, "token_hash")
+        assertContains(sql, "recovery_public_key")
+        assertContains(sql, "CREATE TABLE subscription_keys")
+        assertContains(sql, "UNIQUE (subscription_id, node_id, user_id)")
+        kotlin.test.assertFalse(sql.contains("client_private_key"))
+    }
 }

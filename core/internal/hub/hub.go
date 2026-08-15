@@ -57,6 +57,26 @@ type UserDirectory interface {
 	ReleaseSession(userID string, rx, tx uint64)
 }
 
+type SessionOpened struct {
+	UserID   string
+	BoardTag string
+	BundleID string
+}
+
+type SessionClosed struct {
+	UserID   string
+	BoardTag string
+	BundleID string
+	RXBytes  uint64
+	TXBytes  uint64
+	Reason   string
+}
+
+type SessionObserver interface {
+	SessionOpened(SessionOpened)
+	SessionClosed(SessionClosed)
+}
+
 // ServerConfig конфигурирует хаб-сервер.
 type ServerConfig struct {
 	// HubSession — сессия observer'а на hub-слайде (уже присоединённая).
@@ -74,8 +94,11 @@ type ServerConfig struct {
 	BoardTag string
 	// Users authorizes clients and enforces process-wide session limits.
 	Users UserDirectory
-	Codec codec.Codec
-	Link  link.Options
+	// Events receives low-volume lifecycle facts. Implementations must not
+	// block the data plane; nil disables observation.
+	Events SessionObserver
+	Codec  codec.Codec
+	Link   link.Options
 	// MaxPayload, StreamWindow, CoalesceTarget и StreamIdleTimeout передаются
 	// в серверные mux-сессии.
 	MaxPayload      int
@@ -944,6 +967,11 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 	if !isJoin {
 		// The bundle watcher now owns the process-wide session claim.
 		sessionAcquired = false
+		if s.cfg.Events != nil {
+			s.cfg.Events.SessionOpened(SessionOpened{
+				UserID: user.ID, BoardTag: s.cfg.BoardTag, BundleID: bundleID.String(),
+			})
+		}
 	}
 
 	// Every lane owns and releases its own page. Losing one lane only removes it
@@ -1046,9 +1074,11 @@ func bundleLaneCount(s *Server, bundle *liveBundle) int {
 // exactly once, independently of how many lane pages were attached.
 func (s *Server) watchBundle(bundleID bond.BundleID, bundle *liveBundle) {
 	defer s.connWG.Done()
+	reason := "session_closed"
 	select {
 	case <-bundle.mux.Done():
 	case <-s.ctx.Done():
+		reason = "server_shutdown"
 		_ = bundle.mux.Close()
 		<-bundle.mux.Done()
 	}
@@ -1071,6 +1101,12 @@ func (s *Server) watchBundle(bundleID bond.BundleID, bundle *liveBundle) {
 	s.mu.Unlock()
 
 	s.cfg.Users.ReleaseSession(bundle.userID, final.Received, final.Written)
+	if s.cfg.Events != nil {
+		s.cfg.Events.SessionClosed(SessionClosed{
+			UserID: bundle.userID, BoardTag: s.cfg.BoardTag, BundleID: bundleID.String(),
+			RXBytes: final.Received, TXBytes: final.Written, Reason: reason,
+		})
+	}
 }
 
 // DisconnectUser корректно закрывает все живые сессии пользователя (каждая шлёт

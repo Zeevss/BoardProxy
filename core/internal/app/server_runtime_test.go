@@ -119,6 +119,63 @@ func TestRuntimeSnapshotMutationIsAtomic(t *testing.T) {
 	}
 }
 
+func TestRuntimeApplyChangesCommitsOneRevisionAndPublishesResourceEvents(t *testing.T) {
+	cfg := runtimeTestConfig(t)
+	r, err := NewServerRuntime(context.Background(), cfg, "stdin:", slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	bootID, _ := r.EventPosition()
+
+	board := cfg.Boards[0]
+	board.Tag, board.Name, board.Hash = "backup", "Backup", "backup-hash"
+	user := cfg.Users[0]
+	user.Tag, user.Name, user.Boards = "bob", "Bob", []string{"backup"}
+	key, err := crypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	user.PrivateKey = "base64:" + base64.StdEncoding.EncodeToString(key.Private())
+	if err := r.ApplyChanges(1, []serverconfig.Change{
+		{ID: "board-add", Kind: serverconfig.UpsertBoard, Board: &board},
+		{ID: "user-add", Kind: serverconfig.UpsertUser, User: &user},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if r.Revision() != 2 || len(r.Config().Boards) != 2 || len(r.Config().Users) != 2 {
+		t.Fatalf("changes were not committed atomically: revision=%d config=%+v", r.Revision(), r.Config())
+	}
+	subscription := r.SubscribeEvents(bootID, 0)
+	defer subscription.Close()
+	if len(subscription.Replay) != 2 {
+		t.Fatalf("events=%+v, want board and user events", subscription.Replay)
+	}
+	for _, event := range subscription.Replay {
+		if event.RuntimeRevision != 2 || event.ResourceOperation != "added" {
+			t.Fatalf("event=%+v", event)
+		}
+	}
+}
+
+func TestRuntimeApplyChangesRejectsWholeInvalidBatch(t *testing.T) {
+	cfg := runtimeTestConfig(t)
+	r, err := NewServerRuntime(context.Background(), cfg, "stdin:", slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if err := r.ApplyChanges(1, []serverconfig.Change{
+		{ID: "remove-referenced-board", Kind: serverconfig.RemoveBoard, Tag: "main"},
+		{ID: "disable-user", Kind: serverconfig.SetUserEnabled, Tag: "alice", Enabled: false},
+	}); err == nil {
+		t.Fatal("invalid batch was accepted")
+	}
+	if r.Revision() != 1 || len(r.Config().Boards) != 1 || !r.Config().Users[0].IsEnabled() {
+		t.Fatalf("invalid batch partially changed runtime: revision=%d config=%+v", r.Revision(), r.Config())
+	}
+}
+
 func TestRuntimeCannotReloadStdin(t *testing.T) {
 	cfg := runtimeTestConfig(t)
 	r, err := NewServerRuntime(context.Background(), cfg, "stdin:", slog.New(slog.NewTextHandler(io.Discard, nil)), nil)

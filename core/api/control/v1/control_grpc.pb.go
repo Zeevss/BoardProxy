@@ -20,21 +20,24 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ControlService_GetRuntime_FullMethodName      = "/bproxy.control.v1.ControlService/GetRuntime"
-	ControlService_Reload_FullMethodName          = "/bproxy.control.v1.ControlService/Reload"
-	ControlService_ApplySnapshot_FullMethodName   = "/bproxy.control.v1.ControlService/ApplySnapshot"
-	ControlService_ListUsers_FullMethodName       = "/bproxy.control.v1.ControlService/ListUsers"
-	ControlService_AddUser_FullMethodName         = "/bproxy.control.v1.ControlService/AddUser"
-	ControlService_ReplaceUser_FullMethodName     = "/bproxy.control.v1.ControlService/ReplaceUser"
-	ControlService_SetUserEnabled_FullMethodName  = "/bproxy.control.v1.ControlService/SetUserEnabled"
-	ControlService_RemoveUser_FullMethodName      = "/bproxy.control.v1.ControlService/RemoveUser"
-	ControlService_GetKeylink_FullMethodName      = "/bproxy.control.v1.ControlService/GetKeylink"
-	ControlService_ListBoards_FullMethodName      = "/bproxy.control.v1.ControlService/ListBoards"
-	ControlService_AddBoard_FullMethodName        = "/bproxy.control.v1.ControlService/AddBoard"
-	ControlService_ReplaceBoard_FullMethodName    = "/bproxy.control.v1.ControlService/ReplaceBoard"
-	ControlService_SetBoardEnabled_FullMethodName = "/bproxy.control.v1.ControlService/SetBoardEnabled"
-	ControlService_RemoveBoard_FullMethodName     = "/bproxy.control.v1.ControlService/RemoveBoard"
-	ControlService_GetStats_FullMethodName        = "/bproxy.control.v1.ControlService/GetStats"
+	ControlService_GetRuntime_FullMethodName         = "/bproxy.control.v1.ControlService/GetRuntime"
+	ControlService_Reload_FullMethodName             = "/bproxy.control.v1.ControlService/Reload"
+	ControlService_ApplySnapshot_FullMethodName      = "/bproxy.control.v1.ControlService/ApplySnapshot"
+	ControlService_ApplyChanges_FullMethodName       = "/bproxy.control.v1.ControlService/ApplyChanges"
+	ControlService_WatchRuntimeEvents_FullMethodName = "/bproxy.control.v1.ControlService/WatchRuntimeEvents"
+	ControlService_GetRuntimeSnapshot_FullMethodName = "/bproxy.control.v1.ControlService/GetRuntimeSnapshot"
+	ControlService_ListUsers_FullMethodName          = "/bproxy.control.v1.ControlService/ListUsers"
+	ControlService_AddUser_FullMethodName            = "/bproxy.control.v1.ControlService/AddUser"
+	ControlService_ReplaceUser_FullMethodName        = "/bproxy.control.v1.ControlService/ReplaceUser"
+	ControlService_SetUserEnabled_FullMethodName     = "/bproxy.control.v1.ControlService/SetUserEnabled"
+	ControlService_RemoveUser_FullMethodName         = "/bproxy.control.v1.ControlService/RemoveUser"
+	ControlService_GetKeylink_FullMethodName         = "/bproxy.control.v1.ControlService/GetKeylink"
+	ControlService_ListBoards_FullMethodName         = "/bproxy.control.v1.ControlService/ListBoards"
+	ControlService_AddBoard_FullMethodName           = "/bproxy.control.v1.ControlService/AddBoard"
+	ControlService_ReplaceBoard_FullMethodName       = "/bproxy.control.v1.ControlService/ReplaceBoard"
+	ControlService_SetBoardEnabled_FullMethodName    = "/bproxy.control.v1.ControlService/SetBoardEnabled"
+	ControlService_RemoveBoard_FullMethodName        = "/bproxy.control.v1.ControlService/RemoveBoard"
+	ControlService_GetStats_FullMethodName           = "/bproxy.control.v1.ControlService/GetStats"
 )
 
 // ControlServiceClient is the client API for ControlService service.
@@ -46,6 +49,12 @@ type ControlServiceClient interface {
 	// Atomically replaces the complete runtime user/board desired-state slice.
 	// Server identity, transport and listener settings remain file-owned.
 	ApplySnapshot(ctx context.Context, in *ApplySnapshotRequest, opts ...grpc.CallOption) (*MutationResult, error)
+	// Applies an ordered resource delta as one optimistic runtime transaction.
+	ApplyChanges(ctx context.Context, in *ApplyChangesRequest, opts ...grpc.CallOption) (*ApplyChangesResult, error)
+	// Streams observed runtime facts. It is resumable within one core boot; a
+	// stream_reset event explicitly reports a gap or process restart.
+	WatchRuntimeEvents(ctx context.Context, in *WatchRuntimeEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CoreRuntimeEvent], error)
+	GetRuntimeSnapshot(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*RuntimeSnapshot, error)
 	ListUsers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListUsersResponse, error)
 	// Creates a missing user and fails with ALREADY_EXISTS for an existing tag.
 	AddUser(ctx context.Context, in *AddUserRequest, opts ...grpc.CallOption) (*MutationResult, error)
@@ -94,6 +103,45 @@ func (c *controlServiceClient) ApplySnapshot(ctx context.Context, in *ApplySnaps
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MutationResult)
 	err := c.cc.Invoke(ctx, ControlService_ApplySnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlServiceClient) ApplyChanges(ctx context.Context, in *ApplyChangesRequest, opts ...grpc.CallOption) (*ApplyChangesResult, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplyChangesResult)
+	err := c.cc.Invoke(ctx, ControlService_ApplyChanges_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlServiceClient) WatchRuntimeEvents(ctx context.Context, in *WatchRuntimeEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CoreRuntimeEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ControlService_ServiceDesc.Streams[0], ControlService_WatchRuntimeEvents_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchRuntimeEventsRequest, CoreRuntimeEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ControlService_WatchRuntimeEventsClient = grpc.ServerStreamingClient[CoreRuntimeEvent]
+
+func (c *controlServiceClient) GetRuntimeSnapshot(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*RuntimeSnapshot, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RuntimeSnapshot)
+	err := c.cc.Invoke(ctx, ControlService_GetRuntimeSnapshot_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -229,6 +277,12 @@ type ControlServiceServer interface {
 	// Atomically replaces the complete runtime user/board desired-state slice.
 	// Server identity, transport and listener settings remain file-owned.
 	ApplySnapshot(context.Context, *ApplySnapshotRequest) (*MutationResult, error)
+	// Applies an ordered resource delta as one optimistic runtime transaction.
+	ApplyChanges(context.Context, *ApplyChangesRequest) (*ApplyChangesResult, error)
+	// Streams observed runtime facts. It is resumable within one core boot; a
+	// stream_reset event explicitly reports a gap or process restart.
+	WatchRuntimeEvents(*WatchRuntimeEventsRequest, grpc.ServerStreamingServer[CoreRuntimeEvent]) error
+	GetRuntimeSnapshot(context.Context, *emptypb.Empty) (*RuntimeSnapshot, error)
 	ListUsers(context.Context, *emptypb.Empty) (*ListUsersResponse, error)
 	// Creates a missing user and fails with ALREADY_EXISTS for an existing tag.
 	AddUser(context.Context, *AddUserRequest) (*MutationResult, error)
@@ -261,6 +315,15 @@ func (UnimplementedControlServiceServer) Reload(context.Context, *RevisionReques
 }
 func (UnimplementedControlServiceServer) ApplySnapshot(context.Context, *ApplySnapshotRequest) (*MutationResult, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplySnapshot not implemented")
+}
+func (UnimplementedControlServiceServer) ApplyChanges(context.Context, *ApplyChangesRequest) (*ApplyChangesResult, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyChanges not implemented")
+}
+func (UnimplementedControlServiceServer) WatchRuntimeEvents(*WatchRuntimeEventsRequest, grpc.ServerStreamingServer[CoreRuntimeEvent]) error {
+	return status.Error(codes.Unimplemented, "method WatchRuntimeEvents not implemented")
+}
+func (UnimplementedControlServiceServer) GetRuntimeSnapshot(context.Context, *emptypb.Empty) (*RuntimeSnapshot, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRuntimeSnapshot not implemented")
 }
 func (UnimplementedControlServiceServer) ListUsers(context.Context, *emptypb.Empty) (*ListUsersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListUsers not implemented")
@@ -369,6 +432,53 @@ func _ControlService_ApplySnapshot_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServiceServer).ApplySnapshot(ctx, req.(*ApplySnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlService_ApplyChanges_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyChangesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).ApplyChanges(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_ApplyChanges_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).ApplyChanges(ctx, req.(*ApplyChangesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlService_WatchRuntimeEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchRuntimeEventsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ControlServiceServer).WatchRuntimeEvents(m, &grpc.GenericServerStream[WatchRuntimeEventsRequest, CoreRuntimeEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ControlService_WatchRuntimeEventsServer = grpc.ServerStreamingServer[CoreRuntimeEvent]
+
+func _ControlService_GetRuntimeSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).GetRuntimeSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_GetRuntimeSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).GetRuntimeSnapshot(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -609,6 +719,14 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ControlService_ApplySnapshot_Handler,
 		},
 		{
+			MethodName: "ApplyChanges",
+			Handler:    _ControlService_ApplyChanges_Handler,
+		},
+		{
+			MethodName: "GetRuntimeSnapshot",
+			Handler:    _ControlService_GetRuntimeSnapshot_Handler,
+		},
+		{
 			MethodName: "ListUsers",
 			Handler:    _ControlService_ListUsers_Handler,
 		},
@@ -657,6 +775,12 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ControlService_GetStats_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WatchRuntimeEvents",
+			Handler:       _ControlService_WatchRuntimeEvents_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "api/control/v1/control.proto",
 }

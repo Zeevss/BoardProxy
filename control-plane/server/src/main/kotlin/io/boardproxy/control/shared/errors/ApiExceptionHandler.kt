@@ -13,6 +13,12 @@ class ApiExceptionHandler {
     @ExceptionHandler(ResourceConflict::class)
     fun conflict(error: ResourceConflict): ProblemDetail = problem(HttpStatus.CONFLICT, error)
 
+    @ExceptionHandler(ResourceForbidden::class)
+    fun forbidden(error: ResourceForbidden): ProblemDetail = problem(HttpStatus.FORBIDDEN, error)
+
+    @ExceptionHandler(ResourceGone::class)
+    fun gone(error: ResourceGone): ProblemDetail = problem(HttpStatus.GONE, error)
+
     @ExceptionHandler(InvalidRequest::class, IllegalArgumentException::class)
     fun badRequest(error: RuntimeException): ProblemDetail = problem(HttpStatus.BAD_REQUEST, error)
 

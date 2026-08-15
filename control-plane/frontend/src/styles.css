@@ -113,6 +113,11 @@ tbody tr:hover { background: #102024; }
 .modal > label input { width: 100%; color: #e3edef; }
 .modal .inline-alert { margin: 14px 18px 0; }
 .modal-actions { padding: 14px 18px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--border); }
+.form-hint { margin: 14px 18px 2px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.access-result > p { margin: 16px 18px; color: var(--muted); }
+.issued-access, .issued-keys { display: grid; gap: 12px; padding: 0 18px 18px; }
+.issued-access label, .issued-keys label { display: grid; gap: 7px; color: var(--muted); font-size: 11px; }
+.issued-access textarea, .issued-keys textarea { width: 100%; resize: vertical; color: #e3edef; font: 11px/1.45 var(--mono); overflow-wrap: anywhere; }
 .login-screen { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 50% 40%, #10282c 0, var(--bg) 44%); }
 .login-panel { width: min(420px, 100%); padding: 30px; border: 1px solid var(--border); border-radius: 10px; background: #0b1719; box-shadow: 0 30px 100px #0009; }
 .login-brand { padding: 0 0 30px; }

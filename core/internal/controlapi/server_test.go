@@ -9,6 +9,7 @@ import (
 
 	controlv1 "bproxy-core/api/control/v1"
 	"bproxy-core/internal/control"
+	"bproxy-core/internal/runtimeevents"
 	"bproxy-core/internal/serverconfig"
 	"bproxy-core/internal/telemetry"
 
@@ -25,6 +26,7 @@ type fakeRuntime struct {
 	users    []control.UserView
 	replaced serverconfig.User
 	err      error
+	events   *runtimeevents.Journal
 }
 
 func (f *fakeRuntime) Revision() uint64                              { return f.revision }
@@ -54,6 +56,23 @@ func (f *fakeRuntime) ReplaceUser(_ uint64, user serverconfig.User) error {
 }
 func (f *fakeRuntime) AddUser(expected uint64, user serverconfig.User) error {
 	return f.ReplaceUser(expected, user)
+}
+func (f *fakeRuntime) ApplyChanges(_ uint64, changes []serverconfig.Change) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.revision++
+	return nil
+}
+func (f *fakeRuntime) SubscribeEvents(bootID string, after uint64) runtimeevents.Subscription {
+	return f.eventJournal().Subscribe(bootID, after)
+}
+func (f *fakeRuntime) EventPosition() (string, uint64) { return f.eventJournal().Position() }
+func (f *fakeRuntime) eventJournal() *runtimeevents.Journal {
+	if f.events == nil {
+		f.events = runtimeevents.New(16)
+	}
+	return f.events
 }
 
 func TestPublicGRPCClientCanMutateRuntime(t *testing.T) {

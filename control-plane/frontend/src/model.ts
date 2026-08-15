@@ -74,6 +74,15 @@ export type Catalog = {
   version: number
 }
 
+export type ProvisionedUser = {
+  id: string
+  name: string
+  deliveryType: 'subscription' | 'keylinks'
+  subscriptionId?: string
+  subscriptionUrl?: string
+  keys: Array<{ id: string; name: string; nodeId: string; keylink: string }>
+}
+
 export type DashboardData = {
   nodes: NodeSummary[]
   status?: NodeStatus

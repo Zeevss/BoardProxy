@@ -16,6 +16,7 @@ node_modules/
 # Server desired state contains private keys. Commit only the redacted example.
 /config.toml
 /core/config.toml
+/subscribe/config.toml
 /client.toml
 /core/client.toml
 
@@ -23,3 +24,5 @@ node_modules/
 
 .DS_Store
 Thumbs.db
+
+.github/

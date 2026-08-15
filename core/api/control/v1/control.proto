@@ -14,6 +14,13 @@ service ControlService {
   // Atomically replaces the complete runtime user/board desired-state slice.
   // Server identity, transport and listener settings remain file-owned.
   rpc ApplySnapshot(ApplySnapshotRequest) returns (MutationResult);
+  // Applies an ordered resource delta as one optimistic runtime transaction.
+  rpc ApplyChanges(ApplyChangesRequest) returns (ApplyChangesResult);
+  // Streams observed runtime facts. It is resumable within one core boot; a
+  // stream_reset event explicitly reports a gap or process restart.
+  rpc WatchRuntimeEvents(WatchRuntimeEventsRequest)
+      returns (stream CoreRuntimeEvent);
+  rpc GetRuntimeSnapshot(google.protobuf.Empty) returns (RuntimeSnapshot);
 
   rpc ListUsers(google.protobuf.Empty) returns (ListUsersResponse);
   // Creates a missing user and fails with ALREADY_EXISTS for an existing tag.
@@ -83,6 +90,113 @@ message ApplySnapshotRequest {
   uint64 expected_revision = 1;
   repeated UserSpec users = 2;
   repeated BoardSpec boards = 3;
+}
+
+message ApplyChangesRequest {
+  uint64 expected_revision = 1;
+  repeated ResourceChange changes = 2;
+}
+
+message ApplyChangesResult {
+  uint64 revision = 1;
+  repeated string applied_change_ids = 2;
+}
+
+message ResourceChange {
+  string change_id = 1;
+  oneof payload {
+    UserSpec upsert_user = 2;
+    ResourceTag remove_user = 3;
+    ResourceEnabled set_user_enabled = 4;
+    BoardSpec upsert_board = 5;
+    ResourceTag remove_board = 6;
+    ResourceEnabled set_board_enabled = 7;
+  }
+}
+
+message ResourceTag { string tag = 1; }
+
+message ResourceEnabled {
+  string tag = 1;
+  bool enabled = 2;
+}
+
+message WatchRuntimeEventsRequest {
+  string boot_id = 1;
+  uint64 after_sequence = 2;
+}
+
+message CoreRuntimeEvent {
+  string event_id = 1;
+  string boot_id = 2;
+  uint64 sequence = 3;
+  google.protobuf.Timestamp occurred_at = 4;
+  uint64 runtime_revision = 5;
+  oneof payload {
+    ResourceChanged resource_changed = 6;
+    BoardStateChanged board_state_changed = 7;
+    ClientSessionOpened client_session_opened = 8;
+    ClientSessionClosed client_session_closed = 9;
+    EventStreamReset stream_reset = 10;
+  }
+}
+
+enum ResourceKind {
+  RESOURCE_KIND_UNSPECIFIED = 0;
+  RESOURCE_KIND_USER = 1;
+  RESOURCE_KIND_BOARD = 2;
+}
+
+enum ResourceOperation {
+  RESOURCE_OPERATION_UNSPECIFIED = 0;
+  RESOURCE_OPERATION_ADDED = 1;
+  RESOURCE_OPERATION_UPDATED = 2;
+  RESOURCE_OPERATION_ENABLED = 3;
+  RESOURCE_OPERATION_DISABLED = 4;
+  RESOURCE_OPERATION_REMOVED = 5;
+}
+
+message ResourceChanged {
+  ResourceKind kind = 1;
+  ResourceOperation operation = 2;
+  string tag = 3;
+}
+
+message BoardStateChanged {
+  string board_tag = 1;
+  string previous_state = 2;
+  string state = 3;
+  string error = 4;
+}
+
+message ClientSessionOpened {
+  string user_tag = 1;
+  string board_tag = 2;
+  string bundle_id = 3;
+}
+
+message ClientSessionClosed {
+  string user_tag = 1;
+  string board_tag = 2;
+  string bundle_id = 3;
+  uint64 rx_bytes = 4;
+  uint64 tx_bytes = 5;
+  string reason = 6;
+}
+
+message EventStreamReset {
+  string reason = 1;
+  uint64 oldest_available_sequence = 2;
+  uint64 latest_sequence = 3;
+}
+
+message RuntimeSnapshot {
+  RuntimeInfo runtime = 1;
+  RuntimeStats stats = 2;
+  repeated UserInfo users = 3;
+  repeated BoardInfo boards = 4;
+  string event_boot_id = 5;
+  uint64 latest_event_sequence = 6;
 }
 
 message UserInfo {

@@ -5,4 +5,5 @@ use (
 	./core
 	./desktop-app
 	./node-agent
+	./subscribe
 )

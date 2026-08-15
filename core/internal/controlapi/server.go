@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"bproxy-core/internal/control"
+	"bproxy-core/internal/runtimeevents"
 	"bproxy-core/internal/serverconfig"
 	"bproxy-core/internal/telemetry"
 
@@ -38,6 +39,9 @@ type Runtime interface {
 	SetBoardEnabled(expected uint64, tag string, enabled bool) error
 	RemoveBoard(expected uint64, tag string) error
 	ApplySnapshot(expected uint64, users []serverconfig.User, boards []serverconfig.Board) error
+	ApplyChanges(expected uint64, changes []serverconfig.Change) error
+	SubscribeEvents(string, uint64) runtimeevents.Subscription
+	EventPosition() (string, uint64)
 	Keylink(tag string) (string, error)
 	Reload(expected uint64) error
 	Stats() telemetry.Stats
@@ -130,6 +134,107 @@ func (s *Server) ApplySnapshot(_ context.Context, req *ApplySnapshotRequest) (*M
 		return nil, rpcError(err)
 	}
 	return &MutationResult{Revision: s.runtime.Revision()}, nil
+}
+
+func (s *Server) ApplyChanges(_ context.Context, req *ApplyChangesRequest) (*ApplyChangesResult, error) {
+	if len(req.GetChanges()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "at least one change is required")
+	}
+	changes := make([]serverconfig.Change, 0, len(req.GetChanges()))
+	ids := make([]string, 0, len(req.GetChanges()))
+	for index, item := range req.GetChanges() {
+		if item == nil || item.GetChangeId() == "" {
+			return nil, status.Errorf(codes.InvalidArgument, "changes[%d].change_id is required", index)
+		}
+		change := serverconfig.Change{ID: item.GetChangeId()}
+		switch payload := item.GetPayload().(type) {
+		case *ResourceChange_UpsertUser:
+			if payload.UpsertUser == nil {
+				return nil, status.Errorf(codes.InvalidArgument, "changes[%d].upsert_user is required", index)
+			}
+			user := userConfig(payload.UpsertUser)
+			change.Kind, change.User = serverconfig.UpsertUser, &user
+		case *ResourceChange_RemoveUser:
+			change.Kind, change.Tag = serverconfig.RemoveUser, payload.RemoveUser.GetTag()
+		case *ResourceChange_SetUserEnabled:
+			change.Kind, change.Tag, change.Enabled = serverconfig.SetUserEnabled, payload.SetUserEnabled.GetTag(), payload.SetUserEnabled.GetEnabled()
+		case *ResourceChange_UpsertBoard:
+			if payload.UpsertBoard == nil {
+				return nil, status.Errorf(codes.InvalidArgument, "changes[%d].upsert_board is required", index)
+			}
+			board := boardConfig(payload.UpsertBoard)
+			change.Kind, change.Board = serverconfig.UpsertBoard, &board
+		case *ResourceChange_RemoveBoard:
+			change.Kind, change.Tag = serverconfig.RemoveBoard, payload.RemoveBoard.GetTag()
+		case *ResourceChange_SetBoardEnabled:
+			change.Kind, change.Tag, change.Enabled = serverconfig.SetBoardEnabled, payload.SetBoardEnabled.GetTag(), payload.SetBoardEnabled.GetEnabled()
+		default:
+			return nil, status.Errorf(codes.InvalidArgument, "changes[%d].payload is required", index)
+		}
+		changes, ids = append(changes, change), append(ids, item.GetChangeId())
+	}
+	if err := s.runtime.ApplyChanges(req.GetExpectedRevision(), changes); err != nil {
+		return nil, rpcError(err)
+	}
+	return &ApplyChangesResult{Revision: s.runtime.Revision(), AppliedChangeIds: ids}, nil
+}
+
+func (s *Server) WatchRuntimeEvents(req *WatchRuntimeEventsRequest, stream grpc.ServerStreamingServer[CoreRuntimeEvent]) error {
+	subscription := s.runtime.SubscribeEvents(req.GetBootId(), req.GetAfterSequence())
+	defer subscription.Close()
+	if subscription.Reset != nil {
+		_, latest := s.runtime.EventPosition()
+		if err := stream.Send(&CoreRuntimeEvent{
+			EventId: fmt.Sprintf("%s:reset:%s:%d", subscription.BootID, subscription.Reset.Reason, latest),
+			BootId:  subscription.BootID, OccurredAt: timestamppb.Now(), RuntimeRevision: s.runtime.Revision(),
+			Payload: &CoreRuntimeEvent_StreamReset{StreamReset: &EventStreamReset{
+				Reason:                  subscription.Reset.Reason,
+				OldestAvailableSequence: subscription.Reset.OldestAvailableSequence,
+				LatestSequence:          subscription.Reset.LatestSequence,
+			}},
+		}); err != nil {
+			return err
+		}
+	}
+	for _, event := range subscription.Replay {
+		if err := stream.Send(runtimeEventMessage(event)); err != nil {
+			return err
+		}
+	}
+	for {
+		select {
+		case <-stream.Context().Done():
+			return nil
+		case event, ok := <-subscription.Events:
+			if !ok {
+				return status.Error(codes.Unavailable, "runtime event consumer fell behind")
+			}
+			if err := stream.Send(runtimeEventMessage(event)); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func (s *Server) GetRuntimeSnapshot(ctx context.Context, _ *emptypb.Empty) (*RuntimeSnapshot, error) {
+	// Retry if an event was published while composing the state snapshot. This
+	// gives consumers a cursor that brackets the returned projection instead of
+	// silently skipping an event that raced with the read.
+	for attempt := 0; attempt < 4; attempt++ {
+		bootID, before := s.runtime.EventPosition()
+		runtime, _ := s.GetRuntime(ctx, &emptypb.Empty{})
+		users, _ := s.ListUsers(ctx, &emptypb.Empty{})
+		boards, _ := s.ListBoards(ctx, &emptypb.Empty{})
+		stats, _ := s.GetStats(ctx, &emptypb.Empty{})
+		afterBootID, after := s.runtime.EventPosition()
+		if bootID == afterBootID && before == after {
+			return &RuntimeSnapshot{
+				Runtime: runtime, Stats: stats, Users: users.GetUsers(), Boards: boards.GetBoards(),
+				EventBootId: bootID, LatestEventSequence: before,
+			}, nil
+		}
+	}
+	return nil, status.Error(codes.Aborted, "runtime changed continuously while capturing snapshot")
 }
 
 func (s *Server) ListUsers(context.Context, *emptypb.Empty) (*ListUsersResponse, error) {
@@ -313,6 +418,55 @@ func statsMessage(s telemetry.Stats) *RuntimeStats {
 		})
 	}
 	return out
+}
+
+func runtimeEventMessage(event runtimeevents.Event) *CoreRuntimeEvent {
+	out := &CoreRuntimeEvent{
+		EventId: event.ID, BootId: event.BootID, Sequence: event.Sequence,
+		OccurredAt: timestamppb.New(event.OccurredAt), RuntimeRevision: event.RuntimeRevision,
+	}
+	switch event.Type {
+	case runtimeevents.ResourceChanged:
+		out.Payload = &CoreRuntimeEvent_ResourceChanged{ResourceChanged: &ResourceChanged{
+			Kind: resourceKind(event.ResourceKind), Operation: resourceOperation(event.ResourceOperation), Tag: event.Tag,
+		}}
+	case runtimeevents.BoardStateChanged:
+		out.Payload = &CoreRuntimeEvent_BoardStateChanged{BoardStateChanged: &BoardStateChanged{
+			BoardTag: event.BoardTag, PreviousState: event.PreviousState, State: event.State, Error: event.Error,
+		}}
+	case runtimeevents.ClientSessionOpened:
+		out.Payload = &CoreRuntimeEvent_ClientSessionOpened{ClientSessionOpened: &ClientSessionOpened{
+			UserTag: event.UserTag, BoardTag: event.BoardTag, BundleId: event.BundleID,
+		}}
+	case runtimeevents.ClientSessionClosed:
+		out.Payload = &CoreRuntimeEvent_ClientSessionClosed{ClientSessionClosed: &ClientSessionClosed{
+			UserTag: event.UserTag, BoardTag: event.BoardTag, BundleId: event.BundleID,
+			RxBytes: event.RXBytes, TxBytes: event.TXBytes, Reason: event.Reason,
+		}}
+	}
+	return out
+}
+
+func resourceKind(kind string) ResourceKind {
+	if kind == "board" {
+		return ResourceKind_RESOURCE_KIND_BOARD
+	}
+	return ResourceKind_RESOURCE_KIND_USER
+}
+
+func resourceOperation(operation string) ResourceOperation {
+	switch operation {
+	case "added":
+		return ResourceOperation_RESOURCE_OPERATION_ADDED
+	case "enabled":
+		return ResourceOperation_RESOURCE_OPERATION_ENABLED
+	case "disabled":
+		return ResourceOperation_RESOURCE_OPERATION_DISABLED
+	case "removed":
+		return ResourceOperation_RESOURCE_OPERATION_REMOVED
+	default:
+		return ResourceOperation_RESOURCE_OPERATION_UPDATED
+	}
 }
 
 func rpcError(err error) error {
