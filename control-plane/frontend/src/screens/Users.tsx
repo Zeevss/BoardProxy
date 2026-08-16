@@ -1,0 +1,28 @@
+import { useDeferredValue, useState, type FormEvent } from 'react'
+import type { DashboardData, Language, ProvisionedUser, UserResource } from '../types'
+import type { ControlApi } from '../api/controlApi'
+import { PageHeader } from '../components/AppShell'
+import { Icon } from '../components/Icon'
+import { Field, Modal, SecretResult } from '../components/Modal'
+import { Badge, ConfirmButton, Empty, ErrorBanner, Panel } from '../components/UI'
+import { Progress } from '../components/Charts'
+import { bytes } from '../lib/format'
+
+export function Users({ language, data, search, api, onChanged }: { language: Language; data: DashboardData; search: string; api: ControlApi; onChanged: () => Promise<unknown> | void }) {
+  const query = useDeferredValue(search.toLowerCase())
+  const users = (data.catalog?.users ?? []).filter(user => `${user.name} ${user.id} ${user.state}`.toLowerCase().includes(query))
+  const [create, setCreate] = useState(false)
+  const [issued, setIssued] = useState<ProvisionedUser>()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const catalog = data.catalog
+  const runtime = catalog ? data.runtimes[catalog.node.id] : undefined
+  async function action(run: () => Promise<unknown>) { setBusy(true); setError(undefined); try { await run(); await onChanged() } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setBusy(false) } }
+  return <><PageHeader language={language} section="users" action={<button className="button primary" type="button" disabled={!catalog?.boards.length} onClick={() => setCreate(true)}><Icon name="plus" size={15}/> Add user</button>}/>{error ? <ErrorBanner onClose={() => setError(undefined)}>{error}</ErrorBanner> : null}<Panel>{users.length ? <div className="table-scroll"><table><thead><tr><th>User</th><th>State</th><th>Credential</th><th>Sessions</th><th>Limits</th><th>Monthly quota</th><th/></tr></thead><tbody>{users.map(user => { const fact = runtime?.users.find(item => item.userTag === user.id); const quota = data.quotas.find(item => item.quota.userTag === user.id); const used = quota?.usedBytes ?? 0; const pct = quota ? used / quota.quota.limitBytes * 100 : 0; return <tr key={user.id}><td><strong>{user.name}</strong><small>{user.id}</small></td><td><Badge tone={user.state === 'enabled' ? 'ok' : user.state === 'revoked' ? 'bad' : 'neutral'}>{user.state}</Badge></td><td className="mono">{user.credentialType}</td><td className="mono">{fact?.activeSessions ?? 0} / {user.maxSessions || '∞'}</td><td className="mono">{user.maxLanes} lanes</td><td>{quota ? <div className="quota-cell"><span>{bytes(used)} / {bytes(quota.quota.limitBytes)}</span><Progress value={pct} color={pct > 90 ? '#f2635f' : pct > 75 ? '#f0b429' : '#4fd1a5'}/></div> : <span className="muted">No quota</span>}</td><td className="row-actions">{user.state !== 'revoked' ? <button type="button" onClick={() => void action(() => api.putUser(catalog!.node.id, user.id, catalog!.version, userBody(user, user.state === 'enabled' ? 'disabled' : 'enabled')))}>{user.state === 'enabled' ? 'Disable' : 'Enable'}</button> : null}<ConfirmButton onConfirm={() => void action(async () => { const assignment = await api.replaceAssignment(catalog!.node.id, catalog!.version, { boardIds: catalog!.assignment.boardIds, users: catalog!.assignment.users.filter(item => item.userId !== user.id) }); await api.removeUser(catalog!.node.id, user.id, assignment.catalog.version) })}>Remove</ConfirmButton></td></tr> })}</tbody></table></div> : <Empty title="No users on selected node"/>}</Panel>
+    {create && catalog ? <Modal title="Add user" hint="The private key remains write-only. Provisioning can return a subscription URL or direct keylinks." busy={busy} submitLabel={issued ? undefined : 'Create user'} onClose={() => { setCreate(false); setIssued(undefined) }} onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const form = new FormData(event.currentTarget); void action(async () => { const result = await api.provisionUser({ id: String(form.get('id')), name: String(form.get('name')), targets: [{ nodeId: catalog.node.id, boardIds: form.getAll('boards').map(String), keyName: String(form.get('keyName')) || null }], maxSessions: Number(form.get('maxSessions')), maxLanes: Number(form.get('maxLanes')) }); setIssued(result) }) }}>
+      {issued ? <div className="issued-results">{issued.subscriptionUrl ? <SecretResult label="Subscription URL" value={issued.subscriptionUrl}/> : issued.keys.map(key => <SecretResult key={key.id} label={`${key.name} · ${key.nodeId}`} value={key.keylink}/>)}</div> : <><Field label="ID"><input required name="id" placeholder="alice" pattern="[A-Za-z0-9][A-Za-z0-9._]*(?:-[A-Za-z0-9._]+)*"/></Field><Field label="Name"><input required name="name" placeholder="Alice Weber"/></Field><Field label="Boards"><div className="checkbox-list">{catalog.boards.map((board, index) => <label key={board.id}><input type="checkbox" name="boards" value={board.id} defaultChecked={index === 0}/>{board.name}</label>)}</div></Field><Field label="Key name"><input name="keyName" placeholder="Alice / Frankfurt"/></Field><div className="field-row"><Field label="maxSessions"><input name="maxSessions" type="number" min="0" defaultValue="2"/></Field><Field label="maxLanes"><input name="maxLanes" type="number" min="1" max="32" defaultValue="4"/></Field></div></>}
+    </Modal> : null}
+  </>
+}
+
+function userBody(user: UserResource, state: string) { return { name: user.name, publicKey: user.publicKey ?? null, state, maxSessions: user.maxSessions, maxLanes: user.maxLanes } }

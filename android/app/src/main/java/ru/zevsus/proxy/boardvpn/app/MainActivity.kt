@@ -46,7 +46,13 @@ class MainActivity : ComponentActivity() {
 
     private val profilesViewModel: ProfilesViewModel by viewModels {
         viewModelFactory {
-            initializer { ProfilesViewModel(profileRepository = container.profileRepository) }
+            initializer {
+                ProfilesViewModel(
+                    profileRepository = container.profileRepository,
+                    subscriptionRepository = container.subscriptionRepository,
+                    subscriptionSyncManager = container.subscriptionSyncManager,
+                )
+            }
         }
     }
 
@@ -106,7 +112,7 @@ class MainActivity : ComponentActivity() {
                     settingsViewModel = settingsViewModel,
                     appRoutingViewModel = appRoutingViewModel,
                     onConnectRequest = ::requestVpnConnection,
-                    onClipboardImportRequest = ::importKeylinkFromClipboard,
+                    onClipboardImportRequest = ::importLinkFromClipboard,
                     onOpenSystemVpnSettings = ::openSystemVpnSettings,
                     appVersion = appVersion(),
                 )
@@ -149,8 +155,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun importKeylinkFromClipboard() {
-        profilesViewModel.importKeylink(container.clipboardKeylinkReader.readText())
+    private fun importLinkFromClipboard() {
+        profilesViewModel.importLink(container.clipboardKeylinkReader.readText())
     }
 
     private fun openSystemVpnSettings() {

@@ -48,6 +48,7 @@ class BoardVpnService : VpnService() {
         runtime = AndroidVpnRuntime(
             scope = serviceScope,
             profiles = container.profileRepository,
+            subscriptionSyncManager = container.subscriptionSyncManager,
             repository = container.androidVpnRepository,
             clientFactory = container.boardProxyClientFactory,
             tunnelFactory = VpnTunnelFactory(this) {

@@ -3,10 +3,8 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  test: {
-    environment: 'jsdom',
-    setupFiles: './src/test/setup.ts',
-  },
+  build: { sourcemap: true },
+  test: { environment: 'jsdom', setupFiles: './src/test/setup.ts' },
   server: {
     port: 5174,
     proxy: {

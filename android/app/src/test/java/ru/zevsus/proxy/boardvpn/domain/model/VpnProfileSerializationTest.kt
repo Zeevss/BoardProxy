@@ -45,4 +45,31 @@ class VpnProfileSerializationTest {
             error is IllegalArgumentException || error is SerializationException,
         )
     }
+
+    @Test
+    fun `subscription profile keeps URL and safe key metadata`() {
+        val raw = "bproxy://${"A".repeat(86)}"
+        val url = BoardProxySubscriptionUrl.fromRaw(
+            "https://subscribe.example.com/s/family#bp1=demo"
+        )
+        val profile = VpnProfile(
+            id = VpnProfileId("family"),
+            name = "Family",
+            keylink = BoardProxyKeylink.fromRaw(raw),
+            subscription = VpnSubscription(
+                url = url,
+                id = "family",
+                revision = "r1",
+                keys = listOf(SubscriptionKeySummary("one", "Germany", "node-1", "enabled", 42)),
+            ),
+        )
+
+        val decoded = json.decodeFromString(
+            VpnProfile.serializer(),
+            json.encodeToString(VpnProfile.serializer(), profile),
+        )
+
+        assertEquals(profile, decoded)
+        assertEquals(url.reveal(), decoded.shareValue())
+    }
 }

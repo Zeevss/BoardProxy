@@ -17,7 +17,8 @@ import (
 
 // App is the thin Wails adapter around one BoardProxy client.
 type App struct {
-	ctx context.Context
+	ctx           context.Context
+	subscriptions subscriptionFetcher
 
 	mu     sync.Mutex
 	mode   string         // "" | "proxy" | "tun" — активный режим подключения
@@ -65,7 +66,7 @@ func (a *App) SyncTray(state TrayState) {
 	}
 }
 
-func NewApp() *App { return &App{} }
+func NewApp() *App { return &App{subscriptions: newSubscriptionFetcher()} }
 
 func (a *App) startup(ctx context.Context) {
 	a.mu.Lock()
@@ -122,19 +123,6 @@ func (a *App) GetAppInfo() AppInfo {
 		OS:      stdruntime.GOOS,
 		Arch:    stdruntime.GOARCH,
 	}
-}
-
-type LinkInfo struct {
-	Label  string   `json:"label"`
-	Boards []string `json:"boards"`
-}
-
-func (a *App) ParseLink(link string) (LinkInfo, error) {
-	info, err := bproxy.InspectKeylink(link)
-	if err != nil {
-		return LinkInfo{}, err
-	}
-	return LinkInfo{Label: info.Label, Boards: info.Boards}, nil
 }
 
 type ConnectConfig struct {
@@ -232,6 +220,15 @@ func toMetricsDTO(metrics bproxy.Metrics) MetricsDTO {
 }
 
 func (a *App) Connect(cfg ConnectConfig) error {
+	resolvedLink, selected, err := a.resolveConnectionLink(cfg.Link)
+	if err != nil {
+		return err
+	}
+	cfg.Link = resolvedLink
+	if selected.ID != "" {
+		a.emitLog("INFO", fmt.Sprintf("подписка: выбран ключ %q (%s)", selected.Name, selected.NodeID))
+	}
+
 	a.mu.Lock()
 	if a.mode != "" {
 		a.mu.Unlock()

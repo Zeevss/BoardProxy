@@ -99,9 +99,14 @@ func parseSecret(encoded string) (BootstrapSecret, error) {
 	if encoded == "" {
 		return BootstrapSecret{}, errors.New("identity: BPROXY_NODE_SECRET is required")
 	}
-	raw, err := base64.RawStdEncoding.DecodeString(encoded)
+	raw, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
-		return BootstrapSecret{}, fmt.Errorf("identity: decode bootstrap secret: %w", err)
+		// Accept secrets emitted by early control-plane builds and values that
+		// operators converted to the standard alphabet as a compatibility path.
+		raw, err = base64.RawStdEncoding.DecodeString(encoded)
+		if err != nil {
+			return BootstrapSecret{}, fmt.Errorf("identity: decode bootstrap secret: %w", err)
+		}
 	}
 	var secret BootstrapSecret
 	if err := json.Unmarshal(raw, &secret); err != nil {

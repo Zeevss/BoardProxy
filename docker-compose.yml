@@ -30,6 +30,7 @@ services:
       CONTROL_MASTER_KEY_ID: ${CONTROL_MASTER_KEY_ID:-control-master-v1}
       CONTROL_MASTER_KEYS: ${CONTROL_MASTER_KEYS:-}
       CONTROL_BOOTSTRAP_ADMIN_TOKEN: ${CONTROL_BOOTSTRAP_ADMIN_TOKEN:-}
+      CONTROL_PANEL_SESSION_TTL: ${CONTROL_PANEL_SESSION_TTL:-PT12H}
       CONTROL_GRPC_SERVER_NAMES: ${CONTROL_GRPC_SERVER_NAMES:-hub,localhost}
       CONTROL_ALLOWED_ORIGINS: ${CONTROL_ALLOWED_ORIGINS:-}
       CONTROL_REQUESTS_PER_MINUTE: ${CONTROL_REQUESTS_PER_MINUTE:-300}
@@ -46,14 +47,22 @@ services:
       - "${BPROXY_CONTROL_HTTP_PORT:-8080}:8080"
     volumes:
       - control-pki:/var/lib/boardproxy-control/pki
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 12
 
   node:
+    profiles: ["node"]
     build:
       context: .
       dockerfile: node-agent/Dockerfile
     restart: unless-stopped
     depends_on:
-      - hub
+      hub:
+        condition: service_healthy
     environment:
       BPROXY_NODE_SECRET: ${BPROXY_NODE_SECRET:-}
       BPROXY_STATS_INTERFACES: ${BPROXY_STATS_INTERFACES:-eth0}
@@ -68,11 +77,28 @@ services:
       context: ./subscribe
     restart: unless-stopped
     depends_on:
-      - hub
+      hub:
+        condition: service_healthy
+    environment:
+      SUBSCRIBE_LISTEN: ":8090"
+      SUBSCRIBE_PUBLIC_URL: ${CONTROL_SUBSCRIPTION_PUBLIC_URL:-}
+      SUBSCRIBE_CONTROL_PLANE_URL: http://hub:8080
+      SUBSCRIBE_CONTROL_PLANE_TOKEN: ${BPROXY_SUBSCRIBE_CONTROL_TOKEN:-}
+      SUBSCRIBE_CONTROL_PLANE_TIMEOUT: ${BPROXY_SUBSCRIBE_CONTROL_TIMEOUT:-10s}
+      SUBSCRIBE_YANDEX_EDITOR_URL: ${CONTROL_SUBSCRIPTION_YANDEX_EDITOR_URL:-}
+      SUBSCRIBE_RECOVERY_KEY_ID: ${CONTROL_SUBSCRIPTION_RECOVERY_KEY_ID:-}
+      SUBSCRIBE_RECOVERY_PRIVATE_KEY: ${BPROXY_SUBSCRIBE_RECOVERY_PRIVATE_KEY:-}
+      SUBSCRIBE_APPS_JSON: ${BPROXY_SUBSCRIBE_APPS_JSON:-[]}
     ports:
-      - "${BPROXY_SUBSCRIBE_PORT:-8090}:8090"
-    volumes:
-      - "${BPROXY_SUBSCRIBE_CONFIG:-./subscribe/config.toml}:/etc/boardproxy-subscribe/config.toml:ro"
+      - "${BPROXY_SUBSCRIBE_BIND:-127.0.0.1}:${BPROXY_SUBSCRIBE_PORT:-8090}:8090"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
 
 volumes:
   control-db:

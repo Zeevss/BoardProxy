@@ -262,8 +262,33 @@ The screen also contains a session timer
 driven by an injectable `TimeSource`, live download/latency/upload cards and a
 profile selector sheet.
 
-Profiles supports select, manual add, rename, keylink replacement, delete with
-confirmation and clipboard import. Settings covers theme mode,
+Profiles supports subscription URLs and direct `bproxy://` keys. Every
+subscription is rendered as one group containing safe key metadata; direct
+keys stay in a separate section. The Subscribe SDK is exposed through the
+gomobile facade. `SubscriptionSyncManager` is the single update path: it runs
+once when the application process starts, every 15 minutes while that process
+is alive, from the Profiles refresh actions, and immediately before a VPN
+start. Concurrent refreshes are serialized. A successful response atomically
+replaces the selected key and safe metadata and records the update time; a
+periodic or manual failure preserves the last working key and exposes a compact
+error state. With a multi-key subscription the client requests the previously
+selected key ID and keeps it while it remains enabled; only removal or disable
+falls back to the first enabled key returned by the server. This avoids
+switching nodes merely because response ordering changed and leaves room for a
+future explicit key selector. The pre-connect path accepts a result fetched in the last 30
+seconds so cold-start auto-connect does not immediately duplicate the startup
+request. A pre-connect failure remains strict and prevents starting a new
+VPN session with a possibly revoked subscription. The interval is centralized
+as `SubscriptionSyncManager.DEFAULT_INTERVAL_MINUTES`.
+
+The Profiles screen uses the same outer card geometry for subscription groups
+and direct keys. Primary content stays visible; add/import actions and
+edit/share/delete actions live in compact overflow menus. Subscription rows
+show only the name, synchronization state and flat key rows, with a visible
+section-level refresh action and a per-subscription refresh menu item. Profiles
+also supports QR scanning and QR generation: a subscription shares its source
+URL, while a direct profile shares its keylink. Manual add, rename, replacement,
+delete confirmation and clipboard import remain available. Settings covers theme mode,
 connect-on-launch, a shortcut to the system VPN screen and version information.
 Network settings (SOCKS port, UDP, local DNS, DNS server, bypass subnets and
 bypass routes) are deliberately absent until they are wired into the runtime.

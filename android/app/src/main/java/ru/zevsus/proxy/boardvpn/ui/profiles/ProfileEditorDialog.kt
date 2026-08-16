@@ -50,6 +50,7 @@ fun ProfileEditorDialog(
                         capitalization = KeyboardCapitalization.Sentences,
                         imeAction = ImeAction.Next,
                     ),
+                    enabled = !state.resolving,
                     modifier = Modifier.fillMaxWidth(),
                 )
 
@@ -67,13 +68,18 @@ fun ProfileEditorDialog(
                     minLines = 2,
                     maxLines = 4,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    enabled = !state.resolving,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text(stringResource(R.string.action_save))
+            TextButton(onClick = onConfirm, enabled = !state.resolving) {
+                Text(
+                    stringResource(
+                        if (state.resolving) R.string.profiles_resolving else R.string.action_save
+                    )
+                )
             }
         },
         dismissButton = {

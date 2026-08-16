@@ -18,6 +18,7 @@ control:
     master-keys: ${CONTROL_MASTER_KEYS:}
   access:
     bootstrap-admin-token: ${CONTROL_BOOTSTRAP_ADMIN_TOKEN:}
+    panel-session-ttl: ${CONTROL_PANEL_SESSION_TTL:PT12H}
   pki:
     directory: ${CONTROL_PKI_DIRECTORY:/var/lib/boardproxy-control/pki}
   grpc:

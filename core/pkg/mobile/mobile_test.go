@@ -1,15 +1,50 @@
 package mobile
 
 import (
+	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+
+	"github.com/Zeevss/BoardProxy/subscribe/protocol"
 )
 
 type testListener struct {
 	mu       sync.Mutex
 	statuses []string
 	messages []string
+}
+
+func TestResolveSubscriptionReturnsSnapshotJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Accept") != protocol.MediaType {
+			t.Fatalf("Accept = %q", request.Header.Get("Accept"))
+		}
+		_, _ = writer.Write([]byte(`{
+			"version":1,"id":"family","name":"Family","state":"enabled","revision":"r1",
+			"issuedAt":"2026-08-16T08:00:00Z","usedBytes":42,
+			"keys":[{"id":"de","name":"Germany","nodeId":"node-1","userId":"alice","state":"enabled","usedBytes":42,"keylink":"bproxy://one"}]
+		}`))
+	}))
+	defer server.Close()
+	rawURL, err := protocol.BuildURL(server.URL, "bps_test", protocol.Capsule{
+		Version: 1, YandexURL: "https://disk.yandex.ru/i/example", RecoveryKeyID: "r1",
+		ClientPrivateKey:     protocol.EncodeKey(bytes.Repeat([]byte{1}, 32)),
+		RecoveryServerPublic: protocol.EncodeKey(bytes.Repeat([]byte{2}, 32)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := ResolveSubscription(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(raw, `"name":"Family"`) || !strings.Contains(raw, `"keylink":"bproxy://one"`) {
+		t.Fatalf("unexpected snapshot: %s", raw)
+	}
 }
 
 func (l *testListener) OnStatus(status, message string) {

@@ -4,6 +4,7 @@ go 1.26.5
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/Zeevss/BoardProxy/subscribe v0.0.0
 	github.com/coder/websocket v1.8.15
 	github.com/flynn/noise v1.1.0
 	github.com/spf13/cobra v1.10.2
@@ -28,3 +29,5 @@ require (
 )
 
 tool golang.org/x/mobile/cmd/gobind
+
+replace github.com/Zeevss/BoardProxy/subscribe => ../subscribe

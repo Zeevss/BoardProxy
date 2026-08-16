@@ -7,6 +7,8 @@
     <string name="action_cancel">Отмена</string>
     <string name="action_delete">Удалить</string>
     <string name="action_edit">Изменить</string>
+    <string name="action_share">Поделиться</string>
+    <string name="action_close">Закрыть</string>
     <string name="action_disconnect">Отключить</string>
     <string name="action_pause">Пауза</string>
     <string name="action_resume">Продолжить</string>
@@ -32,24 +34,55 @@
     <string name="home_error_session_failed">Не удалось подключиться</string>
 
     <string name="profiles_title">Профили</string>
-    <string name="profiles_subtitle">Сохранённые ключи доступа BoardProxy</string>
+    <string name="profiles_subtitle">Подписки и отдельные ключи доступа</string>
     <string name="profiles_add">Новый профиль</string>
+    <string name="profiles_add_manually">Ввести вручную</string>
     <string name="profiles_edit_title">Изменить профиль</string>
     <string name="profiles_active">Активный профиль</string>
     <string name="profiles_import_clipboard">Вставить ключ из буфера</string>
+    <string name="profiles_paste">Вставить ссылку</string>
+    <string name="profiles_scan_qr">Сканировать QR</string>
+    <string name="profiles_subscriptions">Подписки</string>
+    <string name="profiles_direct_keys">Отдельные ключи</string>
     <string name="profiles_empty_title">Профилей пока нет</string>
-    <string name="profiles_empty_hint">Вставьте ключ bproxy:// из буфера обмена или добавьте его вручную.</string>
+    <string name="profiles_empty_hint">Отсканируйте QR подписки или добавьте URL подписки либо ключ bproxy://.</string>
     <string name="profiles_field_name">Название</string>
-    <string name="profiles_field_key">Ключ</string>
-    <string name="profiles_field_key_hint">bproxy://…</string>
+    <string name="profiles_field_key">URL подписки или ключ</string>
+    <string name="profiles_field_key_hint">https://…#bp1=… или bproxy://…</string>
     <string name="profiles_error_name">Укажите название профиля</string>
-    <string name="profiles_error_key">Это не похоже на ключ BoardProxy</string>
+    <string name="profiles_error_key">Это не похоже на URL подписки или ключ BoardProxy</string>
+    <string name="profiles_resolving">Проверяем…</string>
     <string name="profiles_delete_title">Удалить профиль?</string>
     <string name="profiles_delete_message">%1$s будет удалён с этого устройства.</string>
     <string name="profiles_error_clipboard_empty">В буфере обмена нет текста</string>
-    <string name="profiles_error_invalid_keylink">В буфере обмена нет корректного ключа BoardProxy</string>
+    <string name="profiles_error_invalid_link">Некорректный URL подписки или ключ BoardProxy</string>
+    <string name="profiles_error_subscription">Не удалось загрузить подписку</string>
     <string name="profiles_imported">Профиль добавлен</string>
     <string name="profiles_deleted">Профиль удалён</string>
+    <string name="profiles_refresh">Обновить</string>
+    <string name="profiles_refresh_one">Обновить подписку</string>
+    <string name="profiles_refreshing">Обновляем…</string>
+    <string name="profiles_updated_at">Обновлено в %1$s</string>
+    <string name="profiles_not_refreshed">Ожидает обновления</string>
+    <string name="profiles_refresh_failed">Не удалось обновить · сохранён прежний ключ</string>
+    <string name="profiles_updated">Подписки обновлены</string>
+    <string name="profiles_update_failed">Некоторые подписки не удалось обновить</string>
+    <string name="profiles_more">Действия с профилем</string>
+    <string name="profiles_key_enabled">Включён</string>
+    <string name="profiles_key_disabled">Отключён</string>
+    <string name="profiles_key_used">Использовано %1$s</string>
+    <string name="profiles_qr_content_description">QR-код профиля</string>
+    <string name="profiles_scan_hint">Наведите камеру на QR-код BoardProxy</string>
+    <string name="profiles_camera_request">Для сканирования QR нужен доступ к камере</string>
+    <string name="profiles_camera_denied">Доступ к камере не предоставлен</string>
+    <string name="profiles_camera_allow">Разрешить камеру</string>
+
+    <plurals name="profiles_key_count">
+        <item quantity="one">%1$d ключ</item>
+        <item quantity="few">%1$d ключа</item>
+        <item quantity="many">%1$d ключей</item>
+        <item quantity="other">%1$d ключа</item>
+    </plurals>
 
     <string name="settings_title">Настройки</string>
     <string name="settings_subtitle">Подключение, маршрутизация и оформление</string>

@@ -4,16 +4,45 @@
 package mobile
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"bproxy-core/pkg/bproxy"
+	subscribesdk "github.com/Zeevss/BoardProxy/subscribe/sdk"
 )
+
+var mobileSubscriptionClient = &subscribesdk.Client{
+	HTTP:  &http.Client{Timeout: 12 * time.Second},
+	Cache: subscribesdk.NewMemoryCache(),
+}
+
+// ResolveSubscription fetches and authenticates a subscription URL through
+// the public endpoint with Yandex recovery and returns the snapshot as JSON.
+// The URL and contained keylinks are credentials and must never be logged.
+func ResolveSubscription(subscriptionURL string) (string, error) {
+	if strings.TrimSpace(subscriptionURL) == "" {
+		return "", errors.New("mobile: subscription URL is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	snapshot, err := mobileSubscriptionClient.Fetch(ctx, strings.TrimSpace(subscriptionURL))
+	if err != nil {
+		return "", fmt.Errorf("mobile: resolve subscription: %w", err)
+	}
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		return "", fmt.Errorf("mobile: encode subscription: %w", err)
+	}
+	return string(raw), nil
+}
 
 // Listener receives callbacks from background Go goroutines. Android
 // implementations should marshal UI work onto the main dispatcher.

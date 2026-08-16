@@ -7,6 +7,7 @@ data class VpnProfile(
     val id: VpnProfileId,
     val name: String,
     val keylink: BoardProxyKeylink,
+    val subscription: VpnSubscription? = null,
 ) {
     init {
         require(name.isNotBlank()) { "Profile name must not be blank" }
@@ -25,4 +26,6 @@ data class VpnProfile(
 
         private const val MAX_NAME_LENGTH = 64
     }
+
+    fun shareValue(): String = subscription?.url?.reveal() ?: keylink.reveal()
 }

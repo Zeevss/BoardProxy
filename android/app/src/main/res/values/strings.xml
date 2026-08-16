@@ -9,6 +9,8 @@
     <string name="action_cancel">Cancel</string>
     <string name="action_delete">Delete</string>
     <string name="action_edit">Edit</string>
+    <string name="action_share">Share</string>
+    <string name="action_close">Close</string>
     <string name="action_disconnect">Disconnect</string>
     <string name="action_pause">Pause</string>
     <string name="action_resume">Resume</string>
@@ -34,24 +36,53 @@
     <string name="home_error_session_failed">VPN connection failed</string>
 
     <string name="profiles_title">Profiles</string>
-    <string name="profiles_subtitle">Your saved BoardProxy access keys</string>
+    <string name="profiles_subtitle">Subscriptions and separate access keys</string>
     <string name="profiles_add">Add profile</string>
+    <string name="profiles_add_manually">Enter manually</string>
     <string name="profiles_edit_title">Edit profile</string>
     <string name="profiles_active">Active profile</string>
     <string name="profiles_import_clipboard">Paste key from clipboard</string>
+    <string name="profiles_paste">Paste link</string>
+    <string name="profiles_scan_qr">Scan QR</string>
+    <string name="profiles_subscriptions">Subscriptions</string>
+    <string name="profiles_direct_keys">Separate keys</string>
     <string name="profiles_empty_title">No profiles yet</string>
-    <string name="profiles_empty_hint">Paste a bproxy:// key from the clipboard or add one manually.</string>
+    <string name="profiles_empty_hint">Scan a subscription QR or add a subscription URL or bproxy:// key.</string>
     <string name="profiles_field_name">Name</string>
-    <string name="profiles_field_key">Key</string>
-    <string name="profiles_field_key_hint">bproxy://…</string>
+    <string name="profiles_field_key">Subscription URL or key</string>
+    <string name="profiles_field_key_hint">https://…#bp1=… or bproxy://…</string>
     <string name="profiles_error_name">Enter a profile name</string>
-    <string name="profiles_error_key">This is not a valid BoardProxy key</string>
+    <string name="profiles_error_key">This is not a valid subscription URL or BoardProxy key</string>
+    <string name="profiles_resolving">Checking…</string>
     <string name="profiles_delete_title">Delete profile?</string>
     <string name="profiles_delete_message">%1$s will be removed from this device.</string>
     <string name="profiles_error_clipboard_empty">Clipboard does not contain text</string>
-    <string name="profiles_error_invalid_keylink">Clipboard does not contain a valid BoardProxy key</string>
+    <string name="profiles_error_invalid_link">The value is not a valid subscription URL or BoardProxy key</string>
+    <string name="profiles_error_subscription">Could not load the subscription</string>
     <string name="profiles_imported">Profile imported</string>
     <string name="profiles_deleted">Profile deleted</string>
+    <string name="profiles_refresh">Refresh</string>
+    <string name="profiles_refresh_one">Refresh subscription</string>
+    <string name="profiles_refreshing">Refreshing…</string>
+    <string name="profiles_updated_at">Updated at %1$s</string>
+    <string name="profiles_not_refreshed">Waiting for refresh</string>
+    <string name="profiles_refresh_failed">Refresh failed · previous key preserved</string>
+    <string name="profiles_updated">Subscriptions updated</string>
+    <string name="profiles_update_failed">Some subscriptions could not be updated</string>
+    <string name="profiles_more">Profile actions</string>
+    <string name="profiles_key_enabled">Enabled</string>
+    <string name="profiles_key_disabled">Disabled</string>
+    <string name="profiles_key_used">%1$s used</string>
+    <string name="profiles_qr_content_description">Profile QR code</string>
+    <string name="profiles_scan_hint">Point the camera at a BoardProxy QR code</string>
+    <string name="profiles_camera_request">Camera access is required to scan QR codes</string>
+    <string name="profiles_camera_denied">Camera access was denied</string>
+    <string name="profiles_camera_allow">Allow camera</string>
+
+    <plurals name="profiles_key_count">
+        <item quantity="one">%1$d key</item>
+        <item quantity="other">%1$d keys</item>
+    </plurals>
 
     <string name="settings_title">Settings</string>
     <string name="settings_subtitle">Connection behaviour and appearance</string>

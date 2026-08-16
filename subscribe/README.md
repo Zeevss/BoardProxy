@@ -24,7 +24,7 @@
 Сгенерировать recovery private key можно, например, так:
 
 ```bash
-openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+openssl rand -base64 32 | tr -d '\n=' | tr '+/' '-_'
 ```
 
 Запуск локально:
@@ -39,13 +39,46 @@ go run ./cmd/subscribe -config ./config.toml
 go run ./cmd/subscribe -config ./config.toml -print-public-key
 ```
 
-Или через opt-in профиль Compose:
+## Docker Compose deployment
 
-```bash
-docker compose --profile subscribe up --build
+Compose использует переменные окружения из корневого `.env`; отдельный bind-mount `config.toml` ему не нужен. TOML остаётся доступен для локального запуска бинарника.
+
+Сначала запустите control-plane с `CONTROL_SUBSCRIPTION_ENABLED=false`, создайте постоянный API-токен с ролью `SUBSCRIBER` и сохраните поле `secret` из ответа в:
+
+```dotenv
+BPROXY_SUBSCRIBE_CONTROL_TOKEN=bpat_...
 ```
 
-`GET /readyz` отражает готовность основного HTTP-канала. `GET /recoveryz` отдельно показывает состояние watcher-а Яндекс Таблицы, поэтому отказ резервного канала не исключает исправный HTTP-сервис из балансировки.
+Затем задайте общие параметры обоих сервисов и приватный recovery-ключ:
+
+```dotenv
+BPROXY_SUBSCRIBE_BIND=127.0.0.1
+BPROXY_SUBSCRIBE_PORT=8090
+BPROXY_SUBSCRIBE_RECOVERY_PRIVATE_KEY=<32-byte-base64url>
+BPROXY_SUBSCRIBE_APPS_JSON=[{"name":"BoardProxy Android","url":"https://example.com/android"}]
+
+CONTROL_SUBSCRIPTION_PUBLIC_URL=https://subscribe.example.com
+CONTROL_SUBSCRIPTION_YANDEX_EDITOR_URL=https://disk.yandex.ru/i/replace-me
+CONTROL_SUBSCRIPTION_RECOVERY_KEY_ID=recovery-2026-01
+```
+
+Соберите образ и выведите соответствующий публичный recovery-ключ без запуска зависимостей:
+
+```bash
+docker compose --profile subscribe build subscribe
+docker compose --profile subscribe run --rm --no-deps subscribe -print-public-key
+```
+
+Результат запишите в `CONTROL_SUBSCRIPTION_RECOVERY_SERVER_PUBLIC_KEY`, включите `CONTROL_SUBSCRIPTION_ENABLED=true` и запустите профиль:
+
+```bash
+docker compose --profile subscribe up -d --build postgres hub subscribe
+docker compose --profile subscribe ps
+curl --fail http://127.0.0.1:8090/readyz
+curl --fail http://127.0.0.1:8090/recoveryz
+```
+
+`readyz` проверяет основной HTTP-канал и используется Docker healthcheck. `recoveryz` диагностирует watcher Яндекс Таблицы отдельно: временный отказ Яндекса не должен перезапускать исправный публичный сервис. Для production направьте внешний HTTPS reverse proxy на `subscribe:8090` внутри Docker-сети либо на loopback-порт хоста. Не публикуйте порт без TLS.
 
 ## Обычное создание пользователя
 
@@ -83,7 +116,7 @@ Content-Type: application/json
 
 При выключенном флаге тот же endpoint сохраняет прежний режим и возвращает `deliveryType: "keylinks"` с массивом ключей. Старый `PUT /api/v1/nodes/{nodeId}/users/{userId}` остаётся низкоуровневой административной операцией; интерфейс control-plane использует новый агрегирующий endpoint.
 
-Для автоматической выдачи ссылки control-plane и `subscribe/config.toml` должны описывать одинаковые `public URL`, URL Яндекс Таблицы, `recovery key ID` и recovery server public key:
+Для автоматической выдачи ссылки control-plane и настройки `subscribe` должны описывать одинаковые `public URL`, URL Яндекс Таблицы, `recovery key ID` и recovery server public key:
 
 ```dotenv
 CONTROL_SUBSCRIPTION_ENABLED=true

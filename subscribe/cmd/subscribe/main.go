@@ -27,7 +27,16 @@ func main() {
 	configPath := flag.String("config", "config.toml", "path to the subscribe TOML configuration")
 	printURL := flag.Bool("print-url", false, "read issued subscription JSON from stdin, print its URL, and exit")
 	printPublicKey := flag.Bool("print-public-key", false, "print the recovery server public key and exit")
+	healthcheck := flag.String("healthcheck", "", "check an HTTP health endpoint and exit")
 	flag.Parse()
+
+	if *healthcheck != "" {
+		if err := checkHealth(*healthcheck); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	settings, err := config.Load(*configPath)
@@ -124,4 +133,17 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("cannot gracefully stop HTTP server", "error", err)
 	}
+}
+
+func checkHealth(endpoint string) error {
+	client := &http.Client{Timeout: 3 * time.Second}
+	response, err := client.Get(endpoint)
+	if err != nil {
+		return fmt.Errorf("healthcheck request failed: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("healthcheck returned HTTP %d", response.StatusCode)
+	}
+	return nil
 }

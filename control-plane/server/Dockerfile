@@ -16,7 +16,11 @@ COPY --from=frontend-build /src/control-plane/frontend/dist ./src/main/resources
 RUN --mount=type=cache,target=/root/.gradle chmod +x gradlew && ./gradlew bootJar --no-daemon
 
 FROM eclipse-temurin:21-jre
-RUN groupadd --system --gid 10001 boardproxy && useradd --system --uid 10001 --gid boardproxy boardproxy
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 boardproxy \
+    && useradd --system --uid 10001 --gid boardproxy boardproxy
 WORKDIR /app
 COPY --from=build /src/control-plane/server/build/libs/*.jar /app/control-plane.jar
 RUN mkdir -p /var/lib/boardproxy-control/pki && chown -R boardproxy:boardproxy /var/lib/boardproxy-control

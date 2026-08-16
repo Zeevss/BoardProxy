@@ -16,6 +16,7 @@ import ru.zevsus.proxy.boardvpn.domain.model.VpnSessionId
 import ru.zevsus.proxy.boardvpn.domain.model.VpnSessionPhase
 import ru.zevsus.proxy.boardvpn.domain.model.VpnSessionState
 import ru.zevsus.proxy.boardvpn.domain.repository.VpnProfileRepository
+import ru.zevsus.proxy.boardvpn.domain.subscription.SubscriptionSyncManager
 import ru.zevsus.proxy.boardvpn.infrastructure.core.BoardProxyClient
 import ru.zevsus.proxy.boardvpn.infrastructure.core.BoardProxyClientFactory
 import ru.zevsus.proxy.boardvpn.infrastructure.core.BoardProxyConfig
@@ -29,6 +30,7 @@ import ru.zevsus.proxy.boardvpn.infrastructure.tun.VpnTunnelFactory
 class AndroidVpnRuntime(
     private val scope: CoroutineScope,
     private val profiles: VpnProfileRepository,
+    private val subscriptionSyncManager: SubscriptionSyncManager,
     private val repository: AndroidVpnRepository,
     private val clientFactory: BoardProxyClientFactory,
     private val tunnelFactory: VpnTunnelFactory,
@@ -86,11 +88,23 @@ class AndroidVpnRuntime(
     private suspend fun handleStart(message: Message.Start) {
         if (resources != null) return
 
-        val profile = profiles.getProfile(message.profileId)
-        if (profile == null) {
+        val storedProfile = profiles.getProfile(message.profileId)
+        if (storedProfile == null) {
             failWithoutResources(
                 message.sessionId,
                 VpnFailure.InvalidProfile("Profile ${message.profileId.value} was not found"),
+            )
+            return
+        }
+
+        val profile = try {
+            if (storedProfile.subscription == null) storedProfile else {
+                subscriptionSyncManager.refreshIfStale(storedProfile.id).getOrThrow()
+            }
+        } catch (error: Throwable) {
+            failWithoutResources(
+                message.sessionId,
+                VpnFailure.InvalidProfile("Subscription update failed: ${error.message}"),
             )
             return
         }

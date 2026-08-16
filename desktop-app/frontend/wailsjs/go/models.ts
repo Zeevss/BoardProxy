@@ -1,15 +1,15 @@
 export namespace main {
-	
+
 	export class AppInfo {
 	    name: string;
 	    version: string;
 	    os: string;
 	    arch: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AppInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -25,11 +25,11 @@ export namespace main {
 	    maxLanes: number;
 	    systemProxy: boolean;
 	    tunMode: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ConnectConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.link = source["link"];
@@ -51,11 +51,11 @@ export namespace main {
 	    baseRttMs: number;
 	    confirmedBytes: number;
 	    draining: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new LaneDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -70,19 +70,67 @@ export namespace main {
 	        this.draining = source["draining"];
 	    }
 	}
+	export class SubscriptionKeyInfo {
+	    id: string;
+	    name: string;
+	    nodeId: string;
+	    state: string;
+	    usedBytes: number;
+	    boards: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new SubscriptionKeyInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.nodeId = source["nodeId"];
+	        this.state = source["state"];
+	        this.usedBytes = source["usedBytes"];
+	        this.boards = source["boards"];
+	    }
+	}
 	export class LinkInfo {
+	    kind: string;
 	    label: string;
 	    boards: string[];
-	
+	    subscriptionId?: string;
+	    revision?: string;
+	    keys: SubscriptionKeyInfo[];
+
 	    static createFrom(source: any = {}) {
 	        return new LinkInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
 	        this.label = source["label"];
 	        this.boards = source["boards"];
+	        this.subscriptionId = source["subscriptionId"];
+	        this.revision = source["revision"];
+	        this.keys = this.convertValues(source["keys"], SubscriptionKeyInfo);
 	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class StreamDTO {
 	    id: number;
@@ -93,11 +141,11 @@ export namespace main {
 	    totalDown: number;
 	    rateUp: number;
 	    rateDown: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new StreamDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -123,11 +171,11 @@ export namespace main {
 	    blockedWriters: number;
 	    lanes: LaneDTO[];
 	    streams: StreamDTO[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new MetricsDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.status = source["status"];
@@ -143,7 +191,7 @@ export namespace main {
 	        this.lanes = this.convertValues(source["lanes"], LaneDTO);
 	        this.streams = this.convertValues(source["streams"], StreamDTO);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -162,15 +210,16 @@ export namespace main {
 		    return a;
 		}
 	}
-	
+
+
 	export class TrayProfile {
 	    id: string;
 	    name: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new TrayProfile(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -181,18 +230,18 @@ export namespace main {
 	    status: string;
 	    profiles: TrayProfile[];
 	    activeId: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new TrayState(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.status = source["status"];
 	        this.profiles = this.convertValues(source["profiles"], TrayProfile);
 	        this.activeId = source["activeId"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;

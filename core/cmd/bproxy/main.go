@@ -5,11 +5,15 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -23,6 +27,8 @@ import (
 	"bproxy-core/pkg/bproxy"
 
 	"github.com/BurntSushi/toml"
+	subscriptionprotocol "github.com/Zeevss/BoardProxy/subscribe/protocol"
+	subscribesdk "github.com/Zeevss/BoardProxy/subscribe/sdk"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -38,13 +44,69 @@ func main() {
 		Use: "bproxy", Short: "SOCKS5/HTTP proxy tunneled over an online whiteboard", Version: version,
 	}
 	root.PersistentFlags().StringVar(&controlAddress, "control", controlAddress, "gRPC control address of a running server")
-	root.AddCommand(connectCmd(), serveCmd(), generateCmd(), reloadCmd(&controlAddress), usersCmd(&controlAddress), boardsCmd(&controlAddress), statsCmd(&controlAddress))
+	root.AddCommand(connectCmd(), subscriptionCmd(), serveCmd(), generateCmd(), reloadCmd(&controlAddress), usersCmd(&controlAddress), boardsCmd(&controlAddress), statsCmd(&controlAddress))
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		if !errors.Is(err, context.Canceled) {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
 	}
+}
+
+func subscriptionCmd() *cobra.Command {
+	var (
+		rawURL     string
+		timeout    = 45 * time.Second
+		jsonOutput bool
+	)
+	cmd := &cobra.Command{
+		Use: "subscription", Short: "resolve a subscription URL into BoardProxy keys", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if strings.TrimSpace(rawURL) == "" {
+				return errors.New("--url is required")
+			}
+			if timeout <= 0 || timeout > 5*time.Minute {
+				return errors.New("--timeout must be positive and at most 5m")
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+			defer cancel()
+			client := &subscribesdk.Client{
+				HTTP:  &http.Client{Timeout: min(timeout, 12*time.Second)},
+				Cache: subscribesdk.NewMemoryCache(),
+			}
+			snapshot, err := client.Fetch(ctx, strings.TrimSpace(rawURL))
+			if err != nil {
+				return err
+			}
+			if jsonOutput {
+				encoder := json.NewEncoder(cmd.OutOrStdout())
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(snapshot)
+			}
+			return writeSubscriptionKeys(cmd.OutOrStdout(), snapshot)
+		},
+	}
+	flags := cmd.Flags()
+	flags.StringVar(&rawURL, "url", getenvOr("BPROXY_SUBSCRIPTION_URL", ""), "subscription URL with #bp1 recovery capsule")
+	flags.DurationVar(&timeout, "timeout", timeout, "overall HTTPS and Yandex recovery timeout")
+	flags.BoolVar(&jsonOutput, "json", false, "print the complete subscription snapshot as JSON")
+	return cmd
+}
+
+func writeSubscriptionKeys(writer io.Writer, snapshot subscriptionprotocol.Subscription) error {
+	tw := tabwriter.NewWriter(writer, 0, 2, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "ID\tNAME\tNODE\tUSER\tSTATE\tUSED_BYTES\tKEYLINK"); err != nil {
+		return err
+	}
+	for _, key := range snapshot.Keys {
+		if _, err := fmt.Fprintf(
+			tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
+			key.ID, key.Name, key.NodeID, key.UserID, key.State, key.UsedBytes, key.Keylink,
+		); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
 }
 
 func connectCmd() *cobra.Command {

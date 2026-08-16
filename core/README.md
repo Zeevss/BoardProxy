@@ -118,6 +118,18 @@ bproxy --control unix:///run/bproxy/control.sock reload
 bproxy --control unix:///run/bproxy/control.sock stats
 ```
 
+Resolve a subscription URL through the same HTTPS → Yandex recovery path as
+the clients and print all delivered keys:
+
+```sh
+bproxy subscription --url 'https://subscribe.example.com/s/…#bp1=…'
+bproxy subscription --url 'https://subscribe.example.com/s/…#bp1=…' --json
+```
+
+The default table includes keylinks and therefore contains credentials. Avoid
+redirecting it into shared logs. `--timeout` controls the overall primary and
+recovery deadline; `BPROXY_SUBSCRIPTION_URL` can be used instead of `--url`.
+
 `AddUser` and `AddBoard` reject an existing tag with gRPC `ALREADY_EXISTS`;
 `ReplaceUser` and `ReplaceBoard` intentionally replace-or-create. After every
 CLI `add`, the command prints the runtime revision and warns which durable

@@ -5,15 +5,18 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import ru.zevsus.proxy.boardvpn.domain.repository.AppSettingsRepository
+import ru.zevsus.proxy.boardvpn.domain.repository.SubscriptionRepository
 import ru.zevsus.proxy.boardvpn.domain.repository.InstalledApplicationsRepository
 import ru.zevsus.proxy.boardvpn.domain.repository.VpnProfileRepository
 import ru.zevsus.proxy.boardvpn.domain.repository.VpnRepository
+import ru.zevsus.proxy.boardvpn.domain.subscription.SubscriptionSyncManager
 import ru.zevsus.proxy.boardvpn.infrastructure.applications.PackageManagerInstalledApplicationsRepository
 import ru.zevsus.proxy.boardvpn.infrastructure.core.AarBoardProxyClientFactory
 import ru.zevsus.proxy.boardvpn.infrastructure.core.BoardProxyClientFactory
 import ru.zevsus.proxy.boardvpn.infrastructure.persistence.DataStoreAppSettingsRepository
 import ru.zevsus.proxy.boardvpn.infrastructure.persistence.DataStoreVpnProfileRepository
 import ru.zevsus.proxy.boardvpn.infrastructure.profile.ClipboardKeylinkReader
+import ru.zevsus.proxy.boardvpn.infrastructure.subscription.AarSubscriptionRepository
 import ru.zevsus.proxy.boardvpn.infrastructure.vpn.AndroidVpnRepository
 import ru.zevsus.proxy.boardvpn.infrastructure.vpn.permission.VpnPermissionManager
 
@@ -50,6 +53,14 @@ class AppContainer(
     val vpnRepository: VpnRepository = androidVpnRepository
 
     val boardProxyClientFactory: BoardProxyClientFactory = AarBoardProxyClientFactory()
+
+    val subscriptionRepository: SubscriptionRepository = AarSubscriptionRepository()
+
+    val subscriptionSyncManager = SubscriptionSyncManager(
+        scope = storageScope,
+        profiles = profileRepository,
+        subscriptions = subscriptionRepository,
+    )
 
     val vpnPermissionManager = VpnPermissionManager(applicationContext)
 

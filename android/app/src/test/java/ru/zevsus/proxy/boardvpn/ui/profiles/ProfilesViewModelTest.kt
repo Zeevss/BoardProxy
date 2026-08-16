@@ -13,8 +13,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import ru.zevsus.proxy.boardvpn.domain.model.BoardProxyKeylink
+import ru.zevsus.proxy.boardvpn.domain.model.BoardProxySubscriptionUrl
+import ru.zevsus.proxy.boardvpn.domain.model.SubscriptionKeySummary
 import ru.zevsus.proxy.boardvpn.domain.model.VpnProfile
 import ru.zevsus.proxy.boardvpn.domain.model.VpnProfileId
+import ru.zevsus.proxy.boardvpn.domain.model.VpnSubscription
+import ru.zevsus.proxy.boardvpn.domain.repository.ResolvedSubscription
+import ru.zevsus.proxy.boardvpn.domain.repository.SubscriptionRepository
+import ru.zevsus.proxy.boardvpn.domain.subscription.SubscriptionSyncManager
 import ru.zevsus.proxy.boardvpn.infrastructure.fake.InMemoryVpnProfileRepository
 import ru.zevsus.proxy.boardvpn.test.MainDispatcherRule
 
@@ -29,11 +35,40 @@ class ProfilesViewModelTest {
         name = "Home",
         keylink = BoardProxyKeylink.fromRaw(rawKey),
     )
+    private val subscriptions = object : SubscriptionRepository {
+        override suspend fun resolve(
+            url: BoardProxySubscriptionUrl,
+            preferredKeyId: String?,
+        ) = ResolvedSubscription(
+            name = "Family",
+            selectedKeylink = BoardProxyKeylink.fromRaw(rawKey),
+            selectedKeyId = "one",
+            metadata = VpnSubscription(
+                url = url,
+                id = "family",
+                revision = "r1",
+                keys = listOf(SubscriptionKeySummary("one", "Germany", "node-1", "enabled", 0)),
+                selectedKeyId = "one",
+            ),
+        )
+    }
+
+    private fun TestScope.viewModel(profiles: InMemoryVpnProfileRepository) =
+        ProfilesViewModel(
+            profiles,
+            subscriptions,
+            SubscriptionSyncManager(
+                scope = backgroundScope,
+                profiles = profiles,
+                subscriptions = subscriptions,
+                intervalMillis = Long.MAX_VALUE,
+            ),
+        )
 
     @Test
     fun `manual profile is created and selected when nothing is selected yet`() = runTest {
         val profiles = InMemoryVpnProfileRepository()
-        val viewModel = ProfilesViewModel(profiles)
+        val viewModel = viewModel(profiles)
         collectState(viewModel)
 
         viewModel.onAction(ProfilesAction.AddProfile)
@@ -51,7 +86,7 @@ class ProfilesViewModelTest {
     @Test
     fun `editor reports invalid name and key without saving`() = runTest {
         val profiles = InMemoryVpnProfileRepository()
-        val viewModel = ProfilesViewModel(profiles)
+        val viewModel = viewModel(profiles)
         collectState(viewModel)
 
         viewModel.onAction(ProfilesAction.AddProfile)
@@ -68,7 +103,7 @@ class ProfilesViewModelTest {
     @Test
     fun `existing profile can be renamed`() = runTest {
         val profiles = InMemoryVpnProfileRepository(listOf(profile))
-        val viewModel = ProfilesViewModel(profiles)
+        val viewModel = viewModel(profiles)
         collectState(viewModel)
 
         viewModel.onAction(ProfilesAction.EditProfile(profile.id))
@@ -84,7 +119,7 @@ class ProfilesViewModelTest {
     @Test
     fun `deletion is confirmed through the dialog`() = runTest {
         val profiles = InMemoryVpnProfileRepository(listOf(profile))
-        val viewModel = ProfilesViewModel(profiles)
+        val viewModel = viewModel(profiles)
         collectState(viewModel)
 
         viewModel.onAction(ProfilesAction.RequestDeletion(profile.id))
@@ -101,21 +136,36 @@ class ProfilesViewModelTest {
     @Test
     fun `clipboard import reports empty and invalid content`() = runTest {
         val profiles = InMemoryVpnProfileRepository()
-        val viewModel = ProfilesViewModel(profiles)
+        val viewModel = viewModel(profiles)
         collectState(viewModel)
 
-        viewModel.importKeylink(null)
+        viewModel.importLink(null)
         runCurrent()
         assertEquals(ProfilesMessage.ClipboardEmpty, viewModel.uiState.value.message)
 
-        viewModel.importKeylink("not-a-key")
+        viewModel.importLink("not-a-key")
         runCurrent()
-        assertEquals(ProfilesMessage.InvalidKeylink, viewModel.uiState.value.message)
+        assertEquals(ProfilesMessage.InvalidLink, viewModel.uiState.value.message)
 
-        viewModel.importKeylink("$rawKey#Clipboard")
+        viewModel.importLink("$rawKey#Clipboard")
         runCurrent()
         assertEquals(ProfilesMessage.ProfileImported, viewModel.uiState.value.message)
         assertEquals(listOf("Clipboard"), viewModel.uiState.value.profiles.map { it.name })
+    }
+
+    @Test
+    fun `subscription URL creates one grouped profile with resolved keys`() = runTest {
+        val profiles = InMemoryVpnProfileRepository()
+        val viewModel = viewModel(profiles)
+        collectState(viewModel)
+
+        viewModel.importLink("https://subscribe.example.com/s/family#bp1=demo")
+        runCurrent()
+
+        val saved = viewModel.uiState.value.profiles.single()
+        assertEquals("Family", saved.name)
+        assertEquals("family", saved.subscription?.id)
+        assertEquals(listOf("Germany"), saved.subscription?.keys?.map { it.name })
     }
 
     private fun TestScope.collectState(viewModel: ProfilesViewModel) {

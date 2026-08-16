@@ -2,11 +2,12 @@ import { useState } from "react";
 import { ClipboardPaste, KeyRound, Pencil } from "lucide-react";
 import { Button, Textarea } from "@/components/ui";
 import { backend } from "@/lib/backend";
+import { subscriptionSnapshotFromInfo } from "@/lib/link";
 import { useProfilesStore } from "@/store/profiles";
 
 /**
  * Приветственный экран при отсутствии профилей. Предлагает в один клик вставить
- * ключ подключения из буфера обмена (частый сценарий — ключ прислали ссылкой),
+ * ссылку подписки или прямой ключ из буфера обмена,
  * с ручным вводом как запасным вариантом.
  */
 export function Welcome() {
@@ -29,12 +30,16 @@ export function Welcome() {
     setError("");
     try {
       const info = await backend.parseLink(key);
-      const p = createProfile({ name: info.label?.trim() || "Мой профиль", key });
+      const p = createProfile({
+        name: info.label?.trim() || "Моя подписка",
+        key,
+        subscription: subscriptionSnapshotFromInfo(info),
+      });
       setActive(p.id);
       // profiles.length станет > 0 — App переключится на главный экран.
     } catch (e) {
       setError(
-        "Не похоже на ключ BoardProxy (bproxy://…). " +
+        "Не похоже на подписку BoardProxy или прямой ключ. " +
           (e instanceof Error ? e.message : "")
       );
       setManual(true);
@@ -63,7 +68,7 @@ export function Welcome() {
         </div>
         <h1 className="text-xl font-semibold text-fg">Добро пожаловать в BoardProxy</h1>
         <p className="mt-1.5 text-sm text-muted">
-          Вставьте ключ подключения (bproxy://…), чтобы начать.
+          Вставьте ссылку подписки или прямой ключ bproxy://, чтобы начать.
         </p>
 
         <div className="mt-6 space-y-3">
@@ -90,7 +95,7 @@ export function Welcome() {
               <Textarea
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
-                placeholder="bproxy://…"
+                placeholder="https://subscribe.example.com/s/…#bp1=…"
                 rows={3}
                 className="font-mono text-xs"
               />

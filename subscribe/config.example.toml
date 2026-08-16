@@ -3,7 +3,7 @@ listen = ":8090"
 public_url = "https://subscribe.example.com"
 
 [control_plane]
-url = "http://control-plane:8080"
+url = "http://hub:8080"
 token = "replace-with-subscriber-api-token"
 timeout = "10s"
 

@@ -17,7 +17,7 @@ import { useTunnelStore } from "@/store/tunnel";
 import { useProfilesStore } from "@/store/profiles";
 import { useSettingsStore } from "@/store/settings";
 import { cn, formatBytes, formatDuration, formatRate } from "@/lib/utils";
-import { linkBoards } from "@/lib/link";
+import { linkSummary } from "@/lib/link";
 import type { Screen } from "@/components/layout/Sidebar";
 
 export function Dashboard({ onNavigate }: { onNavigate: (s: Screen) => void }) {
@@ -158,7 +158,7 @@ export function Dashboard({ onNavigate }: { onNavigate: (s: Screen) => void }) {
             <div className="min-w-0">
               <div className="text-sm font-medium text-fg">{activeProfile.name}</div>
               <div className="mt-0.5 truncate font-mono text-xs text-muted">
-                {linkBoards(activeProfile.key) || "ключ не задан"}
+                {linkSummary(activeProfile.key)}
               </div>
             </div>
             <div className="flex max-w-full flex-wrap items-center gap-2 text-xs text-muted">

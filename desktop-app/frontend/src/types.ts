@@ -17,15 +17,32 @@ export type TunnelStatus =
 /** Уровень лога. */
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
-/** Профиль подключения. Ключ — это полная ссылка bproxy://<token>@<boards>#<label>,
- *  которая содержит ключи, адрес сервера и метку. */
+export interface SubscriptionProfileKey {
+  id: string;
+  name: string;
+  nodeId: string;
+  state: string;
+  usedBytes: number;
+  boards: string[];
+}
+
+export interface SubscriptionProfileSnapshot {
+  id: string;
+  revision: string;
+  keys: SubscriptionProfileKey[];
+}
+
+/** Профиль подключения. key хранит исходную bproxy:// ссылку либо subscription
+ * URL. Подписка резолвится заново перед каждым connect/reconnect. */
 export interface Profile {
   id: string;
   name: string;
-  /** Полная ссылка подключения bproxy://… (источник правды). */
+  /** Прямая bproxy:// ссылка или URL подписки (источник правды). */
   key: string;
   /** Заметка пользователя. */
   note?: string;
+  /** Безопасные метаданные подгруппы; сами bproxy:// ключи здесь не хранятся. */
+  subscription?: SubscriptionProfileSnapshot;
   /** Когда создан/изменён (мс epoch). */
   updatedAt: number;
 }

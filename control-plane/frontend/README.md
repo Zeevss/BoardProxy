@@ -1,9 +1,8 @@
-# BoardProxy Control Plane UI
+# BoardProxy Control Plane frontend
 
-React/TypeScript operations UI for the Kotlin control-plane. The production
-Docker image builds it into Spring Boot static resources, so browser API and
-SSE calls remain same-origin. Development Vite proxies `/api` and `/actuator`
-to `localhost:8080`.
+React/TypeScript operator console for the Kotlin control-plane. The production
+Docker build copies `dist/` into Spring Boot static resources, so REST and SSE
+requests stay same-origin.
 
 ```bash
 npm ci --include=dev
@@ -13,11 +12,11 @@ npm run build
 npm run dev
 ```
 
-The bearer token is stored in `sessionStorage`, never persistent browser
-storage. Runtime activity uses an authenticated fetch stream because native
-`EventSource` cannot attach the Authorization header. All desired-state
-mutations include the current catalog version in `If-Match`; a concurrent edit
-is surfaced rather than overwritten.
+Vite proxies `/api` and `/actuator` to `http://localhost:8080` in development.
+The bearer token is kept in `sessionStorage`; API writes use the current entity
+version through `If-Match`. Subscription, enrollment and API-token secrets are
+shown only from the creation response and are never persisted by the UI.
 
-The UI deliberately displays interface traffic and per-user payload as separate
-series. User private keys are write-only and are never returned by the API.
+The interface follows the supplied `Control Plane v1.dc.html` design: neutral
+near-black surfaces, compact IBM Plex typography, dense tables, thin borders and
+green/violet traffic accents. Desktop and mobile layouts are both supported.

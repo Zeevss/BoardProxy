@@ -61,6 +61,15 @@ class HttpSecurityConfiguration {
             .authorizeHttpRequests {
                 it.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                     .requestMatchers("/", "/index.html", "/assets/**", "/favicon.ico", "/favicon.svg").permitAll()
+                    .requestMatchers(
+                        HttpMethod.GET,
+                        "/api/v1/auth/status",
+                    ).permitAll()
+                    .requestMatchers(
+                        HttpMethod.POST,
+                        "/api/v1/auth/setup",
+                        "/api/v1/auth/login",
+                    ).permitAll()
                     .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                     .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                     .requestMatchers("/actuator/**").hasRole("ADMIN")

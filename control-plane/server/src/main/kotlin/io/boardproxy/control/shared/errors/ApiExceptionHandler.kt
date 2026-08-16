@@ -7,6 +7,9 @@ import org.springframework.web.bind.annotation.RestControllerAdvice
 
 @RestControllerAdvice
 class ApiExceptionHandler {
+    @ExceptionHandler(AuthenticationFailed::class)
+    fun unauthorized(error: AuthenticationFailed): ProblemDetail = problem(HttpStatus.UNAUTHORIZED, error)
+
     @ExceptionHandler(ResourceNotFound::class)
     fun notFound(error: ResourceNotFound): ProblemDetail = problem(HttpStatus.NOT_FOUND, error)
 

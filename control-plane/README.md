@@ -16,65 +16,50 @@ been removed.
 
 ## Local Docker bootstrap
 
-Generate two independent secrets and keep the master key stable for the
-lifetime of the database and PKI volume:
+Generate the encryption master key and keep it stable for the lifetime of the
+database and PKI volume:
 
 ```sh
 cp .env.example .env
 openssl rand -base64 32 # CONTROL_MASTER_KEY
-openssl rand -base64 32 # CONTROL_BOOTSTRAP_ADMIN_TOKEN
-docker compose up -d --build postgres hub
+docker compose up -d --build
 ```
 
-Open `http://localhost:8080/`. The production image serves the React login
-shell publicly, while every `/api/v1` request remains bearer-authenticated.
+Open `http://localhost:8080/`. On an empty database the panel asks for the
+first administrator username and password. The password is stored only as a
+BCrypt hash. Successful setup/login returns an opaque, expiring panel session;
+the browser keeps it in `sessionStorage` and the database keeps only its
+SHA-256 hash.
 
-Use the bootstrap token to create a persistent admin token. Its plaintext is
-returned exactly once; the database stores only its SHA-256 hash.
+The first-run screen guides the remaining bootstrap:
+
+1. Open **Nodes** and create the first node together with its first board.
+   The server private key is generated with Web Crypto and remains write-only.
+2. Copy the returned `BPROXY_NODE_SECRET` into `.env` without Base64
+   conversion.
+3. Start the optional node profile:
 
 ```sh
-export BOOTSTRAP_TOKEN='<CONTROL_BOOTSTRAP_ADMIN_TOKEN>'
-curl -X POST http://localhost:8080/api/v1/access/tokens \
-  -H "Authorization: Bearer $BOOTSTRAP_TOKEN" \
-  -H 'Content-Type: application/json' \
-  --data '{"name":"local-admin","role":"ADMIN"}'
+docker compose --profile node up -d --build node
+docker compose --profile node logs -f node
 ```
 
-Save the returned `secret` as `ADMIN_TOKEN`. After at least one persistent
-admin token exists, `CONTROL_BOOTSTRAP_ADMIN_TOKEN` may be cleared and hub
-restarted.
+4. Create users in **Users**. The provisioning transaction generates the
+   private key server-side, assigns the selected boards and returns either
+   direct keylinks or one subscription URL. Plaintext credentials are shown
+   exactly once.
 
-Create the first catalog:
-
-```sh
-cp control-plane/catalog.example.json catalog.json
-# Replace board hash and both private-key placeholders.
-curl -X POST http://localhost:8080/api/v1/catalogs \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H 'Content-Type: application/json' \
-  --data-binary @catalog.json
-```
-
-Issue the one-time node secret:
-
-```sh
-curl -X POST http://localhost:8080/api/v1/nodes/node-1/enrollment-tokens \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H 'Content-Type: application/json' \
-  --data '{"hubUrl":"hub:8443","ttlSeconds":900}'
-```
-
-Copy `nodeSecret` into `BPROXY_NODE_SECRET` in `.env`, then start the node:
-
-```sh
-docker compose up -d --build node
-curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://localhost:8080/api/v1/nodes/node-1/status
-```
+API tokens remain available under **Access** for automation, node-independent
+integrations and the `SUBSCRIBER` service role. `CONTROL_BOOTSTRAP_ADMIN_TOKEN`
+is optional and should only be configured as a temporary emergency machine
+credential.
 
 Updating the catalog with its current `ETag` wakes the connected node stream
 immediately. Compatible user/board changes are hot-applied by core; listener or
 server changes may require node-agent to restart core.
+
+The curl examples below assume `ADMIN_TOKEN` was issued under **Access** for
+automation. Interactive browser sessions do not expose their session token.
 
 ```sh
 curl -X PUT http://localhost:8080/api/v1/catalogs/node-1 \

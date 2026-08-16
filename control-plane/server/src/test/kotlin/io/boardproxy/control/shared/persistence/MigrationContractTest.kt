@@ -88,4 +88,15 @@ class MigrationContractTest {
         assertContains(sql, "UNIQUE (subscription_id, node_id, user_id)")
         kotlin.test.assertFalse(sql.contains("client_private_key"))
     }
+
+    @Test
+    fun `panel authentication migration stores password and session hashes only`() {
+        val sql = requireNotNull(javaClass.getResource("/db/migration/V9__panel_authentication.sql")).readText()
+        assertContains(sql, "CREATE TABLE panel_administrators")
+        assertContains(sql, "password_hash")
+        assertContains(sql, "CREATE TABLE panel_sessions")
+        assertContains(sql, "token_hash")
+        assertFalse(sql.contains("password text", ignoreCase = true))
+        assertFalse(sql.contains("token_secret", ignoreCase = true))
+    }
 }

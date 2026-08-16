@@ -2,9 +2,11 @@ package config
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -47,7 +49,12 @@ type App struct {
 func Load(path string) (Config, error) {
 	var result Config
 	if _, err := toml.DecodeFile(path, &result); err != nil {
-		return Config{}, fmt.Errorf("load subscribe config: %w", err)
+		if !errors.Is(err, os.ErrNotExist) || strings.TrimSpace(os.Getenv("SUBSCRIBE_PUBLIC_URL")) == "" {
+			return Config{}, fmt.Errorf("load subscribe config: %w", err)
+		}
+	}
+	if err := applyEnvironment(&result); err != nil {
+		return Config{}, err
 	}
 	if result.Server.Listen == "" {
 		result.Server.Listen = ":8090"
@@ -59,6 +66,38 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	return result, nil
+}
+
+func applyEnvironment(result *Config) error {
+	overrides := map[string]*string{
+		"SUBSCRIBE_LISTEN":               &result.Server.Listen,
+		"SUBSCRIBE_PUBLIC_URL":           &result.Server.PublicURL,
+		"SUBSCRIBE_CONTROL_PLANE_URL":    &result.ControlPlane.URL,
+		"SUBSCRIBE_CONTROL_PLANE_TOKEN":  &result.ControlPlane.Token,
+		"SUBSCRIBE_YANDEX_EDITOR_URL":    &result.Yandex.EditorURL,
+		"SUBSCRIBE_RECOVERY_KEY_ID":      &result.Recovery.KeyID,
+		"SUBSCRIBE_RECOVERY_PRIVATE_KEY": &result.Recovery.PrivateKey,
+	}
+	for name, target := range overrides {
+		if value, ok := os.LookupEnv(name); ok {
+			*target = value
+		}
+	}
+	if value, ok := os.LookupEnv("SUBSCRIBE_CONTROL_PLANE_TIMEOUT"); ok {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("SUBSCRIBE_CONTROL_PLANE_TIMEOUT must be a Go duration: %w", err)
+		}
+		result.ControlPlane.Timeout = parsed
+	}
+	if value, ok := os.LookupEnv("SUBSCRIBE_APPS_JSON"); ok {
+		if strings.TrimSpace(value) == "" {
+			result.Apps = nil
+		} else if err := json.Unmarshal([]byte(value), &result.Apps); err != nil {
+			return fmt.Errorf("SUBSCRIBE_APPS_JSON must be an array of app objects: %w", err)
+		}
+	}
+	return nil
 }
 
 func (c Config) Validate() error {

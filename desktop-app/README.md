@@ -8,6 +8,27 @@ hides it; the connection continues while the tray process remains active.
 Choosing **Выйти** in the tray stops the client gracefully and terminates the
 application.
 
+## Subscription links
+
+Profiles accept either a direct `bproxy://` keylink or a complete subscription
+URL. The original subscription URL remains the profile's source of truth. On
+every connect and reconnect the Go backend uses the public Subscribe SDK:
+
+```text
+HTTPS subscription endpoint -> Yandex/Noise IK recovery -> in-memory LKG cache
+                                |
+                                +-> first valid enabled key -> proxy or TUN helper
+```
+
+The privileged TUN helper never receives the subscription capsule; the GUI
+resolves it before elevation and sends only the selected `bproxy://` keylink.
+Existing direct-key profiles remain compatible.
+
+The Profiles screen renders every subscription as its own subgroup with safe
+key metadata (name, node, state, traffic and boards). Direct `bproxy://`
+profiles are collected under **Отдельные ключи**. Subscription keylinks are not
+copied into localStorage; the subscription URL remains the source of truth.
+
 ## Development
 
 ```bash

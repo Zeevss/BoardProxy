@@ -1,15 +1,18 @@
+# Build from the repository root: docker build -f core/Dockerfile .
 # --- Сборка единого бинарника bproxy ---
 FROM golang:1.26-alpine AS build
 WORKDIR /src
 
 # Зависимости отдельным слоем — кэшируются, пока не менялись go.mod/go.sum.
-COPY go.mod go.sum ./
-RUN go mod download
+COPY subscribe/go.mod subscribe/go.sum ./subscribe/
+COPY core/go.mod core/go.sum ./core/
+RUN cd core && GOWORK=off go mod download
 
-COPY . .
+COPY subscribe/ ./subscribe/
+COPY core/ ./core/
 # Core has no database or CGO dependency, so the runtime image contains only
 # the static binary and CA certificates.
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/bproxy ./cmd/bproxy
+RUN cd core && CGO_ENABLED=0 GOWORK=off go build -trimpath -ldflags "-s -w" -o /out/bproxy ./cmd/bproxy
 
 # --- Рантайм ---
 FROM alpine:3.20

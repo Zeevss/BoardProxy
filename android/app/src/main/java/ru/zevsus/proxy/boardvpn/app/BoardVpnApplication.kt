@@ -6,4 +6,9 @@ class BoardVpnApplication : Application() {
     val container: AppContainer by lazy(LazyThreadSafetyMode.NONE) {
         AppContainer(applicationContext)
     }
+
+    override fun onCreate() {
+        super.onCreate()
+        container.subscriptionSyncManager.start()
+    }
 }
