@@ -1,5 +1,5 @@
 export type Language = 'en' | 'ru'
-export type Section = 'overview' | 'nodes' | 'subscriptions' | 'users' | 'boards' | 'traffic' | 'activity' | 'access'
+export type Section = 'overview' | 'nodes' | 'users' | 'boards' | 'traffic' | 'activity' | 'settings'
 export type ResourceState = 'enabled' | 'disabled' | 'revoked'
 
 export type PanelUser = { username: string; role: 'ADMIN' }
@@ -89,17 +89,114 @@ export type CatalogMutation = {
   configChanged: boolean
 }
 
+/** Пользователь как сущность control-plane; размещение по нодам — вложенный список. */
+export type FleetUser = {
+  id: string
+  name: string
+  state: ResourceState
+  placements: UserPlacement[]
+  limits: UserLimits
+  subscription?: { id: string; name: string; state: string }
+  updatedAt: string
+}
+
+export type UserPlacement = {
+  nodeId: string
+  nodeName: string
+  state: ResourceState
+  boards: Array<{ id: string; name: string }>
+  version: number
+}
+
+export type UserLimits = { maxDevices: number; maxPages: number; traffic?: UserTrafficLimit }
+
+export type UserTrafficLimit = {
+  limitBytes: number
+  usedBytes: number
+  period: Lowercase<QuotaPeriod>
+  action: Lowercase<QuotaAction>
+  enabled: boolean
+  exceeded: boolean
+  periodStart: string
+  periodEnd: string
+}
+
+/** Борд вместе со своей нодой: панель показывает весь флот, а не выбранную ноду. */
+export type FleetBoard = {
+  nodeId: string
+  nodeName: string
+  nodeState: ResourceState
+  id: string
+  name: string
+  hash: string
+  hubSlide?: string
+  apiBase?: string
+  guestName?: string
+  state: ResourceState
+  maxLanes: number
+  assigned: boolean
+  users: number
+  version: number
+  updatedAt: string
+}
+
 export type SubscriptionKey = { id: string; name: string; nodeId: string; userId: string; position: number }
 export type Subscription = { id: string; name: string; recoveryClientPublicKey: string; state: ResourceState; keys: SubscriptionKey[]; version: number; createdAt: string; updatedAt: string }
-export type IssuedSubscription = { subscription: Subscription; token: string; recoveryClientPrivateKey: string }
+export type IssuedSubscription = { subscription: Subscription; token: string; recoveryClientPrivateKey: string; url?: string }
 export type ProvisionedUser = { id: string; name: string; deliveryType: 'subscription' | 'keylinks'; subscriptionId?: string; subscriptionUrl?: string; keys: Array<{ id: string; name: string; nodeId: string; keylink: string }> }
 
-export type TrafficQuota = { nodeId: string; userTag: string; period: 'DAILY' | 'MONTHLY'; limitBytes: number; action: 'ALERT' | 'DISABLE'; enabled: boolean; version: number; updatedAt: string }
+/** NONE — лимит без календарного сброса. */
+export type QuotaPeriod = 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'NONE'
+/** ALERT — только уведомить, RESET — обнулить счётчик и продолжить, DISABLE — выключить пользователя. */
+export type QuotaAction = 'ALERT' | 'RESET' | 'DISABLE'
+export type TrafficQuota = { nodeId: string; userTag: string; period: QuotaPeriod; limitBytes: number; action: QuotaAction; enabled: boolean; version: number; updatedAt: string; counterStart?: string }
 export type TrafficQuotaUsage = { quota: TrafficQuota; periodStart: string; periodEnd: string; usedBytes: number; exceeded: boolean; exceededAt?: string; enforcedAt?: string }
 
-export type ApiToken = { id: string; name: string; role: 'VIEWER' | 'OPERATOR' | 'ADMIN'; createdBy: string; createdAt: string; expiresAt?: string; revokedAt?: string; lastUsedAt?: string }
+export const SUBSCRIPTION_PLATFORMS = ['ios', 'android', 'windows', 'macos', 'linux'] as const
+export type SubscriptionPlatform = (typeof SUBSCRIPTION_PLATFORMS)[number]
+
+/** Настройки сервиса подписок. Владелец — control-plane, subscribe только забирает их по своему токену. */
+export type SubscriptionServiceSettings = {
+  enabled: boolean
+  serviceName: string
+  icon: string
+  publicUrl: string
+  yandexEditorUrl: string
+  recoveryKeyId: string
+  apps: Array<{ platform: SubscriptionPlatform; url: string }>
+  revision: number
+  updatedAt: string
+}
+
+/** Проекция состояния subscribe: заполняется, когда сервис приходит за конфигом. */
+export type SubscriptionServiceStatus = {
+  tokenIssued: boolean
+  connected: boolean
+  lastSeenAt?: string
+  serviceVersion?: string
+  appliedRevision?: number
+  recoveryWatcherReady?: boolean
+  recoveryPublicKey?: string
+  startedAt?: string
+}
+
+export type SubscriptionService = { settings: SubscriptionServiceSettings; status: SubscriptionServiceStatus }
+/** Токен сервиса подписок: секрет возвращается ровно один раз при выпуске. */
+export type IssuedServiceToken = { id: string; name: string; secret: string }
+
+export type ApiToken = { id: string; name: string; role: 'SUBSCRIBER' | 'VIEWER' | 'OPERATOR' | 'ADMIN'; createdBy: string; createdAt: string; expiresAt?: string; revokedAt?: string; lastUsedAt?: string }
 export type IssuedApiToken = { token: ApiToken; secret: string }
 export type NodeCertificate = { serialNumber: string; nodeId: string; fingerprintSha256: string; issuedAt: string; expiresAt: string; revokedAt?: string; revokedReason?: string; lastSeenAt?: string }
+/** Применённый TOML без клиентских идентичностей: секреты вырезает бэкенд. */
+export type AppliedConfig = {
+  nodeId: string
+  revision: number
+  catalogVersion: number
+  configSha256: string
+  toml: string
+  createdAt: string
+}
+
 export type CatalogRevision = { nodeId: string; catalogVersion: number; createdAt: string }
 
 export type DashboardData = {
@@ -113,7 +210,10 @@ export type DashboardData = {
   userTotals: TrafficTotal[]
   events: RuntimeEvent[]
   quotas: TrafficQuotaUsage[]
+  users: FleetUser[]
+  boards: FleetBoard[]
   subscriptions: Subscription[]
+  subscriptionService?: SubscriptionService
   tokens: ApiToken[]
   certificates: NodeCertificate[]
   revisions: CatalogRevision[]

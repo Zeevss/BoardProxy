@@ -419,3 +419,56 @@ td.mono, td .mono { font-size: 10px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* Настройки: сервис подписок */
+.service-bootstrap { padding: 18px; display: grid; gap: 14px; justify-items: start; border: 1px solid var(--border); border-radius: 8px; background: #0f1318; }
+.service-bootstrap p { margin: 0; max-width: 640px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.service-bootstrap code { padding: 1px 5px; border-radius: 4px; color: #b7c0c8; background: #171c22; font: 10px var(--mono); }
+.service-bootstrap.waiting { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 16px; }
+.service-bootstrap.waiting strong { display: block; margin-bottom: 6px; color: #d5dbe0; font-size: 12px; }
+.service-metrics { margin-bottom: 18px; }
+.settings-form fieldset { padding: 0; border: 0; }
+.settings-form fieldset[disabled] { opacity: .45; }
+.settings-form .field + .field, .settings-form .field-row + .field { margin-top: 13px; }
+.settings-form .field-row + .field-row, .settings-form .check-field + .field-row { margin-top: 13px; }
+.settings-form .check-field { margin-bottom: 16px; }
+.settings-form .drawer-actions { margin-top: 20px; }
+.platform-links { margin-top: 14px; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+
+/* Пользователи: флотовая таблица и drawer */
+.node-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.subscription-block { margin-bottom: 20px; padding: 16px; display: grid; gap: 12px; justify-items: start; border: 1px solid var(--border); border-radius: 8px; background: #0f1318; }
+.subscription-hidden strong { display: block; margin-bottom: 5px; color: #d5dbe0; font-size: 12px; }
+.subscription-hidden span { color: var(--dim); font-size: 10px; line-height: 1.5; }
+.node-picker-grid { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.node-option { padding: 11px 12px; display: flex; align-items: center; gap: 10px; border: 1px solid #2b323b; border-radius: 7px; color: #98a1ac; background: #12161b; text-align: left; }
+.node-option.picked { border-color: #2f6f5c; color: #e6eaee; background: #141a19; }
+.node-option strong { display: block; font-size: 12px; }
+.node-option small { color: var(--dim); font-size: 9px; }
+.node-option-box { width: 16px; height: 16px; display: grid; flex: 0 0 auto; place-items: center; border: 1px solid #3a424d; border-radius: 4px; color: #08110d; }
+.node-option.picked .node-option-box { border-color: var(--green); background: var(--green); }
+.policy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.policy-option { padding: 10px 12px; border: 1px solid #2b323b; border-radius: 7px; color: #c3cad2; background: #12161b; text-align: left; }
+.policy-option.picked { border-color: #2f6f5c; color: var(--green); background: #141a19; }
+.policy-option strong { display: block; font-size: 11px; }
+.policy-option small { color: var(--dim); font-size: 9px; }
+.field-hint { margin: 9px 0 0; color: var(--dim); font-size: 10px; }
+.optional-mark { margin-left: 8px; color: var(--dim); font-weight: 400; letter-spacing: 0; text-transform: none; }
+.fleet-scope { display: flex; align-items: center; gap: 7px; padding: 6px 11px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: 11px; }
+
+/* Борды, сгруппированные по нодам */
+.board-group + .board-group { margin-top: 26px; }
+.board-group-header { margin-bottom: 13px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 11px; border-bottom: 1px solid var(--border); }
+.board-group-header > div { display: flex; align-items: baseline; gap: 10px; }
+.board-group-header h2 { font-size: 14px; }
+.board-group-header code { color: var(--dim); font: 10px var(--mono); }
+.board-group-header span { color: var(--dim); font-size: 10px; }
+.board-locked { padding: 4px 6px; color: var(--dim); font-size: 10px; }
+
+/* Карточка ноды: блок управления и применённый TOML */
+.action-list { display: grid; gap: 8px; }
+.action-row { padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid var(--border); border-radius: 7px; background: #0f1318; }
+.action-row strong { display: block; color: #d5dbe0; font-size: 12px; }
+.action-row small { display: block; margin-top: 4px; color: var(--dim); font-size: 10px; line-height: 1.5; }
+.toml-actions { margin: 14px 0 10px; display: flex; justify-content: flex-end; }
+.toml-view { max-height: 420px; margin: 0; padding: 14px; overflow: auto; border: 1px solid var(--border); border-radius: 7px; background: #0c0f13; color: #b7c0c8; font: 10px/1.65 var(--mono); white-space: pre; }

@@ -33,6 +33,7 @@ class SubscriptionService(
     private val traffic: TrafficQueries,
     private val audit: AuditRepository,
     private val transactions: TransactionRunner,
+    private val links: SubscriptionLinkBuilder,
     private val clock: Clock,
     private val random: SecureRandom = SecureRandom(),
     private val nextId: () -> String = { UUID.randomUUID().toString() },
@@ -50,8 +51,9 @@ class SubscriptionService(
             state = SubscriptionState.ENABLED, keys = keys, version = 1,
             createdAt = now, updatedAt = now,
         )
+        val secrets = SubscriptionSecrets(token, recoveryPrivate.base64Url())
         transactions.required {
-            subscriptions.create(subscription)
+            subscriptions.create(subscription, secrets)
             audit.append(subscription.audit("subscription.created", actor, now))
         }
         return IssuedSubscription(subscription, token, recoveryPrivate.base64Url())
@@ -85,10 +87,41 @@ class SubscriptionService(
         return updated
     }
 
+    override fun rotate(id: String, expectedVersion: Long, actor: String): IssuedSubscription {
+        validateActor(actor)
+        if (expectedVersion <= 0) throw InvalidRequest("If-Match subscription version is required")
+        val current = subscriptions.find(id) ?: throw ResourceNotFound("subscription $id not found")
+        // Отозванная подписка не должна снова стать рабочей через ротацию.
+        if (current.state == SubscriptionState.REVOKED) throw ResourceGone("subscription $id is revoked")
+        val now = clock.instant()
+        val token = "bps_" + randomBytes(32).base64Url()
+        val recoveryPrivate = randomBytes(32)
+        val rotated = current.copy(
+            tokenHash = token.sha256Hex(),
+            recoveryPublicKey = x25519Public(recoveryPrivate).base64Url(),
+            version = expectedVersion + 1, updatedAt = now,
+        )
+        val secrets = SubscriptionSecrets(token, recoveryPrivate.base64Url())
+        transactions.required {
+            if (!subscriptions.rotateSecrets(rotated, expectedVersion, secrets)) {
+                throw ResourceConflict("subscription $id version changed")
+            }
+            audit.append(rotated.audit("subscription.rotated", actor, now))
+        }
+        return IssuedSubscription(rotated, token, recoveryPrivate.base64Url())
+    }
+
     override fun get(id: String): Subscription =
         subscriptions.find(id) ?: throw ResourceNotFound("subscription $id not found")
 
     override fun list(): List<Subscription> = subscriptions.list()
+
+    override fun link(id: String): String? {
+        val subscription = get(id)
+        if (!links.enabled) return null
+        val secrets = subscriptions.findSecrets(id) ?: return null
+        return links.build(IssuedSubscription(subscription, secrets.token, secrets.recoveryClientPrivateKey))
+    }
 
     override fun resolve(token: String?, recoveryPublicKey: String?): SubscriptionSnapshot {
         if ((token.isNullOrBlank()) == (recoveryPublicKey.isNullOrBlank())) {

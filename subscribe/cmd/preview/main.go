@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Zeevss/BoardProxy/subscribe/internal/config"
 	"github.com/Zeevss/BoardProxy/subscribe/internal/web"
 	"github.com/Zeevss/BoardProxy/subscribe/protocol"
 )
@@ -29,8 +28,10 @@ func (previewResolver) ResolveToken(context.Context, string) (protocol.Subscript
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8091", "preview listen address")
 	flag.Parse()
-	handler := web.New(previewResolver{}, []config.App{
-		{Name: "BoardProxy для Android", URL: "https://example.com/android"},
+	handler := web.New(previewResolver{}, func() []web.App {
+		return []web.App{
+			{Name: "BoardProxy для Android", URL: "https://example.com/android"},
+		}
 	}, func() bool { return true }).Routes()
 	log.Printf("subscription preview: http://%s/s/preview", *listen)
 	log.Fatal(http.ListenAndServe(*listen, handler))

@@ -1,5 +1,5 @@
-import { useDeferredValue, useState, type FormEvent } from 'react'
-import type { Catalog, DashboardData, Language, NodeSummary } from '../types'
+import { useDeferredValue, useEffect, useState, type FormEvent } from 'react'
+import type { AppliedConfig, Catalog, DashboardData, Language, NodeSummary } from '../types'
 import type { ControlApi } from '../api/controlApi'
 import { PageHeader } from '../components/AppShell'
 import { Modal, Field, SecretResult } from '../components/Modal'
@@ -7,7 +7,7 @@ import { Badge, ConfirmButton, Empty, ErrorBanner, Panel } from '../components/U
 import { Icon } from '../components/Icon'
 import { ago, date, message, short } from '../lib/format'
 
-type Tab = 'overview' | 'runtime' | 'config' | 'certificate' | 'logs'
+type Tab = 'overview' | 'runtime' | 'config' | 'toml' | 'certificate' | 'logs'
 
 export function Nodes({ language, data, search, api, onChanged }: { language: Language; data: DashboardData; search: string; api: ControlApi; onChanged: () => Promise<unknown> | void }) {
   const query = useDeferredValue(search.toLowerCase())
@@ -46,6 +46,10 @@ export function Nodes({ language, data, search, api, onChanged }: { language: La
         boardHash: String(form.get('boardHash')).trim(),
         maxLanes: Number(form.get('maxLanes')),
         allowPrivateEgress: form.get('allowPrivateEgress') === 'on',
+        idleTimeout: String(form.get('idleTimeout')).trim(),
+        grpcListen: String(form.get('grpcListen')).trim(),
+        httpListen: String(form.get('httpListen')).trim() || null,
+        logLevel: String(form.get('logLevel')),
       }))
       const result = await api.issueEnrollment(nodeId, hubUrl, 900)
       setSecret(result.nodeSecret)
@@ -55,18 +59,34 @@ export function Nodes({ language, data, search, api, onChanged }: { language: La
         <div className="modal-section-title">Первая доска</div>
         <div className="field-row"><Field label="ID доски"><input required name="boardId" pattern="[A-Za-z0-9][A-Za-z0-9._]*(?:-[A-Za-z0-9._]+)*" defaultValue="primary"/></Field><Field label="Название"><input required name="boardDisplayName" defaultValue="Primary board"/></Field></div>
         <Field label="Board hash" hint="Идентификатор подключения, выданный доской"><input required name="boardHash" placeholder="Вставьте hash доски"/></Field>
-        <div className="field-row"><Field label="Max lanes"><input required name="maxLanes" type="number" min="1" max="32" defaultValue="2"/></Field><Field label="Hub URL"><input required name="hubUrl" defaultValue="hub:8443"/></Field></div>
-        <label className="check-field"><input type="checkbox" name="allowPrivateEgress"/> Разрешить private egress</label>
+        <div className="field-row"><Field label="Полос на сессию"><input required name="maxLanes" type="number" min="1" max="32" defaultValue="2"/></Field><Field label="Hub URL"><input required name="hubUrl" defaultValue="hub:8443"/></Field></div>
+        <div className="modal-section-title">Параметры core <span className="optional-mark">пустое поле — значение по умолчанию</span></div>
+        <div className="field-row"><Field label="Idle timeout"><input name="idleTimeout" defaultValue="PT1M30S"/></Field><Field label="Уровень логов"><select name="logLevel" defaultValue="info"><option>trace</option><option>debug</option><option>info</option><option>warn</option><option>error</option></select></Field></div>
+        <div className="field-row"><Field label="gRPC listen"><input name="grpcListen" defaultValue="unix:///run/bproxy/control.sock"/></Field><Field label="HTTP listen"><input name="httpListen" placeholder="127.0.0.1:8081"/></Field></div>
+        <label className="check-field"><input type="checkbox" name="allowPrivateEgress"/> Разрешить приватный egress</label>
       </>}
     </Modal> : null}
   </>
 }
 
 function EnrollmentResult({ secret }: { secret: string }) {
-  return <div className="issued-results"><SecretResult label="BPROXY_NODE_SECRET" value={secret}/><div className="command-result"><span>Следующий шаг</span><code>Добавьте секрет в .env и выполните: docker compose --profile node up -d node</code></div><p className="form-note">Секрет одноразовый и URL-safe. Node-agent принимает его без преобразований.</p></div>
+  // Команду показываем целиком и копируемой: её переносят на другую машину руками.
+  const command = `BPROXY_NODE_SECRET=${secret} \\\n  docker compose --profile node up -d --build node`
+  return <div className="issued-results">
+    <SecretResult label="BPROXY_NODE_SECRET" value={secret}/>
+    <SecretResult label="Команда запуска" value={command}/>
+    <p className="form-note">
+      Показывается один раз. Нода создаёт приватный ключ локально и отправляет CSR с этим секретом;
+      после регистрации весь обмен идёт только по mTLS.
+    </p>
+  </div>
 }
 
-function initialCatalog(input: { nodeId: string; nodeName: string; boardId: string; boardName: string; boardHash: string; maxLanes: number; allowPrivateEgress: boolean }) {
+function initialCatalog(input: {
+  nodeId: string; nodeName: string; boardId: string; boardName: string; boardHash: string
+  maxLanes: number; allowPrivateEgress: boolean
+  idleTimeout: string; grpcListen: string; httpListen: string | null; logLevel: string
+}) {
   return {
     node: {
       id: input.nodeId,
@@ -74,12 +94,12 @@ function initialCatalog(input: { nodeId: string; nodeName: string; boardId: stri
       state: 'enabled',
       core: {
         serverPrivateKey: randomPrivateKey(),
-        idleTimeout: 'PT1M30S',
+        idleTimeout: input.idleTimeout || 'PT1M30S',
         allowPrivateEgress: input.allowPrivateEgress,
-        grpcListen: 'unix:///run/bproxy/control.sock',
-        httpListen: null,
+        grpcListen: input.grpcListen || 'unix:///run/bproxy/control.sock',
+        httpListen: input.httpListen,
         observabilityEnabled: true,
-        logLevel: 'info',
+        logLevel: input.logLevel,
       },
     },
     boards: [{ id: input.boardId, name: input.boardName, hash: input.boardHash, state: 'enabled', maxLanes: input.maxLanes }],
@@ -102,7 +122,7 @@ function NodeDrawer({ node, data, api, busy, onClose, onAction, onEnroll }: { no
   const catalog = data.catalog?.node.id === node.nodeId ? data.catalog : undefined
   const certs = data.certificates.filter(cert => cert.nodeId === node.nodeId)
   const drift = status && status.desiredRevision !== status.appliedRevision
-  const tabs: Tab[] = ['overview', 'runtime', 'config', 'certificate', 'logs']
+  const tabs: Tab[] = ['overview', 'runtime', 'config', 'toml', 'certificate', 'logs']
   return <div className="drawer-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}><aside className="drawer">
     <header className="drawer-header"><div><span className={`dot ${status?.connected ? drift ? 'warn' : 'ok' : 'bad'}`}/><h2>{node.name}</h2><Badge tone={node.state === 'enabled' ? 'ok' : 'neutral'}>{node.state}</Badge><p>{node.nodeId} · fence {status?.fencingToken ?? '—'} · {status?.connected ? 'stream open' : 'no stream'}</p></div><button type="button" className="icon-button" onClick={onClose}><Icon name="close"/></button></header>
     <nav className="drawer-tabs">{tabs.map(item => <button type="button" key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item}</button>)}</nav>
@@ -110,6 +130,7 @@ function NodeDrawer({ node, data, api, busy, onClose, onAction, onEnroll }: { no
       {tab === 'overview' ? <NodeOverview node={node} status={status} runtime={runtime} drift={Boolean(drift)} api={api} catalog={catalog} busy={busy} onAction={onAction} onEnroll={onEnroll}/> : null}
       {tab === 'runtime' ? <RuntimeView node={node} runtime={runtime} api={api} onAction={onAction}/> : null}
       {tab === 'config' ? <ConfigView catalog={catalog} api={api} onAction={onAction}/> : null}
+      {tab === 'toml' ? <AppliedTomlView node={node} api={api}/> : null}
       {tab === 'certificate' ? <CertificateView node={node} certs={certs} api={api} onAction={onAction}/> : null}
       {tab === 'logs' ? <Logs events={data.events}/> : null}
     </div>
@@ -121,10 +142,39 @@ function NodeOverview({ node, status, runtime, drift, api, catalog, busy, onActi
   return <><div className="detail-metrics"><DetailMetric label="Desired revision" value={status?.desiredRevision}/><DetailMetric label="Applied revision" value={status?.appliedRevision} tone={drift ? 'warn' : undefined}/><DetailMetric label="Sessions" value={runtime?.sessions.length}/><DetailMetric label="Users" value={runtime?.users.length}/><DetailMetric label="Boards" value={runtime?.boards.length}/><DetailMetric label="Last seen" value={ago(status?.lastSeen)}/></div>
     {drift ? <div className="warning-banner">Node reports an older applied revision. Desired state is waiting for the next apply.</div> : null}
     {status?.lastError ? <ErrorBanner>{status.lastError}</ErrorBanner> : null}
-    <div className="drawer-actions"><button className="button secondary" type="button" onClick={onEnroll}>Issue enrollment secret</button>{catalog && previous > 0 ? <ConfirmButton className="button secondary" onConfirm={() => void onAction(() => api.rollback(node.nodeId, previous, catalog.version))}>Rollback revision {previous}</ConfirmButton> : null}<button className="button secondary" disabled={busy || !catalog} type="button" onClick={() => void onAction(() => api.updateNode(node.nodeId, catalog!.version, { state: node.state === 'enabled' ? 'disabled' : 'enabled' }))}>{node.state === 'enabled' ? 'Disable' : 'Enable'}</button></div>
+    <h3>Управление нодой</h3>
+    <div className="action-list">
+      <ManagementAction
+        title="Одноразовый секрет" hint="Нода создаёт приватный ключ локально и использует секрет только для регистрации."
+        cta="Выпустить" disabled={busy} onRun={onEnroll}
+      />
+      <ManagementAction
+        title="Откатить ревизию" hint={previous > 0 ? `Вернуть ноду к применённому снапшоту ${previous}.` : 'Предыдущей ревизии пока нет.'}
+        cta="Откатить" confirm disabled={busy || !catalog || previous <= 0}
+        onRun={() => void onAction(() => api.rollback(node.nodeId, previous, catalog!.version))}
+      />
+      <ManagementAction
+        title={node.state === 'enabled' ? 'Выключить ноду' : 'Включить ноду'}
+        hint={node.state === 'enabled' ? 'Запись останется, новые сессии не принимаются.' : 'Нода снова начнёт принимать сессии.'}
+        cta={node.state === 'enabled' ? 'Выключить' : 'Включить'} confirm={node.state === 'enabled'}
+        disabled={busy || !catalog}
+        onRun={() => void onAction(() => api.updateNode(node.nodeId, catalog!.version, { state: node.state === 'enabled' ? 'disabled' : 'enabled' }))}
+      />
+    </div>
     <h3>User sessions</h3>{runtime?.sessions.length ? <div className="compact-list">{runtime.sessions.map(session => <div key={session.bundleId}><strong>{session.userTag}</strong><code>{short(session.bundleId)}</code><span>{session.boardTag}</span><time>{ago(session.openedAt)}</time></div>)}</div> : <Empty title="No active sessions"/>}
     <h3>Board lifecycle</h3>{runtime?.boards.length ? <div className="compact-list">{runtime.boards.map(board => <div key={board.boardTag}><strong>{board.boardTag}</strong><Badge tone={board.state === 'running' ? 'ok' : board.error ? 'warn' : 'info'}>{board.state}</Badge><span>{board.error || 'healthy'}</span></div>)}</div> : <Empty title="No runtime boards"/>}
   </>
+}
+
+function ManagementAction({ title, hint, cta, confirm = false, disabled, onRun }: {
+  title: string; hint: string; cta: string; confirm?: boolean; disabled?: boolean; onRun: () => void
+}) {
+  return <div className="action-row">
+    <div><strong>{title}</strong><small>{hint}</small></div>
+    {confirm
+      ? <ConfirmButton className="button secondary" onConfirm={() => { if (!disabled) onRun() }}>{cta}</ConfirmButton>
+      : <button className="button secondary" type="button" disabled={disabled} onClick={onRun}>{cta}</button>}
+  </div>
 }
 
 function RuntimeView({ node, runtime, api, onAction }: { node: NodeSummary; runtime?: DashboardData['runtimes'][string]; api: ControlApi; onAction: (run: () => Promise<unknown>) => Promise<void> }) {
@@ -139,6 +189,43 @@ function ConfigView({ catalog, api, onAction }: { catalog?: Catalog; api: Contro
   }); void onAction(() => api.replaceCatalog(catalog.node.id, catalog.version, body)) }}>
     <Field label="Idle timeout"><input name="idleTimeout" required defaultValue={core.idleTimeout}/></Field><Field label="gRPC listen"><input name="grpcListen" required defaultValue={core.management.grpcListen}/></Field><Field label="HTTP listen"><input name="httpListen" defaultValue={core.management.httpListen}/></Field><Field label="Log level"><select name="logLevel" defaultValue={core.observability.logLevel}><option>trace</option><option>debug</option><option>info</option><option>warn</option><option>error</option></select></Field><label className="check-field"><input type="checkbox" name="allowPrivateEgress" defaultChecked={core.allowPrivateEgress}/> Allow private egress</label><label className="check-field"><input type="checkbox" name="observabilityEnabled" defaultChecked={core.observability.enabled}/> Enable observability</label><p className="form-note">Mutation sends If-Match with catalog version “{catalog.version}”. Existing server private key remains write-only.</p><button className="button primary" type="submit">Save revision</button>
   </form>
+}
+
+/** TOML показывается уже без секретов: вырезание делает control-plane, не панель. */
+function AppliedTomlView({ node, api }: { node: NodeSummary; api: ControlApi }) {
+  const [config, setConfig] = useState<AppliedConfig>()
+  const [missing, setMissing] = useState(false)
+  useEffect(() => {
+    const controller = new AbortController()
+    void api.appliedConfig(node.nodeId)
+      .then(result => {
+        if (controller.signal.aborted) return
+        if (result) setConfig(result); else setMissing(true)
+      })
+      .catch(() => { if (!controller.signal.aborted) setMissing(true) })
+    return () => controller.abort()
+  }, [api, node.nodeId])
+
+  if (missing) return <Empty title="Конфигурация ещё не собрана" text="Нода не получила ни одной ревизии."/>
+  if (!config) return <div className="auth-spinner"/>
+  return <>
+    <div className="runtime-summary">
+      <div><span>Ревизия</span><code>{config.revision}</code></div>
+      <div><span>Версия каталога</span><code>{config.catalogVersion}</code></div>
+      <div><span>SHA-256</span><code>{short(config.configSha256, 20)}</code></div>
+      <div><span>Собрана</span><code>{date(config.createdAt)}</code></div>
+    </div>
+    <div className="toml-actions">
+      <button className="button secondary" type="button" onClick={() => void navigator.clipboard.writeText(config.toml)}>
+        <Icon name="copy" size={14}/> Копировать
+      </button>
+    </div>
+    <pre className="toml-view">{config.toml}</pre>
+    <p className="form-note">
+      Идентификаторы клиентов, их ключи и персональные лимиты здесь не отображаются — панель показывает
+      только конфигурацию ноды. SHA-256 посчитан по полному TOML, который применяет сама нода.
+    </p>
+  </>
 }
 
 function CertificateView({ node, certs, api, onAction }: { node: NodeSummary; certs: DashboardData['certificates']; api: ControlApi; onAction: (run: () => Promise<unknown>) => Promise<void> }) {

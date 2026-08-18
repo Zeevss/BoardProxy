@@ -5,6 +5,7 @@ import io.boardproxy.control.subscription.application.IssuedSubscription
 import io.boardproxy.control.subscription.application.SubscriptionCommands
 import io.boardproxy.control.subscription.application.SubscriptionDraft
 import io.boardproxy.control.subscription.application.SubscriptionKeyDraft
+import io.boardproxy.control.subscription.application.SubscriptionLinkBuilder
 import io.boardproxy.control.subscription.application.SubscriptionQueries
 import io.boardproxy.control.subscription.application.SubscriptionReplacement
 import io.boardproxy.control.subscription.application.SubscriptionSnapshot
@@ -29,6 +30,7 @@ import java.time.Instant
 class SubscriptionController(
     private val commands: SubscriptionCommands,
     private val queries: SubscriptionQueries,
+    private val links: SubscriptionLinkBuilder,
 ) {
     @PostMapping
     @PreAuthorize("hasAnyRole('OPERATOR', 'ADMIN')")
@@ -39,7 +41,7 @@ class SubscriptionController(
         val issued = commands.create(request.toDraft(), principal.name)
         return ResponseEntity.status(HttpStatus.CREATED)
             .eTag(issued.subscription.version.toString())
-            .body(issued.toResponse())
+            .body(issued.toResponse(links))
     }
 
     @GetMapping
@@ -67,11 +69,34 @@ class SubscriptionController(
         return ResponseEntity.ok().eTag(updated.version.toString()).body(updated.toResponse())
     }
 
+    /** Постоянная ссылка подписки: секреты хранятся зашифрованными и восстанавливаются по запросу. */
+    @GetMapping("/{id}/link")
+    @PreAuthorize("hasAnyRole('OPERATOR', 'ADMIN')")
+    fun link(@PathVariable id: String): SubscriptionLinkResponse =
+        SubscriptionLinkResponse(queries.link(id))
+
+    /** Выпускает новую ссылку и немедленно обесценивает прежнюю. */
+    @PostMapping("/{id}/rotate")
+    @PreAuthorize("hasAnyRole('OPERATOR', 'ADMIN')")
+    fun rotate(
+        @PathVariable id: String,
+        @RequestHeader("If-Match") ifMatch: String,
+        principal: Principal,
+    ): ResponseEntity<IssuedSubscriptionResponse> {
+        val version = ifMatch.removeSurrounding("\"").toLongOrNull()
+            ?: throw InvalidRequest("If-Match must contain the numeric subscription version")
+        val issued = commands.rotate(id, version, principal.name)
+        return ResponseEntity.ok().eTag(issued.subscription.version.toString()).body(issued.toResponse(links))
+    }
+
     @PostMapping("/resolve")
     @PreAuthorize("hasAnyRole('SUBSCRIBER', 'ADMIN')")
     fun resolve(@RequestBody request: ResolveSubscriptionRequest): SubscriptionSnapshot =
         queries.resolve(request.token, request.recoveryPublicKey)
 }
+
+/** url = null, когда доставка подписками выключена или у подписки нет сохранённых секретов. */
+data class SubscriptionLinkResponse(val url: String?)
 
 data class SubscriptionKeyRequest(val id: String, val name: String, val nodeId: String, val userId: String)
 data class CreateSubscriptionRequest(val name: String, val keys: List<SubscriptionKeyRequest>)
@@ -101,6 +126,8 @@ data class IssuedSubscriptionResponse(
     val subscription: SubscriptionResponse,
     val token: String,
     val recoveryClientPrivateKey: String,
+    /** Готовая ссылка; null, когда доставка подписками выключена. */
+    val url: String?,
 )
 
 private fun CreateSubscriptionRequest.toDraft() = SubscriptionDraft(name, keys.map(SubscriptionKeyRequest::toDraft))
@@ -114,8 +141,9 @@ private fun ReplaceSubscriptionRequest.toReplacement() = SubscriptionReplacement
 
 private fun SubscriptionKeyRequest.toDraft() = SubscriptionKeyDraft(id, name, nodeId, userId)
 
-private fun IssuedSubscription.toResponse() = IssuedSubscriptionResponse(
+private fun IssuedSubscription.toResponse(links: SubscriptionLinkBuilder) = IssuedSubscriptionResponse(
     subscription.toResponse(), token, recoveryClientPrivateKey,
+    url = if (links.enabled) links.build(this) else null,
 )
 
 private fun Subscription.toResponse() = SubscriptionResponse(

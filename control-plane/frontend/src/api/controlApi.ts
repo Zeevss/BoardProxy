@@ -1,7 +1,8 @@
 import type {
-  ApiToken, Catalog, CatalogMutation, CatalogRevision, DashboardData, IssuedApiToken, IssuedSubscription,
+  AppliedConfig, ApiToken, Catalog, CatalogMutation, CatalogRevision, DashboardData, FleetBoard, FleetUser, IssuedApiToken, IssuedSubscription,
   NodeCertificate, NodeStatus, NodeSummary, ProvisionedUser, RuntimeEvent, RuntimeProjection,
-  PanelAuthStatus, PanelSession, PanelUser, Subscription, TrafficPoint, TrafficQuota, TrafficQuotaUsage, TrafficTotal,
+  IssuedServiceToken, PanelAuthStatus, PanelSession, PanelUser, Subscription, SubscriptionService, SubscriptionServiceSettings,
+  TrafficPoint, TrafficQuota, TrafficQuotaUsage, TrafficTotal,
 } from '../types'
 
 type Page<T> = { items: T[]; offset: number; limit: number; total: number }
@@ -20,10 +21,13 @@ export class ControlApi {
   async dashboard(nodeId: string | undefined, hours: number, signal?: AbortSignal): Promise<DashboardData> {
     const nodesPage = await this.get<Page<NodeSummary>>('/api/v1/nodes?limit=200', signal)
     const selected = nodeId && nodesPage.items.some(node => node.nodeId === nodeId) ? nodeId : nodesPage.items[0]?.nodeId
-    const [statusEntries, runtimeEntries, subscriptions, tokens] = await Promise.all([
+    const [statusEntries, runtimeEntries, users, boards, subscriptions, subscriptionService, tokens] = await Promise.all([
       Promise.all(nodesPage.items.map(async node => [node.nodeId, await this.optional<NodeStatus>(`/api/v1/nodes/${encodeURIComponent(node.nodeId)}/status`, signal)] as const)),
       Promise.all(nodesPage.items.map(async node => [node.nodeId, await this.optional<RuntimeProjection>(`/api/v1/nodes/${encodeURIComponent(node.nodeId)}/runtime`, signal)] as const)),
+      this.optional<FleetUser[]>('/api/v1/users', signal, [403, 404]),
+      this.optional<FleetBoard[]>('/api/v1/boards', signal, [403, 404]),
       this.optional<Subscription[]>('/api/v1/subscriptions', signal, [403]),
+      this.subscriptionService(signal),
       this.optional<ApiToken[]>('/api/v1/access/tokens', signal, [403]),
     ])
     const base: DashboardData = {
@@ -31,7 +35,8 @@ export class ControlApi {
       statuses: Object.fromEntries(statusEntries),
       runtimes: Object.fromEntries(runtimeEntries),
       interfaceTraffic: [], userTraffic: [], interfaceTotals: [], userTotals: [], events: [], quotas: [],
-      subscriptions: subscriptions ?? [], tokens: tokens ?? [], certificates: [], revisions: [],
+      users: users ?? [], boards: boards ?? [], subscriptions: subscriptions ?? [], subscriptionService,
+      tokens: tokens ?? [], certificates: [], revisions: [],
     }
     if (!selected) return base
     const to = new Date()
@@ -78,12 +83,20 @@ export class ControlApi {
   replaceAssignment(nodeId: string, version: number, body: unknown) { return this.mutate<CatalogMutation>(`/api/v1/nodes/${id(nodeId)}/assignment`, 'PUT', body, version) }
   replaceCatalog(nodeId: string, version: number, body: unknown) { return this.mutate(`/api/v1/catalogs/${id(nodeId)}`, 'PUT', body, version) }
   rollback(nodeId: string, revision: number, version: number) { return this.mutate(`/api/v1/nodes/${id(nodeId)}/revisions/${revision}/rollback`, 'POST', undefined, version) }
+  appliedConfig(nodeId: string) { return this.optional<AppliedConfig>(`/api/v1/nodes/${id(nodeId)}/config`) }
   rebuildRuntime(nodeId: string) { return this.mutate(`/api/v1/nodes/${id(nodeId)}/runtime/rebuild`, 'POST') }
   provisionUser(body: unknown) { return this.mutate<ProvisionedUser>('/api/v1/users', 'POST', body) }
   createSubscription(body: unknown) { return this.mutate<IssuedSubscription>('/api/v1/subscriptions', 'POST', body) }
+  subscriptionLink(subscriptionId: string) { return this.optional<{ url: string | null }>(`/api/v1/subscriptions/${id(subscriptionId)}/link`) }
+  rotateSubscription(subscriptionId: string, version: number) { return this.mutate<IssuedSubscription>(`/api/v1/subscriptions/${id(subscriptionId)}/rotate`, 'POST', undefined, version) }
   replaceSubscription(subscription: Subscription, state: string) { return this.mutate<Subscription>(`/api/v1/subscriptions/${id(subscription.id)}`, 'PUT', { name: subscription.name, state, keys: subscription.keys.map(({ id: keyId, name, nodeId, userId }) => ({ id: keyId, name, nodeId, userId })) }, subscription.version) }
   putQuota(nodeId: string, userTag: string, body: unknown, version?: number) { return this.mutate<TrafficQuota>(`/api/v1/nodes/${id(nodeId)}/traffic/quotas/${id(userTag)}`, 'PUT', body, version) }
   deleteQuota(nodeId: string, userTag: string, version: number) { return this.mutate(`/api/v1/nodes/${id(nodeId)}/traffic/quotas/${id(userTag)}`, 'DELETE', undefined, version) }
+  /** Пока эндпоинт не задеплоен, панель показывает блок подписок как ненастроенный вместо общей ошибки. */
+  subscriptionService(signal?: AbortSignal) { return this.optional<SubscriptionService>('/api/v1/subscription-service', signal, [403, 404]) }
+  saveSubscriptionService(settings: Partial<SubscriptionServiceSettings>, revision: number) { return this.mutate<SubscriptionService>('/api/v1/subscription-service', 'PUT', settings, revision) }
+  issueSubscriptionServiceToken() { return this.mutate<IssuedServiceToken>('/api/v1/subscription-service/token', 'POST') }
+  restartSubscriptionService() { return this.mutate<void>('/api/v1/subscription-service/restart', 'POST') }
   issueToken(body: unknown) { return this.mutate<IssuedApiToken>('/api/v1/access/tokens', 'POST', body) }
   revokeToken(tokenId: string) { return this.mutate(`/api/v1/access/tokens/${id(tokenId)}`, 'DELETE') }
   revokeCertificate(nodeId: string, serial: string, reason: string) { return this.mutate(`/api/v1/nodes/${id(nodeId)}/certificates/${id(serial)}`, 'DELETE', { reason }) }

@@ -48,6 +48,60 @@ class TrafficQuotaServiceTest {
         assertTrue(repository.exceeded)
     }
 
+    @Test
+    fun `reset quota restarts the counter and keeps the user enabled`() {
+        val repository = Quotas(usedBytes = 250)
+        val resources = Resources()
+        val service = service(repository, resources) {}
+        repository.values += TrafficQuota("node-1", "user-1", QuotaPeriod.WEEKLY, 100, QuotaAction.RESET, true, 1, now)
+
+        service.evaluate()
+
+        assertEquals(now, repository.counterStart)
+        assertEquals(0, resources.calls)
+        assertTrue(repository.exceeded)
+    }
+
+    @Test
+    fun `weekly period counts from monday of the current week`() {
+        val repository = Quotas(usedBytes = 10)
+        val service = service(repository, Resources()) {}
+        repository.values += TrafficQuota("node-1", "user-1", QuotaPeriod.WEEKLY, 100, QuotaAction.ALERT, true, 1, now)
+
+        val usage = service.list("node-1").single()
+
+        // 2026-08-12 — среда, значит окно открывается в понедельник 2026-08-10.
+        assertEquals(Instant.parse("2026-08-10T00:00:00Z"), usage.periodStart)
+        assertEquals(Instant.parse("2026-08-17T00:00:00Z"), usage.periodEnd)
+    }
+
+    @Test
+    fun `lifetime period never resets and counts from the epoch`() {
+        val repository = Quotas(usedBytes = 10)
+        val service = service(repository, Resources()) {}
+        repository.values += TrafficQuota("node-1", "user-1", QuotaPeriod.NONE, 100, QuotaAction.ALERT, true, 1, now)
+
+        val usage = service.list("node-1").single()
+
+        assertEquals(Instant.EPOCH, usage.periodStart)
+        assertTrue(usage.periodEnd.isAfter(now.plusSeconds(365L * 24 * 3600)))
+    }
+
+    @Test
+    fun `a reset counter shortens the counted window without moving the period`() {
+        val resetAt = Instant.parse("2026-08-12T09:00:00Z")
+        val repository = Quotas(usedBytes = 10)
+        val service = service(repository, Resources()) {}
+        repository.values += TrafficQuota(
+            "node-1", "user-1", QuotaPeriod.DAILY, 100, QuotaAction.RESET, true, 1, now, counterStart = resetAt,
+        )
+
+        val usage = service.list("node-1").single()
+
+        assertEquals(Instant.parse("2026-08-12T00:00:00Z"), usage.periodStart)
+        assertEquals(resetAt, repository.countedFrom)
+    }
+
     private fun service(repository: Quotas, resources: Resources, notify: (io.boardproxy.control.telemetry.domain.TrafficQuotaUsage) -> Unit) =
         TrafficQuotaService(repository, CatalogQueries { TestCatalogs.catalog() }, resources, TrafficQuotaNotifier(notify), Clock.fixed(now, ZoneOffset.UTC))
 
@@ -73,14 +127,17 @@ class TrafficQuotaServiceTest {
         val values = mutableListOf<TrafficQuota>()
         var exceeded = false
         var enforced = false
+        var counterStart: Instant? = null
+        var countedFrom: Instant? = null
         override fun find(nodeId: String, userTag: String) = values.firstOrNull()
         override fun list(nodeId: String) = values.toList()
         override fun save(quota: TrafficQuota, expectedVersion: Long?) = true
         override fun delete(nodeId: String, userTag: String, expectedVersion: Long) = true
         override fun enabled() = values.filter { it.enabled }
-        override fun usedBytes(nodeId: String, userTag: String, from: Instant, to: Instant) = usedBytes
+        override fun usedBytes(nodeId: String, userTag: String, from: Instant, to: Instant) = usedBytes.also { countedFrom = from }
         override fun recordExceeded(nodeId: String, userTag: String, periodStart: Instant, at: Instant): Boolean = (!exceeded).also { exceeded = true }
         override fun recordEnforced(nodeId: String, userTag: String, periodStart: Instant, at: Instant) { enforced = true }
         override fun state(nodeId: String, userTag: String, periodStart: Instant) = (if (exceeded) now else null) to (if (enforced) now else null)
+        override fun startNewCounter(nodeId: String, userTag: String, at: Instant) { counterStart = at }
     }
 }

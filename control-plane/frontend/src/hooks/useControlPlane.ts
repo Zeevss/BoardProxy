@@ -4,7 +4,7 @@ import type { DashboardData } from '../types'
 
 const EMPTY: DashboardData = {
   nodes: [], statuses: {}, runtimes: {}, interfaceTraffic: [], userTraffic: [], interfaceTotals: [], userTotals: [],
-  events: [], quotas: [], subscriptions: [], tokens: [], certificates: [], revisions: [],
+  events: [], quotas: [], users: [], boards: [], subscriptions: [], tokens: [], certificates: [], revisions: [],
 }
 
 export function useControlPlane(token: string, selectedNode: string | undefined, hours: number) {

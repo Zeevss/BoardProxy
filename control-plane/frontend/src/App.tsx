@@ -6,12 +6,11 @@ import { useControlPlane } from './hooks/useControlPlane'
 import { t } from './i18n'
 import { Overview } from './screens/Overview'
 import { Nodes } from './screens/Nodes'
-import { Subscriptions } from './screens/Subscriptions'
 import { Users } from './screens/Users'
 import { Boards } from './screens/Boards'
 import { Traffic } from './screens/Traffic'
 import { Activity } from './screens/Activity'
-import { Access } from './screens/Access'
+import { Settings } from './screens/Settings'
 import { PanelAuthScreen } from './screens/PanelAuthScreen'
 import { GettingStarted } from './screens/GettingStarted'
 import type { Language, PanelUser, Section } from './types'
@@ -79,24 +78,24 @@ export function App() {
 function AuthenticatedApp({ token, user, onLogout }: { token: string; user: PanelUser; onLogout: () => void }) {
   const [language, setLanguage] = useState<Language>(() => localStorage.getItem(LANG_KEY) === 'en' ? 'en' : 'ru')
   const [section, setSection] = useState<Section>('overview')
-  const [selectedNode, setSelectedNode] = useState<string>()
   const [search, setSearch] = useState('')
   const [hours] = useState(24)
-  const { api, data, loading, error, unauthorized, streamConnected, refresh } = useControlPlane(token, selectedNode, hours)
-  const selected = data.nodes.find(node => node.nodeId === selectedNode) ?? data.nodes[0]
+  // Ноду больше не выбирают вручную: control-plane отдаёт весь флот, а разрезы
+  // по конкретной ноде остались только внутри её карточки.
+  const { api, data, loading, error, unauthorized, streamConnected, refresh } = useControlPlane(token, undefined, hours)
+  const selected = data.nodes[0]
   const common = { language, data, api, onChanged: refresh }
-  return <AppShell username={user.username} language={language} section={section} nodes={data.nodes} selectedNode={selected?.nodeId} search={search} streamConnected={streamConnected} onLanguage={next => { localStorage.setItem(LANG_KEY, next); setLanguage(next) }} onSection={setSection} onNode={setSelectedNode} onSearch={setSearch} onRefresh={() => void refresh()} onLogout={onLogout}>
+  return <AppShell username={user.username} language={language} section={section} nodes={data.nodes} search={search} streamConnected={streamConnected} onLanguage={next => { localStorage.setItem(LANG_KEY, next); setLanguage(next) }} onSection={setSection} onSearch={setSearch} onRefresh={() => void refresh()} onLogout={onLogout}>
     {loading ? <div className="loading-line" aria-label={t(language).loading}/> : null}
     {error ? <div className="global-error"><Icon name="warning" size={17}/><span>{error}</span>{unauthorized ? <button type="button" onClick={onLogout}>{t(language).logout}</button> : <button type="button" onClick={() => void refresh()}>{t(language).refresh}</button>}</div> : null}
     {section === 'overview' && !loading && data.nodes.length === 0 ? <GettingStarted onCreateNode={() => setSection('nodes')}/> : null}
     {section === 'overview' && (loading || data.nodes.length > 0) ? <Overview language={language} data={data} selected={selected}/> : null}
     {section === 'nodes' ? <Nodes {...common} search={search}/> : null}
-    {section === 'subscriptions' ? <Subscriptions {...common} search={search}/> : null}
     {section === 'users' ? <Users {...common} search={search}/> : null}
     {section === 'boards' ? <Boards {...common} search={search}/> : null}
     {section === 'traffic' ? <Traffic {...common}/> : null}
     {section === 'activity' ? <Activity language={language} data={data} search={search}/> : null}
-    {section === 'access' ? <Access {...common}/> : null}
+    {section === 'settings' ? <Settings {...common}/> : null}
   </AppShell>
 }
 

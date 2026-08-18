@@ -31,8 +31,8 @@ class PostgresTrafficQuotaRepository(private val jdbc: NamedParameterJdbcTemplat
         if (expectedVersion == null) return jdbc.update(
             """
             INSERT INTO user_traffic_quotas (
-                node_id, user_tag, period, limit_bytes, action, enabled, resource_version, updated_at
-            ) VALUES (:nodeId, :userTag, :period, :limitBytes, :action, :enabled, :version, :updatedAt)
+                node_id, user_tag, period, limit_bytes, action, enabled, resource_version, updated_at, counter_start
+            ) VALUES (:nodeId, :userTag, :period, :limitBytes, :action, :enabled, :version, :updatedAt, :counterStart)
             ON CONFLICT (node_id, user_tag) DO NOTHING
             """.trimIndent(),
             parameters(quota),
@@ -41,7 +41,8 @@ class PostgresTrafficQuotaRepository(private val jdbc: NamedParameterJdbcTemplat
             """
             UPDATE user_traffic_quotas SET
                 period = :period, limit_bytes = :limitBytes, action = :action,
-                enabled = :enabled, resource_version = :version, updated_at = :updatedAt
+                enabled = :enabled, resource_version = :version, updated_at = :updatedAt,
+                counter_start = :counterStart
             WHERE node_id = :nodeId AND user_tag = :userTag AND resource_version = :expectedVersion
             """.trimIndent(),
             parameters(quota) + ("expectedVersion" to expectedVersion),
@@ -93,6 +94,13 @@ class PostgresTrafficQuotaRepository(private val jdbc: NamedParameterJdbcTemplat
         )
     }
 
+    override fun startNewCounter(nodeId: String, userTag: String, at: Instant) {
+        jdbc.update(
+            "UPDATE user_traffic_quotas SET counter_start = :at WHERE node_id = :nodeId AND user_tag = :userTag",
+            mapOf("nodeId" to nodeId, "userTag" to userTag, "at" to at.toSqlTimestamp()),
+        )
+    }
+
     override fun state(nodeId: String, userTag: String, periodStart: Instant): Pair<Instant?, Instant?> = jdbc.query(
         """
         SELECT exceeded_at, enforced_at FROM user_traffic_quota_state
@@ -107,6 +115,7 @@ class PostgresTrafficQuotaRepository(private val jdbc: NamedParameterJdbcTemplat
         "period" to quota.period.name.lowercase(), "limitBytes" to quota.limitBytes,
         "action" to quota.action.name.lowercase(), "enabled" to quota.enabled,
         "version" to quota.version, "updatedAt" to quota.updatedAt.toSqlTimestamp(),
+        "counterStart" to quota.counterStart?.toSqlTimestamp(),
     )
 
     private fun stateParameters(nodeId: String, userTag: String, periodStart: Instant) = mapOf(
@@ -118,11 +127,13 @@ class PostgresTrafficQuotaRepository(private val jdbc: NamedParameterJdbcTemplat
         QuotaPeriod.valueOf(rs.getString("period").uppercase()), rs.getLong("limit_bytes"),
         QuotaAction.valueOf(rs.getString("action").uppercase()), rs.getBoolean("enabled"),
         rs.getLong("resource_version"), rs.getTimestamp("updated_at").toInstant(),
+        rs.getTimestamp("counter_start")?.toInstant(),
     )
 
     private companion object {
         const val SELECT = """
-            SELECT node_id, user_tag, period, limit_bytes, action, enabled, resource_version, updated_at
+            SELECT node_id, user_tag, period, limit_bytes, action, enabled, resource_version, updated_at,
+                   counter_start
             FROM user_traffic_quotas
         """
     }

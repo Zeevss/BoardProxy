@@ -1,6 +1,6 @@
 # BoardProxy Subscribe
 
-Первая итерация сервиса подписок. Сам `subscribe` не хранит состояние: при запуске он получает TOML-конфигурацию, адрес control-plane и редакторскую ссылку на одну Яндекс Таблицу. Подписки, соответствия ключей и счётчики остаются в PostgreSQL control-plane.
+Сервис подписок. `subscribe` не хранит состояние: он знает только адрес control-plane и свой токен, а конфигурацию забирает по этому каналу. Настройки, подписки, соответствия ключей и счётчики живут в PostgreSQL control-plane.
 
 ## Потоки получения
 
@@ -14,71 +14,60 @@
 
 ## Настройка
 
-Скопируйте `config.example.toml` в `config.toml` и задайте:
+Сервис знает о себе только три вещи: где хаб, какой у него токен и какой порт
+слушать. Публичный URL, ссылка на Яндекс Таблицу, recovery-ключ и ссылки на
+клиенты задаются в панели control-plane и приезжают в сервис автоматически.
 
-- отдельный API-токен control-plane с ролью `SUBSCRIBER`;
-- общую редакторскую ссылку Яндекс Таблицы;
-- отдельный 32-байтовый recovery private key сервиса;
-- публичный URL сервиса.
-
-Сгенерировать recovery private key можно, например, так:
-
-```bash
-openssl rand -base64 32 | tr -d '\n=' | tr '+/' '-_'
-```
-
-Запуск локально:
-
-```bash
-go run ./cmd/subscribe -config ./config.toml
-```
-
-Публичный recovery-ключ для настройки control-plane можно получить без запуска HTTP-сервера и watcher-а:
-
-```bash
-go run ./cmd/subscribe -config ./config.toml -print-public-key
-```
-
-## Docker Compose deployment
-
-Compose использует переменные окружения из корневого `.env`; отдельный bind-mount `config.toml` ему не нужен. TOML остаётся доступен для локального запуска бинарника.
-
-Сначала запустите control-plane с `CONTROL_SUBSCRIPTION_ENABLED=false`, создайте постоянный API-токен с ролью `SUBSCRIBER` и сохраните поле `secret` из ответа в:
+1. В панели: **Настройки → Система подписок → Выпустить токен**. Секрет
+   показывается один раз; перевыпуск немедленно отзывает предыдущий.
+2. Впишите его в корневой `.env`:
 
 ```dotenv
 BPROXY_SUBSCRIBE_CONTROL_TOKEN=bpat_...
 ```
 
-Затем задайте общие параметры обоих сервисов и приватный recovery-ключ:
-
-```dotenv
-BPROXY_SUBSCRIBE_BIND=127.0.0.1
-BPROXY_SUBSCRIBE_PORT=8090
-BPROXY_SUBSCRIBE_RECOVERY_PRIVATE_KEY=<32-byte-base64url>
-BPROXY_SUBSCRIBE_APPS_JSON=[{"name":"BoardProxy Android","url":"https://example.com/android"}]
-
-CONTROL_SUBSCRIPTION_PUBLIC_URL=https://subscribe.example.com
-CONTROL_SUBSCRIPTION_YANDEX_EDITOR_URL=https://disk.yandex.ru/i/replace-me
-CONTROL_SUBSCRIPTION_RECOVERY_KEY_ID=recovery-2026-01
-```
-
-Соберите образ и выведите соответствующий публичный recovery-ключ без запуска зависимостей:
+3. Запустите сервис:
 
 ```bash
-docker compose --profile subscribe build subscribe
-docker compose --profile subscribe run --rm --no-deps subscribe -print-public-key
+docker compose --profile subscribe up -d --build subscribe
 ```
 
-Результат запишите в `CONTROL_SUBSCRIPTION_RECOVERY_SERVER_PUBLIC_KEY`, включите `CONTROL_SUBSCRIPTION_ENABLED=true` и запустите профиль:
+Как только сервис придёт за конфигурацией, в панели он отметится подключённым и
+настройки разблокируются. Заполните их и нажмите «Сохранить» — правка доедет в
+течение опроса (15 секунд), передеплой не нужен. Кнопка «Перезапустить сервис»
+отдаётся тем же каналом ровно один раз, и контейнер поднимается заново своим
+`restart: unless-stopped`.
+
+Recovery-пару генерирует control-plane при первом сохранении настроек и хранит
+приватный ключ зашифрованным мастер-ключом. Прежней процедуры с
+`-print-public-key` и ручной сверкой ключей в двух `.env` больше нет.
+
+Локальный запуск без Compose:
 
 ```bash
-docker compose --profile subscribe up -d --build postgres hub subscribe
-docker compose --profile subscribe ps
-curl --fail http://127.0.0.1:8090/readyz
-curl --fail http://127.0.0.1:8090/recoveryz
+cp config.example.toml config.toml   # укажите url и token
+go run ./cmd/subscribe -config ./config.toml
 ```
 
-`readyz` проверяет основной HTTP-канал и используется Docker healthcheck. `recoveryz` диагностирует watcher Яндекс Таблицы отдельно: временный отказ Яндекса не должен перезапускать исправный публичный сервис. Для production направьте внешний HTTPS reverse proxy на `subscribe:8090` внутри Docker-сети либо на loopback-порт хоста. Не публикуйте порт без TLS.
+## Как сервис получает конфигурацию
+
+Один POST-запрос делает три вещи сразу:
+
+```http
+POST /api/v1/subscription-service/poll
+Authorization: Bearer bpat_...
+{"revision": 7, "serviceVersion": "1.0.0", "recoveryWatcherReady": true}
+```
+
+Он сообщает состояние сервиса, забирает свежую конфигурацию и узнаёт о
+запрошенном перезапуске. `204 No Content` означает «у тебя уже актуально».
+Отдельного heartbeat нет: сам этот запрос им и является, поэтому «подключен» в
+панели означает «приходил за конфигурацией не позже 45 секунд назад».
+
+Подтверждение перезапуска ведёт control-plane, а не сервис. Сервис
+stateless и после рестарта отчитался бы нулём, получив ту же команду снова —
+и так бесконечно. Поэтому перезапуск отдаётся ровно один раз; потерянная
+доставка лечится повторным нажатием, а не циклом.
 
 ## Обычное создание пользователя
 
@@ -101,7 +90,7 @@ Content-Type: application/json
 }
 ```
 
-При `CONTROL_SUBSCRIPTION_ENABLED=true` ответ содержит только одну точку доставки:
+Когда доставка подписками включена в панели, ответ содержит только одну точку доставки:
 
 ```json
 {
@@ -114,29 +103,13 @@ Content-Type: application/json
 }
 ```
 
-При выключенном флаге тот же endpoint сохраняет прежний режим и возвращает `deliveryType: "keylinks"` с массивом ключей. Старый `PUT /api/v1/nodes/{nodeId}/users/{userId}` остаётся низкоуровневой административной операцией; интерфейс control-plane использует новый агрегирующий endpoint.
+При выключенной доставке тот же endpoint сохраняет прежний режим и возвращает `deliveryType: "keylinks"` с массивом ключей. Старый `PUT /api/v1/nodes/{nodeId}/users/{userId}` остаётся низкоуровневой административной операцией; интерфейс control-plane использует новый агрегирующий endpoint.
 
-Для автоматической выдачи ссылки control-plane и настройки `subscribe` должны описывать одинаковые `public URL`, URL Яндекс Таблицы, `recovery key ID` и recovery server public key:
-
-```dotenv
-CONTROL_SUBSCRIPTION_ENABLED=true
-CONTROL_SUBSCRIPTION_PUBLIC_URL=https://subscribe.example.com
-CONTROL_SUBSCRIPTION_YANDEX_EDITOR_URL=https://disk.yandex.ru/i/replace-me
-CONTROL_SUBSCRIPTION_RECOVERY_KEY_ID=recovery-2026-01
-CONTROL_SUBSCRIPTION_RECOVERY_SERVER_PUBLIC_KEY=<output-of-print-public-key>
-```
+Отдельно согласовывать `public URL`, ссылку на Яндекс Таблицу и recovery-ключи между двумя `.env` больше не нужно: у них один владелец — control-plane.
 
 ## Низкоуровневое управление подписками
 
-Сначала администратор выпускает служебный токен для `subscribe`:
-
-```http
-POST /api/v1/access/tokens
-Authorization: Bearer <admin-token>
-Content-Type: application/json
-
-{"name":"subscribe-service","role":"SUBSCRIBER"}
-```
+Токен сервиса выпускается в панели (Настройки → Система подписок), а не вручную через `/api/v1/access/tokens`: панель заодно отзывает предыдущий и запоминает выданный.
 
 Для ручного администрирования оператор может создать подписку отдельно. Каждая запись в `keys` ссылается на существующую пару `nodeId/userId`; порядок массива сохраняется в выдаче:
 
@@ -154,17 +127,11 @@ Content-Type: application/json
 }
 ```
 
-Ответ содержит `token` и `recoveryClientPrivateKey` только при создании. Control-plane хранит SHA-256 токена и только публичный recovery-ключ клиента.
+Ответ содержит `token`, `recoveryClientPrivateKey` и готовый `url`. Control-plane хранит SHA-256 токена для резолва, а сам токен и приватный recovery-ключ — зашифрованными мастер-ключом (AES-256-GCM, как приватные ключи пользователей). Поэтому ссылка постоянная: её можно получить снова через `GET /api/v1/subscriptions/{id}/link` (роль `OPERATOR`/`ADMIN`), а не только в момент создания.
 
-Полный URL собирается процессом `subscribe`, которому известны параметры резервного канала. JSON-ответ создания передаётся через stdin, чтобы секреты не попадали в argv и список процессов:
+`POST /api/v1/subscriptions/{id}/rotate` с `If-Match` выпускает новый токен и новую recovery-пару. Прежняя ссылка перестаёт действовать немедленно.
 
-```bash
-curl -sS -X POST https://control.example.com/api/v1/subscriptions \
-  -H "Authorization: Bearer $OPERATOR_TOKEN" \
-  -H 'Content-Type: application/json' \
-  --data @subscription.json \
-| go run ./cmd/subscribe -config ./config.toml -print-url
-```
+Подписки, выпущенные до этой возможности, секретов не хранят: у них `link` вернёт `null`, и рабочую ссылку даёт только ротация.
 
 Изменение выполняется `PUT /api/v1/subscriptions/{id}` с заголовком `If-Match: "<version>"`. Состояния: `enabled`, `disabled`, `revoked`.
 

@@ -1,19 +1,12 @@
+# Всё, что сервис подписок знает о себе сам. Публичный URL, ссылка на Яндекс
+# Таблицу, recovery-ключ и ссылки на клиенты задаются в панели control-plane
+# и приезжают сюда автоматически — здесь их указывать не нужно.
+
 [server]
 listen = ":8090"
-public_url = "https://subscribe.example.com"
 
 [control_plane]
 url = "http://hub:8080"
-token = "replace-with-subscriber-api-token"
+# Токен выпускается в панели: Настройки → Система подписок.
+token = "bpat_replace-me"
 timeout = "10s"
-
-[yandex]
-editor_url = "https://disk.yandex.ru/edit/disk/..."
-
-[recovery]
-key_id = "recovery-2026-01"
-private_key = "base64:replace-with-32-byte-base64url-key"
-
-[[apps]]
-name = "BoardProxy for Android"
-url = "https://example.com/android"

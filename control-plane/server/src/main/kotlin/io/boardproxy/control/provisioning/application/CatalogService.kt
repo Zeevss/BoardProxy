@@ -22,7 +22,20 @@ class CatalogService(
     private val transactions: TransactionRunner,
     private val clock: Clock,
     private val nextId: () -> String = { UUID.randomUUID().toString() },
-) : CatalogCommands, CatalogQueries {
+) : CatalogCommands, CatalogQueries, AppliedConfigQueries {
+    /** Секреты вырезаются до отдачи: панель видит только конфигурацию ноды. */
+    override fun latest(nodeId: String): AppliedConfig? {
+        val revision = revisions.latest(nodeId) ?: return null
+        return AppliedConfig(
+            nodeId = revision.nodeId,
+            revision = revision.revision,
+            catalogVersion = revision.catalogVersion,
+            configSha256 = revision.configSha256,
+            toml = CoreConfigRedaction.redact(revision.configToml.toString(Charsets.UTF_8)),
+            createdAt = revision.createdAt,
+        )
+    }
+
     override fun create(catalog: Catalog, actor: String): CatalogMutationResult {
         requireActor(actor)
         if (catalog.version != 1L) throw InvalidRequest("new catalog version must be 1")

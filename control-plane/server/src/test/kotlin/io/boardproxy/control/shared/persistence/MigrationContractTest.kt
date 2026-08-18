@@ -99,4 +99,30 @@ class MigrationContractTest {
         assertFalse(sql.contains("password text", ignoreCase = true))
         assertFalse(sql.contains("token_secret", ignoreCase = true))
     }
+
+    @Test
+    fun `quota migration widens periods and actions and keeps the reset counter`() {
+        val sql = requireNotNull(javaClass.getResource("/db/migration/V10__quota_periods_and_actions.sql")).readText()
+        // Констрейнты пересоздаются по автоимени PostgreSQL — проверено применением V1..V10 на живой базе.
+        assertContains(sql, "DROP CONSTRAINT user_traffic_quotas_period_check")
+        assertContains(sql, "DROP CONSTRAINT user_traffic_quotas_action_check")
+        assertContains(sql, "CHECK (period IN ('daily', 'weekly', 'monthly', 'none'))")
+        assertContains(sql, "CHECK (action IN ('alert', 'reset', 'disable'))")
+        assertContains(sql, "ADD COLUMN counter_start")
+    }
+
+    @Test
+    fun `subscription link migration stores secrets encrypted and keeps the token hash`() {
+        val sql = requireNotNull(javaClass.getResource("/db/migration/V11__subscription_recoverable_link.sql")).readText()
+        listOf(
+            "ADD COLUMN token_ciphertext",
+            "ADD COLUMN token_nonce",
+            "ADD COLUMN recovery_private_ciphertext",
+            "subscriptions_secrets_complete",
+            "subscriptions_recovery_secrets_complete",
+        ).forEach { assertContains(sql, it) }
+        // Открытый токен в базе не появляется: хранится только шифртекст.
+        assertFalse(sql.contains("token text", ignoreCase = true))
+        assertFalse(sql.contains("recovery_private_key text", ignoreCase = true))
+    }
 }

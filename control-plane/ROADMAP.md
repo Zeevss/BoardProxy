@@ -73,4 +73,21 @@
 - провести soak/load test на целевом количестве nodes/users;
 - выполнить rolling-upgrade/chaos drill в staging;
 - после фактических объёмов выбрать PostgreSQL partitioning или ClickHouse;
-- расширить UI для assignment, history/diff/rollback, certificates, tokens и dead-letter operations — backend endpoints уже готовы.
+- расширить UI для history/diff и dead-letter operations — backend endpoints уже готовы.
+
+## 7. Флотовая панель — выполнено
+
+- пользователь стал сущностью control-plane: `GET /api/v1/users` отдаёт размещения
+  по нодам, лимиты устройств/страниц и агрегированный трафик;
+- `GET /api/v1/boards` отдаёт борды всего флота; селектор ноды из панели убран;
+- лимит трафика принимается прямо в `POST /api/v1/users` и ставится в одной
+  транзакции с пользователем;
+- квоты расширены недельным периодом, режимом «без сброса» и политикой `reset`
+  со счётчиком `counter_start`;
+- подписка получила постоянную ссылку: токен и recovery-ключ хранятся
+  зашифрованными мастер-ключом, `GET /api/v1/subscriptions/{id}/link` и
+  `POST /{id}/rotate`;
+- `GET /api/v1/nodes/{nodeId}/config` показывает применённый TOML без приватных
+  ключей и клиентских идентичностей;
+- панель: Настройки с гейтингом сервиса подписок, флотовые Пользователи,
+  Борды по нодам, форма ноды с параметрами core и одноразовым секретом.

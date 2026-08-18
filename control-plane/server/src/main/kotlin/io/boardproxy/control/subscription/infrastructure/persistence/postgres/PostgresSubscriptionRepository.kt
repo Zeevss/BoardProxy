@@ -1,6 +1,9 @@
 package io.boardproxy.control.subscription.infrastructure.persistence.postgres
 
 import io.boardproxy.control.shared.persistence.toSqlTimestamp
+import io.boardproxy.control.shared.security.EncryptedSecret
+import io.boardproxy.control.shared.security.SecretCipher
+import io.boardproxy.control.subscription.application.SubscriptionSecrets
 import io.boardproxy.control.subscription.application.SubscriptionRepository
 import io.boardproxy.control.subscription.domain.Subscription
 import io.boardproxy.control.subscription.domain.SubscriptionKey
@@ -10,17 +13,24 @@ import org.springframework.stereotype.Repository
 import java.sql.ResultSet
 
 @Repository
-class PostgresSubscriptionRepository(private val jdbc: NamedParameterJdbcTemplate) : SubscriptionRepository {
-    override fun create(subscription: Subscription) {
+class PostgresSubscriptionRepository(
+    private val jdbc: NamedParameterJdbcTemplate,
+    private val cipher: SecretCipher,
+) : SubscriptionRepository {
+    override fun create(subscription: Subscription, secrets: SubscriptionSecrets) {
         jdbc.update(
             """
             INSERT INTO subscriptions (
-                id, name, token_hash, recovery_public_key, state, resource_version, created_at, updated_at
+                id, name, token_hash, recovery_public_key, state, resource_version, created_at, updated_at,
+                token_ciphertext, token_nonce, token_key_id,
+                recovery_private_ciphertext, recovery_private_nonce, recovery_private_key_id
             ) VALUES (
-                :id, :name, :tokenHash, :recoveryPublicKey, :state, :version, :createdAt, :updatedAt
+                :id, :name, :tokenHash, :recoveryPublicKey, :state, :version, :createdAt, :updatedAt,
+                :tokenCiphertext, :tokenNonce, :tokenKeyId,
+                :recoveryCiphertext, :recoveryNonce, :recoveryKeyId
             )
             """.trimIndent(),
-            parameters(subscription),
+            parameters(subscription) + secretParameters(subscription.id, secrets),
         )
         insertKeys(subscription)
     }
@@ -42,6 +52,59 @@ class PostgresSubscriptionRepository(private val jdbc: NamedParameterJdbcTemplat
         insertKeys(subscription)
         return true
     }
+
+    override fun rotateSecrets(
+        subscription: Subscription,
+        expectedVersion: Long,
+        secrets: SubscriptionSecrets,
+    ): Boolean = jdbc.update(
+        """
+        UPDATE subscriptions SET
+            token_hash = :tokenHash, recovery_public_key = :recoveryPublicKey,
+            token_ciphertext = :tokenCiphertext, token_nonce = :tokenNonce, token_key_id = :tokenKeyId,
+            recovery_private_ciphertext = :recoveryCiphertext, recovery_private_nonce = :recoveryNonce,
+            recovery_private_key_id = :recoveryKeyId,
+            resource_version = :version, updated_at = :updatedAt
+        WHERE id = :id AND resource_version = :expectedVersion
+        """.trimIndent(),
+        parameters(subscription) + secretParameters(subscription.id, secrets) + ("expectedVersion" to expectedVersion),
+    ) == 1
+
+    override fun findSecrets(id: String): SubscriptionSecrets? = jdbc.query(
+        """
+        SELECT token_ciphertext, token_nonce, token_key_id,
+               recovery_private_ciphertext, recovery_private_nonce, recovery_private_key_id
+        FROM subscriptions WHERE id = :id
+        """.trimIndent(),
+        mapOf("id" to id),
+    ) { rs, _ ->
+        val token = rs.getBytes("token_ciphertext") ?: return@query null
+        val recovery = rs.getBytes("recovery_private_ciphertext") ?: return@query null
+        SubscriptionSecrets(
+            token = cipher.decrypt(
+                tokenContext(id),
+                EncryptedSecret(token, rs.getBytes("token_nonce"), rs.getString("token_key_id")),
+            ),
+            recoveryClientPrivateKey = cipher.decrypt(
+                recoveryContext(id),
+                EncryptedSecret(recovery, rs.getBytes("recovery_private_nonce"), rs.getString("recovery_private_key_id")),
+            ),
+        )
+    }.firstOrNull()
+
+    private fun secretParameters(id: String, values: SubscriptionSecrets): Map<String, Any?> {
+        val token = cipher.encrypt(tokenContext(id), values.token)
+        val recovery = cipher.encrypt(recoveryContext(id), values.recoveryClientPrivateKey)
+        return mapOf(
+            "tokenCiphertext" to token.ciphertext, "tokenNonce" to token.nonce, "tokenKeyId" to token.keyId,
+            "recoveryCiphertext" to recovery.ciphertext, "recoveryNonce" to recovery.nonce,
+            "recoveryKeyId" to recovery.keyId,
+        )
+    }
+
+    // Контекст входит в AAD, поэтому шифртекст нельзя переставить между подписками или полями.
+    private fun tokenContext(id: String) = "subscription:$id:token"
+    private fun recoveryContext(id: String) = "subscription:$id:recovery"
 
     override fun find(id: String): Subscription? = findOne("id = :value", id)
 
@@ -97,7 +160,7 @@ class PostgresSubscriptionRepository(private val jdbc: NamedParameterJdbcTemplat
         )
     }
 
-    private fun parameters(subscription: Subscription): Map<String, Any> = mapOf(
+    private fun parameters(subscription: Subscription): Map<String, Any?> = mapOf(
         "id" to subscription.id, "name" to subscription.name,
         "tokenHash" to subscription.tokenHash, "recoveryPublicKey" to subscription.recoveryPublicKey,
         "state" to subscription.state.name.lowercase(), "version" to subscription.version,

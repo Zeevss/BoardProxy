@@ -1,8 +1,10 @@
 package recovery
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/flynn/noise"
 )
@@ -117,4 +119,23 @@ func (r *fixedReader) Read(target []byte) (int, error) {
 	n := copy(target, r.data)
 	r.data = r.data[n:]
 	return n, nil
+}
+
+// DecodeKey разбирает 32-байтовый ключ в base64url или стандартном base64.
+// Нулевой ключ отвергается: он означает потерянный или незаполненный секрет.
+func DecodeKey(encoded string) ([]byte, error) {
+	trimmed := strings.TrimPrefix(strings.TrimSpace(encoded), "base64:")
+	raw, err := base64.RawURLEncoding.DecodeString(trimmed)
+	if err != nil {
+		raw, err = base64.StdEncoding.DecodeString(trimmed)
+	}
+	if err != nil || len(raw) != 32 {
+		return nil, errors.New("recovery key must contain 32 base64 bytes")
+	}
+	for _, value := range raw {
+		if value != 0 {
+			return raw, nil
+		}
+	}
+	return nil, errors.New("recovery key must not be all zero")
 }

@@ -6,6 +6,9 @@ import io.boardproxy.control.provisioning.application.CatalogQueries
 import io.boardproxy.control.provisioning.domain.model.Catalog
 import io.boardproxy.control.provisioning.domain.model.ConfigRevision
 import io.boardproxy.control.shared.persistence.TransactionRunner
+import io.boardproxy.control.telemetry.domain.QuotaAction
+import io.boardproxy.control.telemetry.domain.QuotaPeriod
+import io.boardproxy.control.telemetry.domain.TrafficQuota
 import io.boardproxy.control.subscription.application.IssuedSubscription
 import io.boardproxy.control.subscription.application.SubscriptionCommands
 import io.boardproxy.control.subscription.application.SubscriptionDraft
@@ -59,6 +62,30 @@ class UserProvisioningServiceTest {
         assertEquals(null, fixture.subscriptionDraft)
     }
 
+    @Test
+    fun `traffic limit is applied to every node together with the user`() {
+        val fixture = Fixture(subscriptionEnabled = true)
+
+        fixture.service.create(
+            request().copy(traffic = TrafficLimitRequest(50, QuotaPeriod.WEEKLY, QuotaAction.RESET)),
+            "operator",
+        )
+
+        // Квота должна лечь на обе ноды в той же транзакции, что и сам пользователь.
+        assertEquals(listOf("node-1", "node-2"), fixture.appliedQuotas.map { it.nodeId })
+        assertTrue(fixture.appliedQuotas.all { it.limitBytes == 50L && it.period == QuotaPeriod.WEEKLY })
+        assertEquals(1, fixture.transactions)
+    }
+
+    @Test
+    fun `user without a traffic limit gets no quota at all`() {
+        val fixture = Fixture(subscriptionEnabled = true)
+
+        fixture.service.create(request(), "operator")
+
+        assertTrue(fixture.appliedQuotas.isEmpty())
+    }
+
     private fun request() = UserProvisioningRequest(
         id = "alice", name = "Alice",
         targets = listOf(
@@ -78,9 +105,14 @@ class UserProvisioningServiceTest {
             ),
         )
         var subscriptionDraft: SubscriptionDraft? = null
+        val appliedQuotas = mutableListOf<TrafficQuota>()
         var transactions = 0
         val service = UserProvisioningService(
             catalogs = this, catalogCommands = this, subscriptions = this,
+            quotas = { nodeId, userTag, period, limitBytes, action, enabled, _ ->
+                TrafficQuota(nodeId, userTag, period, limitBytes, action, enabled, 1, now)
+                    .also { appliedQuotas += it }
+            },
             links = object : SubscriptionLinkBuilder {
                 override val enabled = subscriptionEnabled
                 override fun build(issued: IssuedSubscription) = "https://subscribe.example/s/token#bp1=capsule"
@@ -139,6 +171,9 @@ class UserProvisioningServiceTest {
             replacement: SubscriptionReplacement,
             actor: String,
         ): Subscription = error("not used")
+
+        override fun rotate(id: String, expectedVersion: Long, actor: String): IssuedSubscription =
+            error("not used")
     }
 
     private fun Catalog.withoutAlice() = copy(

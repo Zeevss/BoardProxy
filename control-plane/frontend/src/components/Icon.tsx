@@ -1,6 +1,6 @@
 import type { Section } from '../types'
 
-type IconName = Section | 'search' | 'refresh' | 'chevron' | 'close' | 'plus' | 'copy' | 'warning' | 'check' | 'logout' | 'more'
+type IconName = Section | 'subscriptions' | 'access' | 'search' | 'refresh' | 'chevron' | 'close' | 'plus' | 'copy' | 'warning' | 'check' | 'logout' | 'more'
 
 const paths: Record<IconName, React.ReactNode> = {
   overview: <><rect x="3.5" y="3.5" width="6" height="6"/><rect x="14.5" y="3.5" width="6" height="6"/><rect x="3.5" y="14.5" width="6" height="6"/><rect x="14.5" y="14.5" width="6" height="6"/></>,
@@ -11,6 +11,7 @@ const paths: Record<IconName, React.ReactNode> = {
   traffic: <><path d="M4 19V5M4 19h16M7.5 15.5l3.5-4.5 3 2.5 4.5-6"/></>,
   activity: <path d="M3 12h4l2.5-6 4 12L16 12h5"/>,
   access: <><path d="M12 3.5l7 3v5c0 4-2.9 7.4-7 9-4.1-1.6-7-5-7-9v-5z"/><path d="M9.5 12.2l1.9 1.9 3.4-3.6"/></>,
+  settings: <><circle cx="12" cy="12" r="3.1"/><path d="M12 2.8v2.4M12 18.8v2.4M4.5 7.5l2.1 1.2M17.4 15.3l2.1 1.2M4.5 16.5l2.1-1.2M17.4 8.7l2.1-1.2"/></>,
   search: <><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l4.5 4.5"/></>,
   refresh: <path d="M20 12a8 8 0 1 1-2.4-5.7M20 4.5V10h-5.4"/>,
   chevron: <path d="M6 9.5l6 6 6-6"/>, close: <path d="m6 6 12 12M18 6 6 18"/>, plus: <path d="M12 5v14M5 12h14"/>,

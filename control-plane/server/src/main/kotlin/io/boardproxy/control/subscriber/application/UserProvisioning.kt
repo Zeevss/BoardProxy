@@ -10,6 +10,9 @@ import io.boardproxy.control.provisioning.domain.model.keylinkFor
 import io.boardproxy.control.shared.errors.InvalidRequest
 import io.boardproxy.control.shared.errors.ResourceConflict
 import io.boardproxy.control.shared.persistence.TransactionRunner
+import io.boardproxy.control.telemetry.application.TrafficQuotaCommands
+import io.boardproxy.control.telemetry.domain.QuotaAction
+import io.boardproxy.control.telemetry.domain.QuotaPeriod
 import io.boardproxy.control.subscription.application.SubscriptionCommands
 import io.boardproxy.control.subscription.application.SubscriptionDraft
 import io.boardproxy.control.subscription.application.SubscriptionKeyDraft
@@ -24,6 +27,14 @@ data class UserProvisioningRequest(
     val targets: List<UserTarget>,
     val maxSessions: Int,
     val maxLanes: Int,
+    /** Лимит трафика применяется в той же транзакции; null означает отсутствие лимита. */
+    val traffic: TrafficLimitRequest? = null,
+)
+
+data class TrafficLimitRequest(
+    val limitBytes: Long,
+    val period: QuotaPeriod,
+    val action: QuotaAction,
 )
 
 data class UserTarget(val nodeId: String, val boardIds: List<String>, val keyName: String?)
@@ -51,6 +62,7 @@ class UserProvisioningService(
     private val catalogs: CatalogQueries,
     private val catalogCommands: CatalogCommands,
     private val subscriptions: SubscriptionCommands,
+    private val quotas: TrafficQuotaCommands,
     private val links: SubscriptionLinkBuilder,
     private val transactions: TransactionRunner,
     private val clock: Clock,
@@ -66,6 +78,7 @@ class UserProvisioningService(
             throw InvalidRequest("duplicate target node")
         }
         if (request.maxSessions < 0 || request.maxLanes !in 1..32) throw InvalidRequest("invalid user limits")
+        request.traffic?.let { if (it.limitBytes <= 0) throw InvalidRequest("traffic limit must be positive") }
 
         val now = clock.instant()
         val privateKey = "base64:" + Base64.getEncoder().encodeToString(ByteArray(32).also(random::nextBytes))
@@ -99,6 +112,17 @@ class UserProvisioningService(
         return transactions.required {
             candidates.forEach { (_, candidate) ->
                 catalogCommands.replace(candidate, candidate.version - 1, actor, "user.provisioned")
+            }
+            // Квота живёт вне каталога, но должна появиться вместе с пользователем:
+            // иначе он какое-то время обслуживается без объявленного лимита.
+            request.traffic?.let { limit ->
+                candidates.forEach { (target, _) ->
+                    quotas.put(
+                        nodeId = target.nodeId, userTag = userId, period = limit.period,
+                        limitBytes = limit.limitBytes, action = limit.action,
+                        enabled = true, expectedVersion = null,
+                    )
+                }
             }
             val keyDrafts = candidates.map { (target, catalog) ->
                 SubscriptionKeyDraft(

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Zeevss/BoardProxy/subscribe/internal/config"
 	"github.com/Zeevss/BoardProxy/subscribe/internal/controlplane"
 	"github.com/Zeevss/BoardProxy/subscribe/protocol"
 	"github.com/skip2/go-qrcode"
@@ -20,14 +19,21 @@ type Resolver interface {
 	ResolveToken(ctx context.Context, token string) (protocol.Subscription, error)
 }
 
+// App — ссылка на клиент в том виде, в каком её показывает страница.
+type App struct {
+	Name string
+	URL  string
+}
+
 type Handler struct {
 	resolver      Resolver
-	apps          []config.App
+	apps          func() []App
 	page          *template.Template
 	recoveryReady func() bool
 }
 
-func New(resolver Resolver, apps []config.App, ready func() bool) *Handler {
+// apps передаётся функцией: список приезжает из control-plane и меняется на лету.
+func New(resolver Resolver, apps func() []App, ready func() bool) *Handler {
 	page := template.Must(template.New("page").Funcs(template.FuncMap{"bytes": formatBytes}).Parse(pageHTML))
 	return &Handler{resolver: resolver, apps: apps, recoveryReady: ready, page: page}
 }
@@ -68,7 +74,7 @@ func (h *Handler) subscription(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.page.Execute(writer, map[string]any{"Subscription": snapshot, "Apps": h.apps}); err != nil {
+	if err := h.page.Execute(writer, map[string]any{"Subscription": snapshot, "Apps": h.apps()}); err != nil {
 		return
 	}
 }

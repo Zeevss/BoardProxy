@@ -2,8 +2,11 @@ package io.boardproxy.control.telemetry.domain
 
 import java.time.Instant
 
-enum class QuotaPeriod { DAILY, MONTHLY }
-enum class QuotaAction { ALERT, DISABLE }
+/** NONE — лимит на всё время жизни пользователя, календарного сброса нет. */
+enum class QuotaPeriod { DAILY, WEEKLY, MONTHLY, NONE }
+
+/** ALERT только уведомляет, RESET начинает отсчёт заново, DISABLE выключает пользователя. */
+enum class QuotaAction { ALERT, RESET, DISABLE }
 
 data class TrafficQuota(
     val nodeId: String,
@@ -14,6 +17,8 @@ data class TrafficQuota(
     val enabled: Boolean,
     val version: Long,
     val updatedAt: Instant,
+    /** Момент последнего сброса счётчика; null — отсчёт с начала календарного периода. */
+    val counterStart: Instant? = null,
 ) {
     init {
         require(nodeId.isNotBlank() && userTag.isNotBlank()) { "quota identity is required" }

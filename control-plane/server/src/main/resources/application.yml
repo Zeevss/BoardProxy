@@ -31,12 +31,6 @@ control:
   telemetry:
     raw-retention-days: ${CONTROL_RAW_RETENTION_DAYS:31}
     rollup-retention-days: ${CONTROL_ROLLUP_RETENTION_DAYS:730}
-  subscription:
-    enabled: ${CONTROL_SUBSCRIPTION_ENABLED:false}
-    public-url: ${CONTROL_SUBSCRIPTION_PUBLIC_URL:}
-    yandex-editor-url: ${CONTROL_SUBSCRIPTION_YANDEX_EDITOR_URL:}
-    recovery-key-id: ${CONTROL_SUBSCRIPTION_RECOVERY_KEY_ID:}
-    recovery-server-public-key: ${CONTROL_SUBSCRIPTION_RECOVERY_SERVER_PUBLIC_KEY:}
 
 management:
   endpoints:
