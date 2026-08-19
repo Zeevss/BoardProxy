@@ -12,7 +12,6 @@ group = "io.boardproxy"
 version = "0.1.0-SNAPSHOT"
 
 val grpcVersion = "1.76.0"
-val grpcKotlinVersion = "1.4.3"
 val protobufVersion = "4.32.1"
 
 dependencies {
@@ -29,9 +28,7 @@ dependencies {
     implementation("com.google.protobuf:protobuf-kotlin:$protobufVersion")
     implementation("io.grpc:grpc-protobuf:$grpcVersion")
     implementation("io.grpc:grpc-stub:$grpcVersion")
-    implementation("io.grpc:grpc-kotlin-stub:$grpcKotlinVersion")
     implementation("io.grpc:grpc-netty-shaded:$grpcVersion")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation("org.bouncycastle:bcprov-jdk18on:1.84")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.84")
     compileOnly("org.apache.tomcat:annotations-api:6.0.53")
@@ -59,14 +56,12 @@ protobuf {
     protoc { artifact = "com.google.protobuf:protoc:$protobufVersion" }
     plugins {
         create("grpc") { artifact = "io.grpc:protoc-gen-grpc-java:$grpcVersion" }
-        create("grpckt") { artifact = "io.grpc:protoc-gen-grpc-kotlin:$grpcKotlinVersion:jdk8@jar" }
     }
     generateProtoTasks {
         all().configureEach {
             builtins { create("kotlin") }
             plugins {
                 create("grpc")
-                create("grpckt")
             }
         }
     }

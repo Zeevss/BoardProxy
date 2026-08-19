@@ -1,17 +1,15 @@
 package io.boardproxy.control.subscription.application
 
-import io.boardproxy.control.access.application.ApiTokenCommands
-import io.boardproxy.control.access.application.IssuedApiToken
-import io.boardproxy.control.access.domain.AccessRole
-import io.boardproxy.control.audit.application.AuditRepository
-import io.boardproxy.control.audit.domain.AuditEvent
+import io.boardproxy.control.shared.contracts.IssuedServiceToken
+import io.boardproxy.control.shared.contracts.ServiceTokenIssuer
+import io.boardproxy.control.shared.audit.AuditRepository
+import io.boardproxy.control.shared.audit.AuditEvent
 import io.boardproxy.control.shared.errors.InvalidRequest
 import io.boardproxy.control.shared.errors.ResourceConflict
 import io.boardproxy.control.shared.persistence.TransactionRunner
 import io.boardproxy.control.subscription.domain.RecoveryKeys
 import java.net.URI
 import java.time.Clock
-import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 
@@ -22,7 +20,7 @@ import java.util.UUID
  */
 class SubscriptionServiceManager(
     private val repository: SubscriptionServiceRepository,
-    private val tokens: ApiTokenCommands,
+    private val tokens: ServiceTokenIssuer,
     private val audit: AuditRepository,
     private val transactions: TransactionRunner,
     private val clock: Clock,
@@ -57,15 +55,15 @@ class SubscriptionServiceManager(
         }
     }
 
-    override fun issueToken(actor: String): IssuedApiToken {
+    override fun issueToken(actor: String): IssuedServiceToken {
         if (actor.isBlank()) throw InvalidRequest("actor is required")
         val now = clock.instant()
         return transactions.required {
             // Перевыпуск обязан обесценить прежний токен: два живых секрета у
             // одного сервиса означают, что отозвать утёкший невозможно.
             repository.tokenId()?.let { previous -> runCatching { tokens.revoke(previous, actor) } }
-            val issued = tokens.issue("subscription-service", AccessRole.SUBSCRIBER, TOKEN_TTL, actor)
-            repository.attachToken(issued.token.id, now)
+            val issued = tokens.issueSubscriberToken("subscription-service", actor)
+            repository.attachToken(issued.id, now)
             audit.append(event("subscription-service.token-issued", actor, now, emptyMap()))
             issued
         }
@@ -139,11 +137,10 @@ class SubscriptionServiceManager(
     private fun event(action: String, actor: String, now: Instant, details: Map<String, Any>) = AuditEvent(
         id = nextId(), nodeId = null, actor = actor, action = action,
         resourceType = "subscription-service", resourceId = "singleton", resourceVersion = 0,
-        catalogVersion = 0, details = details, occurredAt = now,
+        details = details, occurredAt = now,
     )
 
     private companion object {
-        val TOKEN_TTL: Duration? = null
         val TRUSTED_YANDEX_HOSTS = setOf("disk.yandex.ru", "docs.yandex.ru", "disk.yandex.com", "docs.yandex.com")
         val PLATFORMS = setOf("ios", "android", "windows", "macos", "linux")
     }

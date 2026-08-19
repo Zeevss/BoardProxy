@@ -1,11 +1,9 @@
 package io.boardproxy.control.subscription.application
 
-import io.boardproxy.control.access.application.ApiTokenCommands
-import io.boardproxy.control.access.application.IssuedApiToken
-import io.boardproxy.control.access.domain.AccessRole
-import io.boardproxy.control.access.domain.ApiToken
-import io.boardproxy.control.audit.application.AuditRepository
-import io.boardproxy.control.audit.domain.AuditEvent
+import io.boardproxy.control.shared.contracts.IssuedServiceToken
+import io.boardproxy.control.shared.contracts.ServiceTokenIssuer
+import io.boardproxy.control.shared.audit.AuditRepository
+import io.boardproxy.control.shared.audit.AuditEvent
 import io.boardproxy.control.shared.errors.InvalidRequest
 import io.boardproxy.control.shared.errors.ResourceConflict
 import io.boardproxy.control.shared.persistence.TransactionRunner
@@ -88,9 +86,8 @@ class SubscriptionServiceManagerTest {
         val first = fixture.manager.issueToken("admin")
         val second = fixture.manager.issueToken("admin")
 
-        assertEquals(listOf(first.token.id), fixture.tokens.revoked)
-        assertEquals(AccessRole.SUBSCRIBER, second.token.role)
-        assertEquals(second.token.id, fixture.repository.attachedToken)
+        assertEquals(listOf(first.id), fixture.tokens.revoked)
+        assertEquals(second.id, fixture.repository.attachedToken)
     }
 
     @Test
@@ -190,17 +187,16 @@ class SubscriptionServiceManagerTest {
         )
     }
 
-    private inner class RecordingTokens : ApiTokenCommands {
+    private inner class RecordingTokens : ServiceTokenIssuer {
         val revoked = mutableListOf<String>()
         private var counter = 0
-        override fun issue(name: String, role: AccessRole, ttl: Duration?, actor: String): IssuedApiToken {
-            val token = ApiToken(
-                id = "token-${++counter}", name = name, tokenHash = "0".repeat(64), role = role,
-                createdBy = actor, createdAt = now, expiresAt = null,
-            )
-            return IssuedApiToken(token, "bpat_secret_$counter")
+
+        override fun issueSubscriberToken(name: String, actor: String): IssuedServiceToken {
+            counter += 1
+            return IssuedServiceToken("token-$counter", "bpat_secret_$counter")
         }
-        override fun revoke(id: String, actor: String) { revoked += id }
+
+        override fun revoke(tokenId: String, actor: String) { revoked += tokenId }
     }
 
     private inner class MemoryRepository : SubscriptionServiceRepository {

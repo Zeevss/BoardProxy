@@ -3,8 +3,8 @@ package io.boardproxy.control.access.application
 import io.boardproxy.control.access.domain.AccessRole
 import io.boardproxy.control.access.domain.PanelAdministrator
 import io.boardproxy.control.access.domain.PanelSession
-import io.boardproxy.control.audit.application.AuditRepository
-import io.boardproxy.control.audit.domain.AuditEvent
+import io.boardproxy.control.shared.audit.AuditRepository
+import io.boardproxy.control.shared.audit.AuditEvent
 import io.boardproxy.control.shared.errors.AuthenticationFailed
 import io.boardproxy.control.shared.errors.InvalidRequest
 import io.boardproxy.control.shared.errors.ResourceConflict

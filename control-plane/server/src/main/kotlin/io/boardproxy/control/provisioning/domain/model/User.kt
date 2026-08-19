@@ -1,16 +1,17 @@
 package io.boardproxy.control.provisioning.domain.model
 
-import java.math.BigInteger
-import java.security.KeyFactory
-import java.security.spec.NamedParameterSpec
-import java.security.spec.XECPrivateKeySpec
-import java.security.spec.XECPublicKeySpec
+import io.boardproxy.control.shared.crypto.X25519
+import io.boardproxy.control.shared.crypto.base64
 import java.time.Instant
 import java.util.Base64
-import javax.crypto.KeyAgreement
 
 private const val MAXIMUM_LANES = 32
 
+/**
+ * Пользователь флотовый: один человек — одна строка и один ключ независимо от
+ * того, на скольких нодах он размещён. Ноды пользователь не знает; где он
+ * доступен, описывают [Grant].
+ */
 data class User(
     val id: String,
     val name: String,
@@ -28,22 +29,13 @@ data class User(
         identityPublicKey()
     }
 
-    fun identityFingerprint(): String = Base64.getEncoder().encodeToString(identityPublicKey())
+    /** Уникален во всём флоте: копий пользователя по нодам больше нет. */
+    fun identityFingerprint(): String = identityPublicKey().base64()
 
     private fun identityPublicKey(): ByteArray {
         requireDomain((privateKey == null) xor (publicKey == null), "exactly one user key is required")
         publicKey?.let { return KeyMaterial.decodePublic(it) }
-        val privateBytes = KeyMaterial.decodePrivate(requireNotNull(privateKey))
-        val parameters = NamedParameterSpec.X25519
-        val decodedPrivate = KeyFactory.getInstance("X25519")
-            .generatePrivate(XECPrivateKeySpec(parameters, privateBytes))
-        val basePoint = KeyFactory.getInstance("X25519")
-            .generatePublic(XECPublicKeySpec(parameters, BigInteger.valueOf(9)))
-        return KeyAgreement.getInstance("X25519").run {
-            init(decodedPrivate)
-            doPhase(basePoint, true)
-            generateSecret()
-        }
+        return X25519.publicKeyOf(KeyMaterial.decodePrivate(requireNotNull(privateKey)))
     }
 }
 
@@ -55,7 +47,7 @@ internal object KeyMaterial {
         requireDomain(encoded.startsWith("base64:"), "key must use base64 prefix")
         val decoded = runCatching { Base64.getDecoder().decode(encoded.removePrefix("base64:")) }
             .getOrElse { throw DomainViolation("invalid base64 key") }
-        requireDomain(decoded.size == 32, "key must contain 32 bytes")
+        requireDomain(decoded.size == X25519.KEY_BYTES, "key must contain ${X25519.KEY_BYTES} bytes")
         if (rejectZero) requireDomain(decoded.any { it.toInt() != 0 }, "public key cannot be all zero")
         return decoded
     }

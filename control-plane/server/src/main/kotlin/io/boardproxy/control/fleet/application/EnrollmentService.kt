@@ -1,8 +1,8 @@
 package io.boardproxy.control.fleet.application
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import io.boardproxy.control.audit.application.AuditRepository
-import io.boardproxy.control.audit.domain.AuditEvent
+import io.boardproxy.control.shared.audit.AuditRepository
+import io.boardproxy.control.shared.audit.AuditEvent
 import io.boardproxy.control.fleet.domain.BootstrapSecret
 import io.boardproxy.control.fleet.domain.IssuedCertificate
 import io.boardproxy.control.shared.errors.InvalidRequest
@@ -34,7 +34,7 @@ class EnrollmentService(
                     AuditEvent(
                         id = nextId(), nodeId = nodeId, actor = actor,
                         action = "enrollment-token.created", resourceType = "node",
-                        resourceId = nodeId, resourceVersion = 0, catalogVersion = 0,
+                        resourceId = nodeId, resourceVersion = 0,
                         details = mapOf("expiresAt" to it.expiresAt.toString()), occurredAt = now,
                     ),
                 )

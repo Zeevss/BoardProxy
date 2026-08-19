@@ -3,8 +3,8 @@ package io.boardproxy.control.access.application
 import io.boardproxy.control.access.domain.AccessPrincipal
 import io.boardproxy.control.access.domain.AccessRole
 import io.boardproxy.control.access.domain.ApiToken
-import io.boardproxy.control.audit.application.AuditRepository
-import io.boardproxy.control.audit.domain.AuditEvent
+import io.boardproxy.control.shared.audit.AuditRepository
+import io.boardproxy.control.shared.audit.AuditEvent
 import io.boardproxy.control.shared.errors.InvalidRequest
 import io.boardproxy.control.shared.errors.ResourceNotFound
 import io.boardproxy.control.shared.persistence.TransactionRunner
@@ -65,7 +65,7 @@ class ApiTokenService(
                 AuditEvent(
                     id = nextId(), nodeId = null, actor = actor, action = "api-token.revoked",
                     resourceType = "api-token", resourceId = id, resourceVersion = 0,
-                    catalogVersion = 0, occurredAt = now,
+                    occurredAt = now,
                 ),
             )
         }
@@ -74,7 +74,7 @@ class ApiTokenService(
     private fun ApiToken.audit(action: String, actor: String, now: java.time.Instant) = AuditEvent(
         id = nextId(), nodeId = null, actor = actor, action = action,
         resourceType = "api-token", resourceId = id, resourceVersion = 0,
-        catalogVersion = 0, details = mapOf("name" to name, "role" to role.name.lowercase()), occurredAt = now,
+        details = mapOf("name" to name, "role" to role.name.lowercase()), occurredAt = now,
     )
 
     private fun String.sha256Bytes(): ByteArray = MessageDigest.getInstance("SHA-256").digest(toByteArray())

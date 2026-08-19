@@ -42,7 +42,7 @@ func TestInterfaceTrafficUsesDeltasAndResetSafeCounters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delta := event.GetInterfaceTraffic().GetInterfaces()[0]
+	delta := event.GetInterfaceTraffic()[0]
 	if delta.GetRxBytes() != 50 || delta.GetTxBytes() != 60 || delta.GetRxPackets() != 5 || delta.GetTxDropped() != 3 {
 		t.Fatalf("unexpected delta: %+v", delta)
 	}
@@ -52,7 +52,7 @@ func TestInterfaceTrafficUsesDeltasAndResetSafeCounters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delta = event.GetInterfaceTraffic().GetInterfaces()[0]
+	delta = event.GetInterfaceTraffic()[0]
 	if delta.GetRxBytes() != 7 || delta.GetTxBytes() != 9 {
 		t.Fatalf("counter reset delta: %+v", delta)
 	}
@@ -82,7 +82,7 @@ func TestNetworkNamespaceChangeEstablishesNewBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delta := event.GetInterfaceTraffic().GetInterfaces()[0]
+	delta := event.GetInterfaceTraffic()[0]
 	if delta.GetRxBytes() != 5 || delta.GetTxBytes() != 9 {
 		t.Fatalf("new namespace delta: %+v", delta)
 	}
@@ -97,8 +97,8 @@ func TestUserTrafficUsesPerTagDeltasAndCoreEpoch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delta := event.GetUserTraffic().GetUsers()[0]
-	if delta.GetUserTag() != "alice" || delta.GetRxBytes() != 100 || delta.GetTxBytes() != 200 {
+	delta := event.GetUserTraffic()[0]
+	if delta.GetUserId() != "alice" || delta.GetRxBytes() != 100 || delta.GetTxBytes() != 200 {
 		t.Fatalf("initial user delta: %+v", delta)
 	}
 	checkpoint[userCheckpointKey] = raw
@@ -107,7 +107,7 @@ func TestUserTrafficUsesPerTagDeltasAndCoreEpoch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delta = event.GetUserTraffic().GetUsers()[0]
+	delta = event.GetUserTraffic()[0]
 	if delta.GetRxBytes() != 25 || delta.GetTxBytes() != 60 {
 		t.Fatalf("incremental user delta: %+v", delta)
 	}
@@ -117,7 +117,7 @@ func TestUserTrafficUsesPerTagDeltasAndCoreEpoch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delta = event.GetUserTraffic().GetUsers()[0]
+	delta = event.GetUserTraffic()[0]
 	if delta.GetRxBytes() != 7 || delta.GetTxBytes() != 9 {
 		t.Fatalf("new core epoch delta: %+v", delta)
 	}

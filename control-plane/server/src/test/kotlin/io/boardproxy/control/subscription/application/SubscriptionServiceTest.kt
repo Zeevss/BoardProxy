@@ -1,20 +1,14 @@
 package io.boardproxy.control.subscription.application
 
-import io.boardproxy.control.audit.application.AuditRepository
-import io.boardproxy.control.audit.domain.AuditEvent
-import io.boardproxy.control.provisioning.application.CatalogQueries
-import io.boardproxy.control.provisioning.domain.model.AssignedUser
-import io.boardproxy.control.provisioning.domain.model.User
+import io.boardproxy.control.shared.contracts.KeylinkQueries
+import io.boardproxy.control.shared.contracts.NodeKeylink
+import io.boardproxy.control.shared.contracts.UserUsage
+import io.boardproxy.control.shared.contracts.UserUsageQueries
+import io.boardproxy.control.shared.errors.ResourceForbidden
+import io.boardproxy.control.shared.errors.ResourceGone
 import io.boardproxy.control.shared.persistence.TransactionRunner
 import io.boardproxy.control.subscription.domain.Subscription
-import io.boardproxy.control.telemetry.application.TrafficKind
-import io.boardproxy.control.telemetry.application.TrafficPoint
-import io.boardproxy.control.telemetry.application.TrafficQueries
-import io.boardproxy.control.telemetry.application.TrafficTotal
-import io.boardproxy.control.testing.TestCatalogs
-import io.boardproxy.control.shared.errors.ResourceConflict
-import java.security.MessageDigest
-import java.security.SecureRandom
+import io.boardproxy.control.subscription.domain.SubscriptionState
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -22,220 +16,148 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class SubscriptionServiceTest {
-    private val now = Instant.parse("2026-08-15T12:00:00Z")
+    private val now = Instant.parse("2026-08-18T12:00:00Z")
+    private val subscriptions = FakeSubscriptions()
+    private val keylinks = FakeKeylinks()
+    private val usage = FakeUsage()
 
+    private val service = SubscriptionService(
+        subscriptions = subscriptions,
+        keylinks = keylinks,
+        usage = usage,
+        audit = { },
+        transactions = object : TransactionRunner {
+            override fun <T> required(block: () -> T): T = block()
+        },
+        links = object : SubscriptionLinkBuilder {
+            override val enabled = false
+            override fun build(issued: IssuedSubscription) = error("delivery disabled")
+        },
+        clock = Clock.fixed(now, ZoneOffset.UTC),
+    )
+
+    /**
+     * Главное новое свойство: подписка не хранит список нод. Появился грант —
+     * ключ появился в резолве без правки самой подписки.
+     */
     @Test
-    fun `one subscription resolves multiple ordered keylinks and traffic totals`() {
-        val base = TestCatalogs.catalog(now = now)
-        val secondUser = User(
-            id = "user-2", name = "Bob", privateKey = TestCatalogs.key(3),
-            state = base.users.single().state, maxSessions = 2, maxLanes = 3,
-            version = 1, updatedAt = now,
-        )
-        val catalog = base.copy(
-            users = base.users + secondUser,
-            assignment = base.assignment.copy(
-                users = base.assignment.users + AssignedUser("user-2", listOf("board-1")),
-            ),
-        )
-        val repository = MemoryRepository()
-        val audit = mutableListOf<AuditEvent>()
-        var transactions = 0
-        var id = 0
-        val service = SubscriptionService(
-            subscriptions = repository,
-            catalogs = CatalogQueries { catalog },
-            traffic = object : TrafficQueries {
-                override fun interfaceTotals(nodeId: String, from: Instant, to: Instant) = emptyList<TrafficTotal>()
-                override fun userTotals(nodeId: String, from: Instant, to: Instant) = listOf(
-                    TrafficTotal("user-1", 10, 20),
-                    TrafficTotal("user-2", 30, 40),
-                )
-                override fun series(
-                    nodeId: String,
-                    kind: TrafficKind,
-                    from: Instant,
-                    to: Instant,
-                    bucketSeconds: Long,
-                ) = emptyList<TrafficPoint>()
-            },
-            audit = AuditRepository(audit::add),
-            transactions = object : TransactionRunner {
-                override fun <T> required(block: () -> T): T {
-                    transactions++
-                    return block()
-                }
-            },
-            links = TestLinks,
-            clock = Clock.fixed(now, ZoneOffset.UTC),
-            random = object : SecureRandom() {
-                override fun nextBytes(bytes: ByteArray) = bytes.indices.forEach { bytes[it] = (it + 1).toByte() }
-            },
-            nextId = { "subscription-${++id}" },
-        )
+    fun `новый грант немедленно виден в резолве`() {
+        val issued = service.create(SubscriptionDraft("Алиса", "u1"), "operator")
+        keylinks.links = listOf(NodeKeylink("node-1", "Node 1", "bproxy://a@hash-1#Алиса"))
 
-        val issued = service.create(
-            SubscriptionDraft(
-                "Family",
-                listOf(
-                    SubscriptionKeyDraft("alice", "Alice phone", "node-1", "user-1"),
-                    SubscriptionKeyDraft("bob", "Bob laptop", "node-1", "user-2"),
-                ),
-            ),
-            "operator",
-        )
-        val snapshot = service.resolve(issued.token, null)
+        assertEquals(listOf("node-1"), service.resolve(issued.token, null).keys.map { it.nodeId })
 
-        assertEquals(listOf("alice", "bob"), snapshot.keys.map { it.id })
-        assertEquals(listOf(30L, 70L), snapshot.keys.map { it.usedBytes })
-        assertEquals(100L, snapshot.usedBytes)
-        assertTrue(snapshot.keys.all { it.state == "enabled" && it.keylink?.startsWith("bproxy://") == true })
-        assertEquals(1, transactions)
-        assertEquals("subscription.created", audit.single().action)
-        assertNotNull(repository.findByRecoveryPublicKey(issued.subscription.recoveryPublicKey))
+        keylinks.links = keylinks.links + NodeKeylink("node-2", "Node 2", "bproxy://b@hash-2#Алиса")
+
+        assertEquals(listOf("node-1", "node-2"), service.resolve(issued.token, null).keys.map { it.nodeId })
     }
 
     @Test
-    fun `rotation issues a new token and invalidates the previous link`() {
-        val base = TestCatalogs.catalog(now = now)
-        val repository = MemoryRepository()
-        val audit = mutableListOf<AuditEvent>()
-        val service = service(repository, audit)
-        val issued = service.create(
-            SubscriptionDraft("Alice", listOf(SubscriptionKeyDraft("k1", "Телефон", base.node.id, "user-1"))),
-            "operator",
-        )
+    fun `лимит трафика попадает в снимок`() {
+        val issued = service.create(SubscriptionDraft("Алиса", "u1"), "operator")
+        keylinks.links = listOf(NodeKeylink("node-1", "Node 1", "bproxy://a@hash-1#Алиса"))
+        usage.value = UserUsage(limitBytes = 1_000, usedBytes = 400, perNode = mapOf("node-1" to 400))
 
+        val snapshot = service.resolve(issued.token, null)
+
+        assertEquals(1_000, snapshot.trafficLimit)
+        assertEquals(400, snapshot.usedBytes)
+        assertEquals(400, snapshot.keys.single().usedBytes)
+    }
+
+    @Test
+    fun `нода без рабочей ссылки отдаётся выключенной`() {
+        val issued = service.create(SubscriptionDraft("Алиса", "u1"), "operator")
+        keylinks.links = listOf(NodeKeylink("node-1", "Node 1", null))
+
+        val key = service.resolve(issued.token, null).keys.single()
+
+        assertEquals("disabled", key.state)
+        assertNull(key.keylink)
+    }
+
+    @Test
+    fun `ротация обесценивает прежний токен`() {
+        val issued = service.create(SubscriptionDraft("Алиса", "u1"), "operator")
         val rotated = service.rotate(issued.subscription.id, issued.subscription.version, "operator")
 
         assertTrue(rotated.token != issued.token)
-        assertTrue(rotated.recoveryClientPrivateKey != issued.recoveryClientPrivateKey)
-        // Старый токен больше не резолвится, новый — резолвится.
-        assertNull(repository.findByTokenHash(sha256Hex(issued.token)))
-        assertNotNull(repository.findByTokenHash(sha256Hex(rotated.token)))
-        // Имя и ключи ротация не трогает.
-        assertEquals("Alice", rotated.subscription.name)
-        assertEquals(issued.subscription.keys.map { it.id }, rotated.subscription.keys.map { it.id })
-    }
-
-    @Test
-    fun `rotation refuses a stale version`() {
-        val base = TestCatalogs.catalog(now = now)
-        val repository = MemoryRepository()
-        val service = service(repository, mutableListOf())
-        val issued = service.create(
-            SubscriptionDraft("Alice", listOf(SubscriptionKeyDraft("k1", "Телефон", base.node.id, "user-1"))),
-            "operator",
-        )
-
-        assertFailsWith<ResourceConflict> {
-            service.rotate(issued.subscription.id, issued.subscription.version + 5, "operator")
+        assertFailsWith<io.boardproxy.control.shared.errors.ResourceNotFound> {
+            service.resolve(issued.token, null)
         }
     }
 
     @Test
-    fun `the subscription link stays retrievable after creation`() {
-        val base = TestCatalogs.catalog(now = now)
-        val repository = MemoryRepository()
-        val service = service(repository, mutableListOf())
-        val issued = service.create(
-            SubscriptionDraft("Alice", listOf(SubscriptionKeyDraft("k1", "Телефон", base.node.id, "user-1"))),
-            "operator",
+    fun `выключенная и отозванная подписка не резолвятся`() {
+        val issued = service.create(SubscriptionDraft("Алиса", "u1"), "operator")
+        service.replace(
+            issued.subscription.id, issued.subscription.version,
+            SubscriptionReplacement("Алиса", SubscriptionState.DISABLED), "operator",
         )
+        assertFailsWith<ResourceForbidden> { service.resolve(issued.token, null) }
 
-        // Ссылка собирается из сохранённых секретов, а не показывается один раз.
-        assertEquals(TestLinks.build(issued), service.link(issued.subscription.id))
-    }
-
-    @Test
-    fun `rotation replaces the stored link`() {
-        val base = TestCatalogs.catalog(now = now)
-        val repository = MemoryRepository()
-        val service = service(repository, mutableListOf())
-        val issued = service.create(
-            SubscriptionDraft("Alice", listOf(SubscriptionKeyDraft("k1", "Телефон", base.node.id, "user-1"))),
-            "operator",
+        service.replace(
+            issued.subscription.id, issued.subscription.version + 1,
+            SubscriptionReplacement("Алиса", SubscriptionState.REVOKED), "operator",
         )
-        val before = service.link(issued.subscription.id)
-
-        service.rotate(issued.subscription.id, issued.subscription.version, "operator")
-
-        val after = service.link(issued.subscription.id)
-        assertNotNull(after)
-        assertTrue(after != before)
+        assertFailsWith<ResourceGone> { service.resolve(issued.token, null) }
     }
 
-    /** Настоящий SecureRandom: ротация обязана давать другой токен, чем создание. */
-    private fun service(repository: MemoryRepository, audit: MutableList<AuditEvent>) = SubscriptionService(
-        subscriptions = repository,
-        catalogs = CatalogQueries { TestCatalogs.catalog(now = now) },
-        traffic = object : TrafficQueries {
-            override fun interfaceTotals(nodeId: String, from: Instant, to: Instant) = emptyList<TrafficTotal>()
-            override fun userTotals(nodeId: String, from: Instant, to: Instant) = emptyList<TrafficTotal>()
-            override fun series(nodeId: String, kind: TrafficKind, from: Instant, to: Instant, bucketSeconds: Long) =
-                emptyList<TrafficPoint>()
-        },
-        audit = AuditRepository(audit::add),
-        transactions = object : TransactionRunner {
-            override fun <T> required(block: () -> T): T = block()
-        },
-        links = TestLinks,
-        clock = Clock.fixed(now, ZoneOffset.UTC),
-    )
-
-    private fun sha256Hex(value: String) = MessageDigest.getInstance("SHA-256")
-        .digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
-
-    private object TestLinks : SubscriptionLinkBuilder {
-        override val enabled = true
-        override fun build(issued: IssuedSubscription) =
-            "https://subscribe.example/s/${issued.token}#bp1=${issued.recoveryClientPrivateKey}"
+    private class FakeKeylinks : KeylinkQueries {
+        var links: List<NodeKeylink> = emptyList()
+        override fun forUser(userId: String, label: String) = links
     }
 
-    private class MemoryRepository : SubscriptionRepository {
-        private val values = linkedMapOf<String, Subscription>()
+    private class FakeUsage : UserUsageQueries {
+        var value = UserUsage(0, 0, emptyMap())
+        override fun usage(userId: String) = value
+    }
 
-        val secrets = linkedMapOf<String, SubscriptionSecrets>()
+    private class FakeSubscriptions : SubscriptionRepository {
+        private val stored = mutableMapOf<String, Subscription>()
+        private val secrets = mutableMapOf<String, SubscriptionSecrets>()
 
         override fun create(subscription: Subscription, secrets: SubscriptionSecrets) {
-            values[subscription.id] = subscription
+            stored[subscription.id] = subscription
             this.secrets[subscription.id] = secrets
         }
 
         override fun replace(subscription: Subscription, expectedVersion: Long): Boolean {
-            if (values[subscription.id]?.version != expectedVersion) return false
-            values[subscription.id] = subscription
+            if (stored[subscription.id]?.version != expectedVersion) return false
+            stored[subscription.id] = subscription
             return true
         }
-
-        override fun findSecrets(id: String): SubscriptionSecrets? = secrets[id]
 
         override fun rotateSecrets(
             subscription: Subscription,
             expectedVersion: Long,
             secrets: SubscriptionSecrets,
         ): Boolean {
-            val current = values[subscription.id] ?: return false
-            if (current.version != expectedVersion) return false
-            // Ротация меняет только секреты: имя, состояние и ключи остаются прежними.
-            values[subscription.id] = current.copy(
-                tokenHash = subscription.tokenHash,
-                recoveryPublicKey = subscription.recoveryPublicKey,
-                version = subscription.version,
-                updatedAt = subscription.updatedAt,
-            )
+            if (stored[subscription.id]?.version != expectedVersion) return false
+            stored[subscription.id] = subscription
             this.secrets[subscription.id] = secrets
             return true
         }
 
-        override fun find(id: String): Subscription? = values[id]
-        override fun findByTokenHash(tokenHash: String): Subscription? = values.values.firstOrNull { it.tokenHash == tokenHash }
-        override fun findByRecoveryPublicKey(publicKey: String): Subscription? =
-            values.values.firstOrNull { it.recoveryPublicKey == publicKey }
-        override fun list(): List<Subscription> = values.values.toList()
+        override fun findSecrets(id: String) = secrets[id]
+        override fun find(id: String) = stored[id]
+        override fun findByTokenHash(tokenHash: String) = stored.values.firstOrNull { it.tokenHash == tokenHash }
+        override fun findByRecoveryPublicKey(publicKey: String) =
+            stored.values.firstOrNull { it.recoveryPublicKey == publicKey }
+
+        override fun list(userId: String?, offset: Int, limit: Int) =
+            stored.values.filter { userId == null || it.userId == userId }.drop(offset).take(limit)
+
+        override fun count(userId: String?) =
+            stored.values.count { userId == null || it.userId == userId }.toLong()
+
+        override fun delete(id: String, expectedVersion: Long): Boolean {
+            if (stored[id]?.version != expectedVersion) return false
+            stored.remove(id)
+            return true
+        }
     }
 }

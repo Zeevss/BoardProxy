@@ -5,7 +5,12 @@ import java.time.Instant
 
 private const val MAXIMUM_LANES = 32
 
+/**
+ * Борд принадлежит ровно одной ноде: hub-slide не делится между серверами,
+ * поэтому [nodeId] входит в идентичность борда, а не выражается связью.
+ */
 data class Board(
+    val nodeId: String,
     val id: String,
     val name: String,
     val hash: String,
@@ -18,6 +23,7 @@ data class Board(
     val updatedAt: Instant,
 ) {
     init {
+        requireDomain(validId(nodeId), "invalid board node reference")
         requireDomain(validId(id) && name.isNotBlank() && hash.isNotBlank() && version > 0, "invalid board")
         requireDomain(maxLanes in 1..MAXIMUM_LANES, "invalid board lane limit")
         apiBase?.takeIf(String::isNotBlank)?.let {

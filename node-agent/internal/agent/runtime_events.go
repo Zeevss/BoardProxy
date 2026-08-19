@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -18,28 +17,24 @@ import (
 )
 
 const (
-	coreEventCheckpointKey = "core-runtime-events"
-	coreEventRetryMin      = time.Second
-	coreEventRetryMax      = 30 * time.Second
+	coreEventRetryMin  = time.Second
+	coreEventRetryMax  = 30 * time.Second
+	runtimeSnapshotGap = 30 * time.Second
 )
 
-type coreEventCursor struct {
-	BootID   string `json:"boot_id"`
-	Sequence uint64 `json:"sequence"`
-}
-
+// Runtime state travels as a whole snapshot, not as a replayable event log. The
+// node already knows its state, so there is nothing for the hub to reconstruct —
+// and therefore no sequences, gap detection, resets or replay to get right.
+//
+// Events are still forwarded, but only as an activity log for the panel: they
+// project nothing, so a lost event is harmless.
 func collectCoreRuntimeEvents(ctx context.Context, core *coremgr.Manager, store *localstore.Store, log *slog.Logger) {
-	cursor, err := loadCoreEventCursor(store)
-	if err != nil {
-		log.Error("load core runtime event cursor", "err", err)
-		return
-	}
 	delay := coreEventRetryMin
 	for ctx.Err() == nil {
-		stream, err := core.WatchEvents(ctx, cursor.BootID, cursor.Sequence)
+		stream, err := core.WatchEvents(ctx, "", 0)
 		if err == nil {
 			delay = coreEventRetryMin
-			err = consumeCoreRuntimeEvents(ctx, core, stream, store, &cursor)
+			err = consumeCoreRuntimeEvents(ctx, core, stream, store, log)
 			stream.Close()
 		}
 		if ctx.Err() != nil {
@@ -55,150 +50,140 @@ func collectCoreRuntimeEvents(ctx context.Context, core *coremgr.Manager, store 
 	}
 }
 
-func consumeCoreRuntimeEvents(ctx context.Context, core *coremgr.Manager, stream coremgr.RuntimeEventStream, store *localstore.Store, cursor *coreEventCursor) error {
-	allowGap := false
+func consumeCoreRuntimeEvents(
+	ctx context.Context,
+	core *coremgr.Manager,
+	stream coremgr.RuntimeEventStream,
+	store *localstore.Store,
+	log *slog.Logger,
+) error {
+	lastSnapshot := time.Time{}
 	for ctx.Err() == nil {
 		event, err := stream.Recv()
 		if err != nil {
 			return err
 		}
-		if event.GetEventId() == "" || event.GetBootId() == "" {
-			return errors.New("core runtime event is missing identity")
+		reports := make([]localstore.OutboxEvent, 0, 2)
+
+		if mapped := mapCoreRuntimeEvent(event); mapped != nil {
+			batchID := randomID()
+			reports = append(reports, localstore.OutboxEvent{
+				BatchID: batchID,
+				Event:   &nodev1.ReportRequest{BatchId: batchID, Events: []*nodev1.RuntimeEvent{mapped}},
+			})
 		}
-		if event.GetStreamReset() != nil {
-			snapshot, snapshotErr := core.RuntimeSnapshot(ctx)
-			if snapshotErr != nil {
-				return fmt.Errorf("capture core runtime snapshot after reset: %w", snapshotErr)
+
+		// A snapshot is cheap and self-correcting, so it is taken on a timer
+		// rather than in reaction to a detected gap: there are no gaps to detect.
+		if time.Since(lastSnapshot) >= runtimeSnapshotGap {
+			snapshot, err := core.RuntimeSnapshot(ctx)
+			if err != nil {
+				log.Debug("capture core runtime snapshot", "err", err)
+			} else {
+				batchID := randomID()
+				reports = append(reports, localstore.OutboxEvent{
+					BatchID: batchID,
+					Event:   &nodev1.ReportRequest{BatchId: batchID, Runtime: mapRuntimeSnapshot(snapshot)},
+				})
+				lastSnapshot = time.Now()
 			}
-			cursor.BootID, cursor.Sequence = snapshot.GetEventBootId(), snapshot.GetLatestEventSequence()
-			if cursor.BootID != event.GetBootId() {
-				return fmt.Errorf("core changed while capturing runtime snapshot: reset=%s snapshot=%s", event.GetBootId(), cursor.BootID)
-			}
-			if err := persistCoreResetAndSnapshot(store, *cursor, event, snapshot); err != nil {
-				return err
-			}
-			allowGap = true
-		} else {
-			if event.GetSequence() == 0 {
-				return errors.New("core runtime event sequence is zero")
-			}
-			if cursor.BootID != "" && cursor.BootID != event.GetBootId() {
-				return fmt.Errorf("core boot changed without stream reset: %s -> %s", cursor.BootID, event.GetBootId())
-			}
-			if cursor.BootID == event.GetBootId() && event.GetSequence() <= cursor.Sequence {
-				continue
-			}
-			if cursor.Sequence != 0 && event.GetSequence() != cursor.Sequence+1 && !allowGap {
-				return fmt.Errorf("core runtime event sequence gap: after=%d next=%d", cursor.Sequence, event.GetSequence())
-			}
-			cursor.BootID, cursor.Sequence = event.GetBootId(), event.GetSequence()
-			allowGap = false
 		}
-		if event.GetStreamReset() == nil {
-			if err := persistCoreRuntimeEvent(store, *cursor, event); err != nil {
-				return err
-			}
+
+		if len(reports) == 0 {
+			continue
+		}
+		if err := store.CommitOrderedCollection(nil, reports); err != nil {
+			return err
 		}
 	}
 	return ctx.Err()
 }
 
-func persistCoreResetAndSnapshot(store *localstore.Store, cursor coreEventCursor, reset *corev1.CoreRuntimeEvent, snapshot *corev1.RuntimeSnapshot) error {
-	rawCursor, err := json.Marshal(cursor)
-	if err != nil {
-		return err
+func mapRuntimeSnapshot(snapshot *corev1.RuntimeSnapshot) *nodev1.RuntimeSnapshot {
+	if snapshot == nil {
+		return nil
 	}
-	resetBatchID, snapshotBatchID := randomID(), randomID()
-	return store.CommitOrderedCollection(
-		map[string][]byte{coreEventCheckpointKey: rawCursor},
-		[]localstore.OutboxEvent{
-			{BatchID: resetBatchID, Event: runtimeEventNodeBatch(resetBatchID, mapCoreRuntimeEvent(reset))},
-			{BatchID: snapshotBatchID, Event: runtimeSnapshotNodeBatch(snapshotBatchID, snapshot)},
-		},
-	)
-}
-
-func persistCoreRuntimeEvent(store *localstore.Store, cursor coreEventCursor, event *corev1.CoreRuntimeEvent) error {
-	rawCursor, err := json.Marshal(cursor)
-	if err != nil {
-		return err
-	}
-	batchID := randomID()
-	nodeEvent := runtimeEventNodeBatch(batchID, mapCoreRuntimeEvent(event))
-	return store.CommitCollection(
-		map[string][]byte{coreEventCheckpointKey: rawCursor},
-		map[string]*nodev1.NodeEvent{batchID: nodeEvent},
-	)
-}
-
-func runtimeEventNodeBatch(batchID string, event *nodev1.CoreRuntimeEvent) *nodev1.NodeEvent {
-	return &nodev1.NodeEvent{Payload: &nodev1.NodeEvent_RuntimeEvents{RuntimeEvents: &nodev1.RuntimeEventBatch{
-		BatchId: batchID, Events: []*nodev1.CoreRuntimeEvent{event},
-	}}}
-}
-
-func runtimeSnapshotNodeBatch(batchID string, snapshot *corev1.RuntimeSnapshot) *nodev1.NodeEvent {
-	value := &nodev1.RuntimeSnapshot{
-		CoreBootId: snapshot.GetEventBootId(), LatestSequence: snapshot.GetLatestEventSequence(),
-		RuntimeRevision: snapshot.GetRuntime().GetRevision(), CapturedAt: timestamppb.Now(),
-	}
-	for _, user := range snapshot.GetStats().GetUsers() {
-		value.Users = append(value.Users, &nodev1.RuntimeUserSnapshot{
-			UserTag: user.GetTag(), ActiveSessions: uint64(user.GetConnections()),
-			RxBytes: user.GetRxBytesSinceStart(), TxBytes: user.GetTxBytesSinceStart(),
+	users := make([]*nodev1.RuntimeUserSnapshot, 0, len(snapshot.GetUsers()))
+	for _, user := range snapshot.GetUsers() {
+		// ActiveLanes остаётся нулём: ядро отдаёт только лимит полос, а
+		// выдавать лимит за наблюдение — врать панели.
+		users = append(users, &nodev1.RuntimeUserSnapshot{
+			UserId:         user.GetTag(),
+			ActiveSessions: uint32(max(user.GetActiveSessions(), 0)),
 		})
 	}
+	boards := make([]*nodev1.RuntimeBoardSnapshot, 0, len(snapshot.GetBoards()))
 	for _, board := range snapshot.GetBoards() {
-		value.Boards = append(value.Boards, &nodev1.RuntimeBoardSnapshot{
-			BoardTag: board.GetConfig().GetTag(), State: board.GetState(), Error: board.GetError(),
+		boards = append(boards, &nodev1.RuntimeBoardSnapshot{
+			BoardId:   board.GetConfig().GetTag(),
+			State:     board.GetState(),
+			LastError: board.GetError(),
 		})
 	}
-	return &nodev1.NodeEvent{Payload: &nodev1.NodeEvent_RuntimeEvents{RuntimeEvents: &nodev1.RuntimeEventBatch{
-		BatchId: batchID, Snapshot: value,
-	}}}
+	return &nodev1.RuntimeSnapshot{
+		CoreBootId: snapshot.GetEventBootId(),
+		CapturedAt: timestamppb.Now(),
+		Users:      users,
+		Boards:     boards,
+	}
 }
 
-func loadCoreEventCursor(store interface{ Checkpoint(string) ([]byte, error) }) (coreEventCursor, error) {
-	raw, err := store.Checkpoint(coreEventCheckpointKey)
-	if err != nil || len(raw) == 0 {
-		return coreEventCursor{}, err
+// mapCoreRuntimeEvent renders a core event as a typed line for the panel.
+// nil means the event carries nothing worth logging.
+func mapCoreRuntimeEvent(event *corev1.CoreRuntimeEvent) *nodev1.RuntimeEvent {
+	if event == nil || event.GetStreamReset() != nil {
+		return nil
 	}
-	var cursor coreEventCursor
-	return cursor, json.Unmarshal(raw, &cursor)
+	kind, payload := describeCoreRuntimeEvent(event)
+	if kind == "" {
+		return nil
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		raw = []byte("{}")
+	}
+	occurredAt := event.GetOccurredAt()
+	if occurredAt == nil {
+		occurredAt = timestamppb.Now()
+	}
+	return &nodev1.RuntimeEvent{Type: kind, OccurredAt: occurredAt, PayloadJson: string(raw)}
 }
 
-func mapCoreRuntimeEvent(event *corev1.CoreRuntimeEvent) *nodev1.CoreRuntimeEvent {
-	out := &nodev1.CoreRuntimeEvent{
-		EventId: event.GetEventId(), CoreBootId: event.GetBootId(), Sequence: event.GetSequence(),
-		OccurredAt: event.GetOccurredAt(), RuntimeRevision: event.GetRuntimeRevision(),
+func describeCoreRuntimeEvent(event *corev1.CoreRuntimeEvent) (string, map[string]any) {
+	switch {
+	case event.GetResourceChanged() != nil:
+		changed := event.GetResourceChanged()
+		return "resource.changed", map[string]any{
+			"kind":      changed.GetKind().String(),
+			"tag":       changed.GetTag(),
+			"operation": changed.GetOperation().String(),
+		}
+	case event.GetBoardStateChanged() != nil:
+		changed := event.GetBoardStateChanged()
+		return "board.state-changed", map[string]any{
+			"boardId":  changed.GetBoardTag(),
+			"previous": changed.GetPreviousState(),
+			"state":    changed.GetState(),
+			"error":    changed.GetError(),
+		}
+	case event.GetClientSessionOpened() != nil:
+		opened := event.GetClientSessionOpened()
+		return "session.opened", map[string]any{
+			"userId":   opened.GetUserTag(),
+			"boardId":  opened.GetBoardTag(),
+			"bundleId": opened.GetBundleId(),
+		}
+	case event.GetClientSessionClosed() != nil:
+		closed := event.GetClientSessionClosed()
+		return "session.closed", map[string]any{
+			"userId":   closed.GetUserTag(),
+			"boardId":  closed.GetBoardTag(),
+			"bundleId": closed.GetBundleId(),
+			"rxBytes":  closed.GetRxBytes(),
+			"txBytes":  closed.GetTxBytes(),
+			"reason":   closed.GetReason(),
+		}
+	default:
+		return "", nil
 	}
-	switch payload := event.GetPayload().(type) {
-	case *corev1.CoreRuntimeEvent_ResourceChanged:
-		value := payload.ResourceChanged
-		out.Payload = &nodev1.CoreRuntimeEvent_ResourceChanged{ResourceChanged: &nodev1.ResourceChanged{
-			Kind: nodev1.ResourceKind(value.GetKind()), Operation: nodev1.ResourceOperation(value.GetOperation()), Tag: value.GetTag(),
-		}}
-	case *corev1.CoreRuntimeEvent_BoardStateChanged:
-		value := payload.BoardStateChanged
-		out.Payload = &nodev1.CoreRuntimeEvent_BoardStateChanged{BoardStateChanged: &nodev1.BoardStateChanged{
-			BoardTag: value.GetBoardTag(), PreviousState: value.GetPreviousState(), State: value.GetState(), Error: value.GetError(),
-		}}
-	case *corev1.CoreRuntimeEvent_ClientSessionOpened:
-		value := payload.ClientSessionOpened
-		out.Payload = &nodev1.CoreRuntimeEvent_ClientSessionOpened{ClientSessionOpened: &nodev1.ClientSessionOpened{
-			UserTag: value.GetUserTag(), BoardTag: value.GetBoardTag(), BundleId: value.GetBundleId(),
-		}}
-	case *corev1.CoreRuntimeEvent_ClientSessionClosed:
-		value := payload.ClientSessionClosed
-		out.Payload = &nodev1.CoreRuntimeEvent_ClientSessionClosed{ClientSessionClosed: &nodev1.ClientSessionClosed{
-			UserTag: value.GetUserTag(), BoardTag: value.GetBoardTag(), BundleId: value.GetBundleId(),
-			RxBytes: value.GetRxBytes(), TxBytes: value.GetTxBytes(), Reason: value.GetReason(),
-		}}
-	case *corev1.CoreRuntimeEvent_StreamReset:
-		value := payload.StreamReset
-		out.Payload = &nodev1.CoreRuntimeEvent_StreamReset{StreamReset: &nodev1.EventStreamReset{
-			Reason: value.GetReason(), OldestAvailableSequence: value.GetOldestAvailableSequence(), LatestSequence: value.GetLatestSequence(),
-		}}
-	}
-	return out
 }

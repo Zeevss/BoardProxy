@@ -1,39 +1,45 @@
 package io.boardproxy.control.telemetry.application
 
-import io.boardproxy.control.provisioning.application.CatalogQueries
-import io.boardproxy.control.provisioning.application.CatalogResourceCommands
-import io.boardproxy.control.provisioning.application.UserInput
-import io.boardproxy.control.provisioning.domain.model.ResourceState
+import io.boardproxy.control.shared.contracts.QuotaExceededQueries
 import io.boardproxy.control.shared.errors.ResourceConflict
 import io.boardproxy.control.shared.errors.ResourceNotFound
+import io.boardproxy.control.shared.events.OutboxEvent
+import io.boardproxy.control.shared.events.OutboxRepository
 import io.boardproxy.control.telemetry.domain.QuotaAction
 import io.boardproxy.control.telemetry.domain.QuotaPeriod
 import io.boardproxy.control.telemetry.domain.TrafficQuota
+import io.boardproxy.control.telemetry.domain.TrafficQuotaState
 import io.boardproxy.control.telemetry.domain.TrafficQuotaUsage
 import java.time.Clock
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
+import java.util.UUID
 
 interface TrafficQuotaRepository {
-    fun find(nodeId: String, userTag: String): TrafficQuota?
-    fun list(nodeId: String): List<TrafficQuota>
+    fun find(userId: String): TrafficQuota?
+    fun list(): List<TrafficQuota>
     fun save(quota: TrafficQuota, expectedVersion: Long?): Boolean
-    fun delete(nodeId: String, userTag: String, expectedVersion: Long): Boolean
+    fun delete(userId: String, expectedVersion: Long): Boolean
     fun enabled(): List<TrafficQuota>
-    fun usedBytes(nodeId: String, userTag: String, from: Instant, to: Instant): Long
-    fun recordExceeded(nodeId: String, userTag: String, periodStart: Instant, at: Instant): Boolean
-    fun recordEnforced(nodeId: String, userTag: String, periodStart: Instant, at: Instant)
-    fun state(nodeId: String, userTag: String, periodStart: Instant): Pair<Instant?, Instant?>
-    fun startNewCounter(nodeId: String, userTag: String, at: Instant)
+
+    /** Суммарный расход по всем нодам: пользователь один, значит и счётчик один. */
+    fun usedBytes(userId: String, from: Instant, to: Instant): Long
+
+    fun state(userId: String): TrafficQuotaState?
+
+    /** true — флаг [TrafficQuotaState.exceeded] изменился, конфигурацию надо пересобрать. */
+    fun saveState(state: TrafficQuotaState): Boolean
+
+    fun exceededUsers(): Set<String>
+    fun startNewCounter(userId: String, at: Instant)
 }
 
-/** Узкий порт для потребителей вне telemetry: провижининг ставит квоту вместе с пользователем. */
+/** Узкий порт для потребителей вне telemetry: пользователь заводится вместе с квотой. */
 fun interface TrafficQuotaCommands {
     fun put(
-        nodeId: String,
-        userTag: String,
+        userId: String,
         period: QuotaPeriod,
         limitBytes: Long,
         action: QuotaAction,
@@ -46,76 +52,87 @@ fun interface TrafficQuotaNotifier {
     fun exceeded(usage: TrafficQuotaUsage)
 }
 
+/**
+ * Телеметрия не пишет в desired state.
+ *
+ * Единственный её выход наружу — флаг [TrafficQuotaState.exceeded] и событие
+ * `quota.changed`, по которому подписчик пересобирает конфигурацию затронутых
+ * нод. Поэтому поведение симметрично: наступил новый период — флаг снялся,
+ * конфигурация пересобралась, пользователь снова работает. Прежняя реализация
+ * писала DISABLED прямо в каталог, и включать приходилось руками.
+ */
 class TrafficQuotaService(
     private val quotas: TrafficQuotaRepository,
-    private val catalogs: CatalogQueries,
-    private val resources: CatalogResourceCommands,
     private val notifier: TrafficQuotaNotifier,
+    private val outbox: OutboxRepository,
     private val clock: Clock,
-) : TrafficQuotaCommands {
+    private val nextId: () -> String = { UUID.randomUUID().toString() },
+) : TrafficQuotaCommands, QuotaExceededQueries {
+
+    override fun exceededUsers(): Set<String> = quotas.exceededUsers()
+
     override fun put(
-        nodeId: String,
-        userTag: String,
+        userId: String,
         period: QuotaPeriod,
         limitBytes: Long,
         action: QuotaAction,
         enabled: Boolean,
         expectedVersion: Long?,
     ): TrafficQuota {
-        val current = quotas.find(nodeId, userTag)
+        val current = quotas.find(userId)
         if (current == null && expectedVersion != null) throw ResourceConflict("traffic quota does not exist")
         if (current != null && current.version != expectedVersion) throw ResourceConflict("traffic quota version changed")
         val value = TrafficQuota(
-            nodeId, userTag, period, limitBytes, action, enabled,
+            userId, period, limitBytes, action, enabled,
             version = (current?.version ?: 0) + 1, updatedAt = clock.instant(),
-            // Правка лимита не должна дарить пользователю новый цикл; устаревший сброс
-            // всё равно отсекается началом периода.
+            // Правка лимита не должна дарить новый цикл; устаревший сброс всё
+            // равно отсекается началом периода.
             counterStart = current?.counterStart,
         )
         if (!quotas.save(value, expectedVersion)) throw ResourceConflict("traffic quota version changed")
         return value
     }
 
-    fun list(nodeId: String): List<TrafficQuotaUsage> = quotas.list(nodeId).map(::usage)
+    fun get(userId: String): TrafficQuotaUsage? = quotas.find(userId)?.let(::usage)
 
-    fun delete(nodeId: String, userTag: String, expectedVersion: Long) {
-        if (!quotas.delete(nodeId, userTag, expectedVersion)) throw ResourceNotFound("traffic quota not found or changed")
+    fun list(): List<TrafficQuotaUsage> = quotas.list().map(::usage)
+
+    fun delete(userId: String, expectedVersion: Long) {
+        if (!quotas.delete(userId, expectedVersion)) throw ResourceNotFound("traffic quota not found or changed")
     }
 
     fun evaluate() {
+        val now = clock.instant()
         quotas.enabled().forEach { quota ->
             val usage = usage(quota)
-            if (!usage.exceeded) return@forEach
-            if (quotas.recordExceeded(quota.nodeId, quota.userTag, usage.periodStart, clock.instant())) {
-                notifier.exceeded(usage.copy(exceededAt = clock.instant()))
+            // Конфигурацию меняет только политика DISABLE: ALERT уведомляет,
+            // RESET обслуживает дальше с нуля.
+            val blocking = usage.exceeded && quota.action == QuotaAction.DISABLE
+            val previous = quotas.state(quota.userId)
+
+            if (quotas.saveState(TrafficQuotaState(quota.userId, usage.periodStart, usage.usedBytes, blocking, now))) {
+                outbox.append(
+                    OutboxEvent(
+                        id = nextId(), aggregateType = "user", aggregateId = quota.userId,
+                        type = "quota.changed",
+                        payload = mapOf("userId" to quota.userId, "exceeded" to blocking),
+                        occurredAt = now,
+                    ),
+                )
             }
-            when (quota.action) {
-                QuotaAction.DISABLE -> if (usage.enforcedAt == null) enforce(quota, usage.periodStart)
-                QuotaAction.RESET -> quotas.startNewCounter(quota.nodeId, quota.userTag, clock.instant())
-                QuotaAction.ALERT -> Unit
-            }
+
+            if (usage.exceeded && previous?.exceeded != true) notifier.exceeded(usage)
+            if (usage.exceeded && quota.action == QuotaAction.RESET) quotas.startNewCounter(quota.userId, now)
         }
     }
 
     private fun usage(quota: TrafficQuota): TrafficQuotaUsage {
-        val (periodStart, end) = period(quota.period, clock.instant())
+        val now = clock.instant()
+        val (periodStart, end) = period(quota.period, now)
         // Сброшенный счётчик сдвигает начало отсчёта внутрь периода, но окно самого периода не меняет.
         val countFrom = maxOf(periodStart, quota.counterStart ?: periodStart)
-        val used = quotas.usedBytes(quota.nodeId, quota.userTag, countFrom, minOf(end, clock.instant()))
-        val state = quotas.state(quota.nodeId, quota.userTag, periodStart)
-        return TrafficQuotaUsage(quota, periodStart, end, used, used >= quota.limitBytes, state.first, state.second)
-    }
-
-    private fun enforce(quota: TrafficQuota, periodStart: Instant) {
-        val catalog = catalogs.get(quota.nodeId)
-        val user = catalog.users.firstOrNull { it.id == quota.userTag } ?: return
-        if (user.state != ResourceState.ENABLED) return
-        resources.putUser(
-            quota.nodeId, quota.userTag, catalog.version,
-            UserInput(user.name, null, null, ResourceState.DISABLED, user.maxSessions, user.maxLanes),
-            "system:traffic-quota",
-        )
-        quotas.recordEnforced(quota.nodeId, quota.userTag, periodStart, clock.instant())
+        val used = quotas.usedBytes(quota.userId, countFrom, minOf(end, now))
+        return TrafficQuotaUsage(quota, periodStart, end, used, used >= quota.limitBytes)
     }
 
     private fun period(period: QuotaPeriod, now: Instant): Pair<Instant, Instant> {

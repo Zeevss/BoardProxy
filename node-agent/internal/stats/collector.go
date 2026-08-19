@@ -74,15 +74,15 @@ func NewWithUserSource(interfaces []string, sysClassNet string, users UserStatsS
 
 // Collect returns checkpoint updates and outbox events that must be committed
 // in one local-store transaction.
-func (c *Collector) Collect(ctx context.Context, now time.Time) (map[string][]byte, map[string]*nodev1.NodeEvent, error) {
+func (c *Collector) Collect(ctx context.Context, now time.Time) (map[string][]byte, map[string]*nodev1.ReportRequest, error) {
 	checkpoints := make(map[string][]byte)
-	events := make(map[string]*nodev1.NodeEvent)
+	events := make(map[string]*nodev1.ReportRequest)
 	var collectionErrors []error
 	interfaceRaw, interfaceEvent, err := c.collectInterfaces(now)
 	if err == nil {
 		checkpoints[interfaceCheckpointKey] = interfaceRaw
 		if interfaceEvent != nil {
-			events[interfaceEvent.GetInterfaceTraffic().GetBatchId()] = interfaceEvent
+			events[interfaceEvent.GetBatchId()] = interfaceEvent
 		}
 	} else {
 		collectionErrors = append(collectionErrors, err)
@@ -91,7 +91,7 @@ func (c *Collector) Collect(ctx context.Context, now time.Time) (map[string][]by
 	if err == nil {
 		checkpoints[userCheckpointKey] = userRaw
 		if userEvent != nil {
-			events[userEvent.GetUserTraffic().GetBatchId()] = userEvent
+			events[userEvent.GetBatchId()] = userEvent
 		}
 	} else {
 		collectionErrors = append(collectionErrors, fmt.Errorf("stats: user traffic: %w", err))
@@ -99,7 +99,7 @@ func (c *Collector) Collect(ctx context.Context, now time.Time) (map[string][]by
 	return checkpoints, events, errors.Join(collectionErrors...)
 }
 
-func (c *Collector) collectInterfaces(now time.Time) ([]byte, *nodev1.NodeEvent, error) {
+func (c *Collector) collectInterfaces(now time.Time) ([]byte, *nodev1.ReportRequest, error) {
 	previous := interfaceCheckpoint{Counters: make(map[string]interfaceCounter)}
 	if raw, err := c.checkpoints.Checkpoint(interfaceCheckpointKey); err != nil {
 		return nil, nil, err
@@ -131,13 +131,14 @@ func (c *Collector) collectInterfaces(now time.Time) ([]byte, *nodev1.NodeEvent,
 	if previous.SampledAt.IsZero() || previous.NamespaceID == "" || previous.NamespaceID != current.NamespaceID {
 		return raw, nil, nil // establish a baseline; do not bill pre-agent traffic
 	}
-	batch := &nodev1.InterfaceTrafficBatch{
-		BatchId: newBatchID(), IntervalStart: timestamppb.New(previous.SampledAt), IntervalEnd: timestamppb.New(now), Interfaces: deltas,
+	observed := timestamppb.New(now)
+	for _, delta := range deltas {
+		delta.ObservedAt = observed
 	}
-	return raw, &nodev1.NodeEvent{Payload: &nodev1.NodeEvent_InterfaceTraffic{InterfaceTraffic: batch}}, nil
+	return raw, &nodev1.ReportRequest{BatchId: newBatchID(), InterfaceTraffic: deltas}, nil
 }
 
-func (c *Collector) collectUsers(ctx context.Context, now time.Time) ([]byte, *nodev1.NodeEvent, error) {
+func (c *Collector) collectUsers(ctx context.Context, now time.Time) ([]byte, *nodev1.ReportRequest, error) {
 	stats, err := c.users.Snapshot(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -166,7 +167,7 @@ func (c *Collector) collectUsers(ctx context.Context, now time.Time) ([]byte, *n
 		before := previous.Users[user.GetTag()]
 		rx, tx := delta(counter.RXBytes, before.RXBytes), delta(counter.TXBytes, before.TXBytes)
 		if rx != 0 || tx != 0 {
-			deltas = append(deltas, &nodev1.UserTrafficDelta{UserTag: user.GetTag(), RxBytes: rx, TxBytes: tx})
+			deltas = append(deltas, &nodev1.UserTrafficDelta{UserId: user.GetTag(), RxBytes: rx, TxBytes: tx})
 		}
 	}
 	raw, err := json.Marshal(current)
@@ -176,10 +177,11 @@ func (c *Collector) collectUsers(ctx context.Context, now time.Time) ([]byte, *n
 	if len(deltas) == 0 {
 		return raw, nil, nil
 	}
-	batch := &nodev1.UserTrafficBatch{
-		BatchId: newBatchID(), IntervalStart: timestamppb.New(previous.SampledAt), IntervalEnd: timestamppb.New(now), Users: deltas,
+	observed := timestamppb.New(now)
+	for _, delta := range deltas {
+		delta.ObservedAt = observed
 	}
-	return raw, &nodev1.NodeEvent{Payload: &nodev1.NodeEvent_UserTraffic{UserTraffic: batch}}, nil
+	return raw, &nodev1.ReportRequest{BatchId: newBatchID(), UserTraffic: deltas}, nil
 }
 
 func (s *grpcUserStatsSource) Snapshot(ctx context.Context) (*corev1.RuntimeStats, error) {

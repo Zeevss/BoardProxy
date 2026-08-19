@@ -2,8 +2,8 @@ package io.boardproxy.control.access.application
 
 import io.boardproxy.control.access.domain.AccessRole
 import io.boardproxy.control.access.domain.ApiToken
-import io.boardproxy.control.audit.application.AuditRepository
-import io.boardproxy.control.audit.domain.AuditEvent
+import io.boardproxy.control.shared.audit.AuditRepository
+import io.boardproxy.control.shared.audit.AuditEvent
 import io.boardproxy.control.shared.persistence.TransactionRunner
 import java.time.Clock
 import java.time.Duration

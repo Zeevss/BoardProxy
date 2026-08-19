@@ -9,7 +9,7 @@ import io.boardproxy.control.fleet.application.NodeCertificateRepository
 import io.boardproxy.control.fleet.application.NodeConnectionPolicy
 import io.boardproxy.control.fleet.application.NodeCertificateService
 import io.boardproxy.control.fleet.infrastructure.pki.FileCertificateAuthority
-import io.boardproxy.control.audit.application.AuditRepository
+import io.boardproxy.control.shared.audit.AuditRepository
 import io.boardproxy.control.shared.persistence.TransactionRunner
 import io.boardproxy.control.shared.security.SecretCipher
 import org.springframework.beans.factory.annotation.Value

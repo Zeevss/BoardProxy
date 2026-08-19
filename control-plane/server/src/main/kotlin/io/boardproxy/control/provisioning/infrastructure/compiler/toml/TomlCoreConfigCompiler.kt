@@ -1,34 +1,54 @@
 package io.boardproxy.control.provisioning.infrastructure.compiler.toml
 
-import io.boardproxy.control.provisioning.domain.model.Board
-import io.boardproxy.control.provisioning.domain.model.Catalog
-import io.boardproxy.control.provisioning.domain.model.User
 import io.boardproxy.control.provisioning.application.CoreConfigCompiler
+import io.boardproxy.control.provisioning.domain.model.Board
+import io.boardproxy.control.provisioning.domain.model.NodeConfigInput
+import io.boardproxy.control.provisioning.domain.model.ResourceState
+import io.boardproxy.control.provisioning.domain.model.UserOnNode
 import java.time.Duration
 
+/**
+ * Компилятор конфигурации ядра.
+ *
+ * Чистая функция: одинаковый вход всегда даёт одинаковые байты. На этом держится
+ * публикация — ревизия появляется только когда sha256 результата изменилась,
+ * поэтому любая недетерминированность здесь превратилась бы в поток ложных
+ * ревизий и лишних перезапусков ядра. Отсюда явные сортировки, а не порядок,
+ * в котором строки пришли из базы.
+ */
 class TomlCoreConfigCompiler : CoreConfigCompiler {
-    override fun compile(catalog: Catalog): ByteArray {
-        val assigned = catalog.assignedResources()
-        val availableBoards = assigned.boards
-            .filter { catalog.node.state.name != "REVOKED" && it.state.name != "REVOKED" }
-        val availableBoardIds = availableBoards.map(Board::id).toSet()
-        val users = assigned.users.mapNotNull { assignedUser ->
-            val user = assignedUser.user
-            val boardIds = assignedUser.boardIds.filter(availableBoardIds::contains)
-            if (catalog.node.state.name == "REVOKED" || user.state.name == "REVOKED" || boardIds.isEmpty()) null
-            else CompiledUser(user, boardIds)
+    override fun compile(input: NodeConfigInput): ByteArray {
+        val nodeRevoked = input.node.state == ResourceState.REVOKED
+
+        val boards = if (nodeRevoked) {
+            emptyList()
+        } else {
+            input.boards
+                .filter { it.nodeId == input.node.id && it.state != ResourceState.REVOKED }
+                .sortedBy(Board::id)
+        }
+        val boardIds = boards.map(Board::id).toSet()
+
+        val users = if (nodeRevoked) {
+            emptyList()
+        } else {
+            input.users
+                .filter { it.user.state != ResourceState.REVOKED }
+                .map { placement -> placement to placement.boardIds.filter(boardIds::contains).sorted() }
+                .filter { (_, granted) -> granted.isNotEmpty() }
+                .sortedBy { (placement, _) -> placement.user.id }
         }
 
         return buildString {
             appendLine("version = 1")
             appendLine()
             appendLine("[server]")
-            property("private_key", catalog.node.core.server.privateKey)
-            property("idle_timeout", catalog.node.core.server.idleTimeout.goString())
-            property("allow_private_egress", catalog.node.core.server.allowPrivateEgress)
+            property("private_key", input.node.core.server.privateKey)
+            property("idle_timeout", input.node.core.server.idleTimeout.goString())
+            property("allow_private_egress", input.node.core.server.allowPrivateEgress)
             appendLine()
             appendLine("[transport]")
-            catalog.node.core.transport.let {
+            input.node.core.transport.let {
                 property("window", it.window)
                 property("max_frame_payload", it.maxFramePayload)
                 property("stream_window", it.streamWindow)
@@ -39,14 +59,14 @@ class TomlCoreConfigCompiler : CoreConfigCompiler {
             }
             appendLine()
             appendLine("[management]")
-            property("grpc_listen", catalog.node.core.management.grpcListen)
-            catalog.node.core.management.httpListen?.takeIf(String::isNotBlank)?.let { property("http_listen", it) }
+            property("grpc_listen", input.node.core.management.grpcListen)
+            input.node.core.management.httpListen?.takeIf(String::isNotBlank)?.let { property("http_listen", it) }
             appendLine()
             appendLine("[observability]")
-            property("enabled", catalog.node.core.observability.enabled)
-            property("log_level", catalog.node.core.observability.logLevel)
+            property("enabled", input.node.core.observability.enabled)
+            property("log_level", input.node.core.observability.logLevel)
 
-            availableBoards.forEach { board ->
+            boards.forEach { board ->
                 appendLine()
                 appendLine("[[boards]]")
                 property("tag", board.id)
@@ -55,26 +75,26 @@ class TomlCoreConfigCompiler : CoreConfigCompiler {
                 board.hubSlide?.takeIf(String::isNotBlank)?.let { property("hub_slide", it) }
                 board.apiBase?.takeIf(String::isNotBlank)?.let { property("api_base", it) }
                 board.guestName?.takeIf(String::isNotBlank)?.let { property("guest_name", it) }
-                property("enabled", catalog.node.state.isEnabled && board.state.isEnabled)
+                property("enabled", input.node.state.isEnabled && board.state.isEnabled)
                 property("max_lanes", board.maxLanes)
             }
-            users.forEach { compiled ->
+            users.forEach { (placement, granted) ->
                 appendLine()
                 appendLine("[[users]]")
-                property("tag", compiled.user.id)
-                property("name", compiled.user.name)
-                compiled.user.privateKey?.takeIf(String::isNotBlank)?.let { property("private_key", it) }
-                compiled.user.publicKey?.takeIf(String::isNotBlank)?.let { property("public_key", it) }
-                property("enabled", catalog.node.state.isEnabled && compiled.user.state.isEnabled)
-                property("boards", compiled.boardIds)
-                property("max_sessions", compiled.user.maxSessions)
-                property("max_lanes", compiled.user.maxLanes)
+                property("tag", placement.user.id)
+                property("name", placement.user.name)
+                placement.user.privateKey?.takeIf(String::isNotBlank)?.let { property("private_key", it) }
+                placement.user.publicKey?.takeIf(String::isNotBlank)?.let { property("public_key", it) }
+                // Исчерпанная квота гасит пользователя ровно тем же флагом, что и
+                // ручное выключение: отдельного механизма принуждения нет.
+                property("enabled", input.node.state.isEnabled && placement.enabled)
+                property("boards", granted)
+                property("max_sessions", placement.user.maxSessions)
+                property("max_lanes", placement.user.maxLanes)
             }
         }.toByteArray(Charsets.UTF_8)
     }
 }
-
-private data class CompiledUser(val user: User, val boardIds: List<String>)
 
 private fun StringBuilder.property(name: String, value: String) = appendLine("  $name = \"${value.tomlEscaped()}\"")
 private fun StringBuilder.property(name: String, value: Boolean) = appendLine("  $name = $value")
@@ -97,6 +117,10 @@ private fun String.tomlEscaped() = buildString {
     }
 }
 
+/**
+ * Повторяет формат time.Duration.String() из Go: конфигурацию читает ядро на Go,
+ * и любое расхождение здесь всплывёт только в проде.
+ */
 internal fun Duration.goString(): String {
     if (isZero) return "0s"
     require(!isNegative) { "negative durations are not supported" }

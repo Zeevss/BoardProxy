@@ -13,21 +13,18 @@ interface SubscriptionRepository {
     /** Отдельно от replace: смена имени/состояния не должна трогать секреты, и наоборот. */
     fun rotateSecrets(subscription: Subscription, expectedVersion: Long, secrets: SubscriptionSecrets): Boolean
 
-    /** null, когда подписка выпущена до появления восстановимых секретов. */
     fun findSecrets(id: String): SubscriptionSecrets?
     fun find(id: String): Subscription?
     fun findByTokenHash(tokenHash: String): Subscription?
     fun findByRecoveryPublicKey(publicKey: String): Subscription?
-    fun list(): List<Subscription>
+    fun list(userId: String?, offset: Int, limit: Int): List<Subscription>
+    fun count(userId: String?): Long
+    fun delete(id: String, expectedVersion: Long): Boolean
 }
 
-data class SubscriptionDraft(val name: String, val keys: List<SubscriptionKeyDraft>)
-data class SubscriptionKeyDraft(val id: String, val name: String, val nodeId: String, val userId: String)
-data class SubscriptionReplacement(
-    val name: String,
-    val state: SubscriptionState,
-    val keys: List<SubscriptionKeyDraft>,
-)
+data class SubscriptionDraft(val name: String, val userId: String)
+
+data class SubscriptionReplacement(val name: String, val state: SubscriptionState)
 
 data class IssuedSubscription(
     val subscription: Subscription,
@@ -45,21 +42,29 @@ interface SubscriptionCommands {
     fun replace(id: String, expectedVersion: Long, replacement: SubscriptionReplacement, actor: String): Subscription
 
     /**
-     * Выпускает новый токен и новую recovery-пару той же подписке. Control-plane
-     * хранит только хеш токена, поэтому выданную ссылку нельзя показать повторно —
-     * ротация это единственный способ получить рабочую ссылку снова.
+     * Выпускает новый токен и новую recovery-пару той же подписке. Ротация
+     * обесценивает прежнюю ссылку — это единственный способ отозвать утёкшую.
      */
     fun rotate(id: String, expectedVersion: Long, actor: String): IssuedSubscription
+
+    fun delete(id: String, expectedVersion: Long, actor: String)
 }
 
 interface SubscriptionQueries {
     fun get(id: String): Subscription
-    fun list(): List<Subscription>
+    fun list(userId: String?, offset: Int, limit: Int): SubscriptionPage
     fun resolve(token: String?, recoveryPublicKey: String?): SubscriptionSnapshot
 
-    /** Постоянная ссылка подписки; null, если секреты не сохранены или доставка выключена. */
+    /** Постоянная ссылка подписки; null, если доставка выключена. */
     fun link(id: String): String?
 }
+
+data class SubscriptionPage(
+    val items: List<Subscription>,
+    val offset: Int,
+    val limit: Int,
+    val total: Long,
+)
 
 data class SubscriptionSnapshot(
     val version: Int = 1,
@@ -69,7 +74,7 @@ data class SubscriptionSnapshot(
     val revision: String,
     val issuedAt: java.time.Instant,
     val usedBytes: Long,
-    val trafficLimit: Long = 0,
+    val trafficLimit: Long,
     val keys: List<SubscriptionKeySnapshot>,
 )
 

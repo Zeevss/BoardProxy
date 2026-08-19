@@ -1,6 +1,7 @@
 package io.boardproxy.control.telemetry.api.rest
 
 import io.boardproxy.control.shared.errors.InvalidRequest
+import io.boardproxy.control.shared.errors.ResourceNotFound
 import io.boardproxy.control.telemetry.application.TrafficQuotaService
 import io.boardproxy.control.telemetry.domain.QuotaAction
 import io.boardproxy.control.telemetry.domain.QuotaPeriod
@@ -17,25 +18,30 @@ import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 
+/**
+ * Квота принадлежит пользователю, а не паре «нода + тег», поэтому и адресуется
+ * через пользователя. Расход в ответе — сумма по всем нодам его размещения.
+ */
 @RestController
-@RequestMapping("/api/v1/nodes/{nodeId}/traffic/quotas")
+@RequestMapping("/api/v1/users/{userId}/quota")
 class TrafficQuotaController(private val service: TrafficQuotaService) {
+
     @GetMapping
     @PreAuthorize("hasAnyRole('VIEWER', 'OPERATOR', 'ADMIN')")
-    fun list(@PathVariable nodeId: String): List<TrafficQuotaUsage> = service.list(nodeId)
+    fun get(@PathVariable userId: String): TrafficQuotaUsage =
+        service.get(userId) ?: throw ResourceNotFound("traffic quota for user $userId not found")
 
-    @PutMapping("/{userTag}")
+    @PutMapping
     @PreAuthorize("hasAnyRole('OPERATOR', 'ADMIN')")
     fun put(
-        @PathVariable nodeId: String,
-        @PathVariable userTag: String,
+        @PathVariable userId: String,
         @RequestHeader("If-Match", required = false) ifMatch: String?,
         @RequestBody request: TrafficQuotaRequest,
     ): ResponseEntity<TrafficQuota> {
         val expected = ifMatch?.removeSurrounding("\"")?.toLongOrNull()
         if (ifMatch != null && expected == null) throw InvalidRequest("If-Match must contain the numeric quota version")
         val quota = service.put(
-            nodeId, userTag,
+            userId,
             enum(request.period, "period", QuotaPeriod::valueOf),
             request.limitBytes,
             enum(request.action, "action", QuotaAction::valueOf),
@@ -45,16 +51,15 @@ class TrafficQuotaController(private val service: TrafficQuotaService) {
         return ResponseEntity.ok().eTag(quota.version.toString()).body(quota)
     }
 
-    @DeleteMapping("/{userTag}")
+    @DeleteMapping
     @PreAuthorize("hasAnyRole('OPERATOR', 'ADMIN')")
     fun delete(
-        @PathVariable nodeId: String,
-        @PathVariable userTag: String,
+        @PathVariable userId: String,
         @RequestHeader("If-Match") ifMatch: String,
     ): ResponseEntity<Void> {
         val expected = ifMatch.removeSurrounding("\"").toLongOrNull()
             ?: throw InvalidRequest("If-Match must contain the numeric quota version")
-        service.delete(nodeId, userTag, expected)
+        service.delete(userId, expected)
         return ResponseEntity.noContent().build()
     }
 

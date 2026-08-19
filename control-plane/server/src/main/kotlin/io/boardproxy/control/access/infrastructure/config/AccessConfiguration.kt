@@ -6,7 +6,7 @@ import io.boardproxy.control.access.application.AccessAuthenticator
 import io.boardproxy.control.access.application.PanelAccessRepository
 import io.boardproxy.control.access.application.PanelAuthService
 import io.boardproxy.control.access.application.PasswordHasher
-import io.boardproxy.control.audit.application.AuditRepository
+import io.boardproxy.control.shared.audit.AuditRepository
 import io.boardproxy.control.shared.persistence.TransactionRunner
 import org.springframework.context.annotation.Primary
 import org.springframework.beans.factory.annotation.Value

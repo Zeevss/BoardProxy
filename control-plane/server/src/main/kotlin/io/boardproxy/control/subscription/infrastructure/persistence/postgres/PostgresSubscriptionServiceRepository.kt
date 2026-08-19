@@ -2,6 +2,12 @@ package io.boardproxy.control.subscription.infrastructure.persistence.postgres
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
+import io.boardproxy.control.shared.agents.Agent
+import io.boardproxy.control.shared.agents.AgentCommandRepository
+import io.boardproxy.control.shared.agents.AgentKind
+import io.boardproxy.control.shared.agents.AgentRegistry
+import io.boardproxy.control.shared.agents.AgentStatus
+import io.boardproxy.control.shared.agents.AgentStatusRepository
 import io.boardproxy.control.shared.persistence.toSqlTimestamp
 import io.boardproxy.control.shared.security.EncryptedSecret
 import io.boardproxy.control.shared.security.SecretCipher
@@ -16,31 +22,54 @@ import org.springframework.stereotype.Repository
 import java.sql.ResultSet
 import java.time.Instant
 
-/** Настройки живут одной строкой: сервис подписок на инсталляцию ровно один. */
+/**
+ * Настройки живут одной строкой: сервис подписок на инсталляцию ровно один.
+ *
+ * Наблюдаемое состояние и перезапуск хранятся не здесь, а в общих таблицах
+ * агентов — там же, где состояние нод. HTTP-контракт `/poll` при этом не
+ * изменился, поэтому Go-сервис править не пришлось.
+ */
 @Repository
 class PostgresSubscriptionServiceRepository(
     private val jdbc: NamedParameterJdbcTemplate,
     private val cipher: SecretCipher,
     private val json: ObjectMapper,
+    private val agents: AgentRegistry,
+    private val statuses: AgentStatusRepository,
+    private val commands: AgentCommandRepository,
 ) : SubscriptionServiceRepository {
+
+    /** Строка агента заводится лениво: до первой правки настроек её может не быть. */
+    private fun agentId(): String = AGENT_ID.also {
+        if (agents.find(it) == null) {
+            agents.register(Agent(it, AgentKind.SUBSCRIPTION_SERVICE, "Сервис подписок"))
+        }
+    }
 
     override fun settings(): SubscriptionServiceSettings = requireNotNull(
         jdbc.query("SELECT * FROM subscription_service_settings WHERE id = true") { rs, _ -> settings(rs) }
             .firstOrNull(),
     ) { "subscription service settings row is missing" }
 
-    override fun status(): SubscriptionServiceStatus = requireNotNull(
-        jdbc.query("SELECT * FROM subscription_service_status WHERE id = true") { rs, _ ->
-            SubscriptionServiceStatus(
-                lastSeenAt = rs.getTimestamp("last_seen_at")?.toInstant(),
-                serviceVersion = rs.getString("service_version"),
-                appliedRevision = rs.getObject("applied_revision") as? Long,
-                recoveryWatcherReady = rs.getObject("recovery_watcher_ready") as? Boolean,
-                startedAt = rs.getTimestamp("started_at")?.toInstant(),
-                ackedRestartNonce = rs.getLong("acked_restart_nonce"),
-            )
-        }.firstOrNull(),
-    ) { "subscription service status row is missing" }
+    override fun status(): SubscriptionServiceStatus {
+        val status = statuses.find(agentId()) ?: AgentStatus(agentId = AGENT_ID)
+        val delivered = commands.pending(AGENT_ID)
+        return SubscriptionServiceStatus(
+            lastSeenAt = status.lastReportAt,
+            serviceVersion = status.agentVersion,
+            appliedRevision = status.appliedRevision.takeIf { it > 0 },
+            recoveryWatcherReady = status.details["recoveryWatcherReady"] as? Boolean,
+            startedAt = (status.details["startedAt"] as? String)?.let(Instant::parse),
+            // Ждущая команда означает, что перезапуск ещё не доставлен.
+            ackedRestartNonce = if (delivered == null) restartNonce() else delivered.nonce - 1,
+        )
+    }
+
+    private fun restartNonce(): Long = jdbc.queryForObject(
+        "SELECT COALESCE(MAX(nonce), 0) FROM agent_commands WHERE agent_id = :agentId",
+        mapOf("agentId" to AGENT_ID),
+        Long::class.java,
+    ) ?: 0
 
     override fun replace(
         update: SubscriptionServiceUpdate,
@@ -102,16 +131,7 @@ class PostgresSubscriptionServiceRepository(
         )
     }
 
-    override fun bumpRestartNonce(at: Instant): Long = requireNotNull(
-        jdbc.queryForObject(
-            """
-            UPDATE subscription_service_settings SET restart_nonce = restart_nonce + 1, updated_at = :updatedAt
-            WHERE id = true RETURNING restart_nonce
-            """.trimIndent(),
-            mapOf("updatedAt" to at.toSqlTimestamp()),
-            Long::class.java,
-        ),
-    )
+    override fun bumpRestartNonce(at: Instant): Long = commands.issue(agentId(), "restart", "operator", at)
 
     override fun attachToken(tokenId: String?, at: Instant) {
         jdbc.update(
@@ -125,26 +145,22 @@ class PostgresSubscriptionServiceRepository(
     ) { rs, _ -> rs.getString("token_id") }.firstOrNull()
 
     override fun recordReport(report: SubscriptionServiceReport, at: Instant) {
-        jdbc.update(
-            """
-            UPDATE subscription_service_status SET
-                last_seen_at = :at, service_version = :version, applied_revision = :applied,
-                recovery_watcher_ready = :watcher, started_at = :startedAt
-            WHERE id = true
-            """.trimIndent(),
-            mapOf(
-                "at" to at.toSqlTimestamp(), "version" to report.serviceVersion,
-                "applied" to report.appliedRevision, "watcher" to report.recoveryWatcherReady,
-                "startedAt" to report.startedAt?.toSqlTimestamp(),
+        statuses.record(
+            AgentStatus(
+                agentId = agentId(),
+                appliedRevision = report.appliedRevision ?: 0,
+                agentVersion = report.serviceVersion,
+                lastReportAt = at,
+                details = mapOf(
+                    "recoveryWatcherReady" to report.recoveryWatcherReady,
+                    "startedAt" to report.startedAt?.toString(),
+                ),
             ),
         )
     }
 
     override fun markRestartDelivered(nonce: Long, at: Instant) {
-        jdbc.update(
-            "UPDATE subscription_service_status SET acked_restart_nonce = :nonce WHERE id = true",
-            mapOf("nonce" to nonce),
-        )
+        commands.markDelivered(AGENT_ID, nonce, at)
     }
 
     private fun settings(rs: ResultSet) = SubscriptionServiceSettings(
@@ -157,12 +173,15 @@ class PostgresSubscriptionServiceRepository(
         recoveryPublicKey = rs.getString("recovery_public_key"),
         apps = json.readValue<List<SubscriptionApp>>(rs.getString("apps")),
         revision = rs.getLong("revision"),
-        restartNonce = rs.getLong("restart_nonce"),
+        restartNonce = restartNonce(),
         tokenIssued = rs.getString("token_id") != null,
         updatedAt = rs.getTimestamp("updated_at").toInstant(),
     )
 
     private companion object {
         const val RECOVERY_CONTEXT = "subscription-service:recovery"
+
+        /** Сервис подписок на инсталляцию один, поэтому идентификатор фиксированный. */
+        const val AGENT_ID = "subscription-service"
     }
 }

@@ -20,12 +20,12 @@ var (
 
 type Pending struct {
 	BatchID string
-	Event   *nodev1.NodeEvent
+	Event   *nodev1.ReportRequest
 }
 
 type OutboxEvent struct {
 	BatchID string
-	Event   *nodev1.NodeEvent
+	Event   *nodev1.ReportRequest
 }
 
 type encodedEvent struct {
@@ -33,10 +33,10 @@ type encodedEvent struct {
 	raw     []byte
 }
 
-// CommitCollection atomically advances collector checkpoints and appends all
-// resulting traffic events. A crash cannot create a missing interval: either
-// both changes commit or neither does.
-func (s *Store) CommitCollection(checkpoints map[string][]byte, events map[string]*nodev1.NodeEvent) error {
+// CommitCollection atomically advances collector checkpoints and appends the
+// resulting reports. A crash cannot create a missing interval: either both
+// changes commit or neither does.
+func (s *Store) CommitCollection(checkpoints map[string][]byte, events map[string]*nodev1.ReportRequest) error {
 	ordered := make([]OutboxEvent, 0, len(events))
 	for batchID, event := range events {
 		ordered = append(ordered, OutboxEvent{BatchID: batchID, Event: event})
@@ -45,8 +45,8 @@ func (s *Store) CommitCollection(checkpoints map[string][]byte, events map[strin
 	return s.CommitOrderedCollection(checkpoints, ordered)
 }
 
-// CommitOrderedCollection preserves the supplied event order in SQLite rowid.
-// This is required for reset -> authoritative snapshot delivery.
+// CommitOrderedCollection preserves the supplied order in SQLite rowid, so a
+// runtime snapshot never overtakes the events collected before it.
 func (s *Store) CommitOrderedCollection(checkpoints map[string][]byte, events []OutboxEvent) error {
 	encoded, err := encodeEvents(events)
 	if err != nil {
@@ -137,17 +137,8 @@ func encodeEvents(events []OutboxEvent) ([]encodedEvent, error) {
 	return encoded, nil
 }
 
-func outboxEventID(event *nodev1.NodeEvent) string {
-	if batch := event.GetInterfaceTraffic(); batch != nil {
-		return batch.GetBatchId()
-	}
-	if batch := event.GetUserTraffic(); batch != nil {
-		return batch.GetBatchId()
-	}
-	if batch := event.GetRuntimeEvents(); batch != nil {
-		return batch.GetBatchId()
-	}
-	return ""
+func outboxEventID(event *nodev1.ReportRequest) string {
+	return event.GetBatchId()
 }
 
 func insertOutboxEvent(tx *sql.Tx, event encodedEvent, createdAt int64) error {
@@ -188,7 +179,7 @@ func (s *Store) Pending() ([]Pending, error) {
 		if err := rows.Scan(&batchID, &raw); err != nil {
 			return nil, fmt.Errorf("localstore: scan outbox: %w", err)
 		}
-		event := new(nodev1.NodeEvent)
+		event := new(nodev1.ReportRequest)
 		if err := proto.Unmarshal(raw, event); err != nil {
 			return nil, fmt.Errorf("localstore: decode outbox event %q: %w", batchID, err)
 		}

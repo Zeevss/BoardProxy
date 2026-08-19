@@ -55,7 +55,7 @@ class SubscriptionServiceController(
     @PreAuthorize("hasRole('ADMIN')")
     fun issueToken(principal: Principal): IssuedServiceTokenResponse {
         val issued = commands.issueToken(principal.name)
-        return IssuedServiceTokenResponse(issued.token.id, issued.token.name, issued.secret)
+        return IssuedServiceTokenResponse(issued.id, "subscription-service", issued.secret)
     }
 
     @PostMapping("/restart")

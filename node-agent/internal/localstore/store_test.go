@@ -18,7 +18,7 @@ func TestCommitCollectionAndAck(t *testing.T) {
 	event := interfaceEvent("batch-1")
 	if err := store.CommitCollection(
 		map[string][]byte{"interface": []byte("checkpoint")},
-		map[string]*nodev1.NodeEvent{"batch-1": event},
+		map[string]*nodev1.ReportRequest{"batch-1": event},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestStoreSurvivesReopen(t *testing.T) {
 	if err := store.PutCheckpoint("agent", []byte("revision-7")); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CommitCollection(nil, map[string]*nodev1.NodeEvent{"batch-1": interfaceEvent("batch-1")}); err != nil {
+	if err := store.CommitCollection(nil, map[string]*nodev1.ReportRequest{"batch-1": interfaceEvent("batch-1")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -103,16 +103,17 @@ func TestCommitCollectionRollsBackOnBatchConflict(t *testing.T) {
 	store := openTestStore(t)
 	if err := store.CommitCollection(
 		map[string][]byte{"interface": []byte("before")},
-		map[string]*nodev1.NodeEvent{"batch-1": interfaceEvent("batch-1")},
+		map[string]*nodev1.ReportRequest{"batch-1": interfaceEvent("batch-1")},
 	); err != nil {
 		t.Fatal(err)
 	}
-	conflicting := &nodev1.NodeEvent{Payload: &nodev1.NodeEvent_UserTraffic{
-		UserTraffic: &nodev1.UserTrafficBatch{BatchId: "batch-1"},
-	}}
+	conflicting := &nodev1.ReportRequest{
+		BatchId:     "batch-1",
+		UserTraffic: []*nodev1.UserTrafficDelta{{UserId: "user-1"}},
+	}
 	err := store.CommitCollection(
 		map[string][]byte{"interface": []byte("must-rollback")},
-		map[string]*nodev1.NodeEvent{"batch-1": conflicting},
+		map[string]*nodev1.ReportRequest{"batch-1": conflicting},
 	)
 	if !errors.Is(err, ErrBatchConflict) {
 		t.Fatalf("error=%v, want ErrBatchConflict", err)
@@ -127,7 +128,7 @@ func TestCommitCollectionRejectsMismatchedBatchIDBeforeWrite(t *testing.T) {
 	store := openTestStore(t)
 	err := store.CommitCollection(
 		map[string][]byte{"interface": []byte("must-not-commit")},
-		map[string]*nodev1.NodeEvent{"map-key": interfaceEvent("event-key")},
+		map[string]*nodev1.ReportRequest{"map-key": interfaceEvent("event-key")},
 	)
 	if err == nil {
 		t.Fatal("expected batch id validation error")
@@ -146,7 +147,7 @@ func TestOutboxLimitRollsBackCollectorCheckpoint(t *testing.T) {
 	defer store.Close()
 	err = store.CommitCollection(
 		map[string][]byte{"interface": []byte("must-not-advance")},
-		map[string]*nodev1.NodeEvent{"batch-1": interfaceEvent("batch-1")},
+		map[string]*nodev1.ReportRequest{"batch-1": interfaceEvent("batch-1")},
 	)
 	if !errors.Is(err, ErrOutboxFull) {
 		t.Fatalf("error=%v, want ErrOutboxFull", err)
@@ -240,7 +241,7 @@ func TestConcurrentWritersAreSerialized(t *testing.T) {
 			batchID := fmt.Sprintf("batch-%02d", index)
 			if err := store.CommitCollection(
 				map[string][]byte{"interface": []byte(fmt.Sprintf("sample-%02d", index))},
-				map[string]*nodev1.NodeEvent{batchID: interfaceEvent(batchID)},
+				map[string]*nodev1.ReportRequest{batchID: interfaceEvent(batchID)},
 			); err != nil {
 				failures <- err
 			}
@@ -284,8 +285,9 @@ func openTestStore(t *testing.T) *Store {
 	return store
 }
 
-func interfaceEvent(batchID string) *nodev1.NodeEvent {
-	return &nodev1.NodeEvent{Payload: &nodev1.NodeEvent_InterfaceTraffic{
-		InterfaceTraffic: &nodev1.InterfaceTrafficBatch{BatchId: batchID},
-	}}
+func interfaceEvent(batchID string) *nodev1.ReportRequest {
+	return &nodev1.ReportRequest{
+		BatchId:          batchID,
+		InterfaceTraffic: []*nodev1.InterfaceTrafficDelta{{Interface: "eth0"}},
+	}
 }

@@ -1,36 +1,36 @@
 package io.boardproxy.control.provisioning.domain.model
 
-import java.math.BigInteger
-import java.security.KeyFactory
-import java.security.spec.NamedParameterSpec
-import java.security.spec.XECPrivateKeySpec
-import java.security.spec.XECPublicKeySpec
-import java.util.Base64
-import javax.crypto.KeyAgreement
+import io.boardproxy.control.shared.crypto.X25519
+import io.boardproxy.control.shared.crypto.base64Url
 
-fun Catalog.keylinkFor(userId: String, label: String): String? {
-    val user = users.firstOrNull { it.id == userId } ?: return null
-    val assigned = assignment.users.firstOrNull { it.userId == userId } ?: return null
-    val hashes = assigned.boardIds.mapNotNull { boardId ->
-        boards.firstOrNull { it.id == boardId && it.state.isEnabled }?.hash
-    }.sorted()
-    if (!node.state.isEnabled || !user.state.isEnabled || hashes.isEmpty() || user.privateKey == null) return null
-    val clientPrivate = KeyMaterial.decodePrivate(user.privateKey)
-    val serverPrivate = KeyMaterial.decodePrivate(node.core.server.privateKey)
-    val serverPublic = x25519Public(serverPrivate)
-    val payload = Base64.getUrlEncoder().withoutPadding().encodeToString(clientPrivate + serverPublic)
+/**
+ * Собирает `bproxy://` ссылку пользователя на конкретной ноде.
+ *
+ * Ссылка нигде не хранится: она всегда выводится из ключей, поэтому отзыв
+ * пользователя или борда действует немедленно. null означает, что рабочей
+ * ссылки сейчас не существует — нода или пользователь выключены, квота
+ * исчерпана, доступных бордов нет, либо приватным ключом владеем не мы.
+ *
+ * [boards] — борды ноды, на которые у пользователя есть грант; их состояние
+ * проверяется здесь, чтобы вызывающему не приходилось повторять фильтр.
+ */
+fun keylinkFor(
+    node: Node,
+    placement: UserOnNode,
+    boards: List<Board>,
+    label: String,
+): String? {
+    if (!node.state.isEnabled || !placement.enabled) return null
+    val privateKey = placement.user.privateKey ?: return null
+
+    val hashes = boards
+        .filter { it.nodeId == node.id && it.id in placement.boardIds && it.state.isEnabled }
+        .map(Board::hash)
+        .sorted()
+    if (hashes.isEmpty()) return null
+
+    val clientPrivate = KeyMaterial.decodePrivate(privateKey)
+    val serverPublic = X25519.publicKeyOf(KeyMaterial.decodePrivate(node.core.server.privateKey))
+    val payload = (clientPrivate + serverPublic).base64Url()
     return "bproxy://$payload@${hashes.joinToString(",")}#$label"
-}
-
-private fun x25519Public(privateKey: ByteArray): ByteArray {
-    val parameters = NamedParameterSpec.X25519
-    val decodedPrivate = KeyFactory.getInstance("X25519")
-        .generatePrivate(XECPrivateKeySpec(parameters, privateKey))
-    val basePoint = KeyFactory.getInstance("X25519")
-        .generatePublic(XECPublicKeySpec(parameters, BigInteger.valueOf(9)))
-    return KeyAgreement.getInstance("X25519").run {
-        init(decodedPrivate)
-        doPhase(basePoint, true)
-        generateSecret()
-    }
 }

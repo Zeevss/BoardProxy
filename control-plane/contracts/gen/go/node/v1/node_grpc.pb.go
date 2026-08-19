@@ -19,18 +19,31 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NodeControlService_Enroll_FullMethodName  = "/bproxy.node.v1.NodeControlService/Enroll"
-	NodeControlService_Renew_FullMethodName   = "/bproxy.node.v1.NodeControlService/Renew"
-	NodeControlService_Connect_FullMethodName = "/bproxy.node.v1.NodeControlService/Connect"
+	NodeControlService_Enroll_FullMethodName      = "/bproxy.node.v1.NodeControlService/Enroll"
+	NodeControlService_Renew_FullMethodName       = "/bproxy.node.v1.NodeControlService/Renew"
+	NodeControlService_Watch_FullMethodName       = "/bproxy.node.v1.NodeControlService/Watch"
+	NodeControlService_FetchConfig_FullMethodName = "/bproxy.node.v1.NodeControlService/FetchConfig"
+	NodeControlService_Report_FullMethodName      = "/bproxy.node.v1.NodeControlService/Report"
 )
 
 // NodeControlServiceClient is the client API for NodeControlService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// The hub never pushes configuration payloads. It only tells the node which
+// revision it should be running; the node decides when to fetch and retries on
+// its own. That keeps the hub side of a session completely stateless: there is
+// no per-session bookkeeping to lose, and therefore no lease or fencing token.
 type NodeControlServiceClient interface {
 	Enroll(ctx context.Context, in *EnrollRequest, opts ...grpc.CallOption) (*EnrollResponse, error)
 	Renew(ctx context.Context, in *RenewRequest, opts ...grpc.CallOption) (*EnrollResponse, error)
-	Connect(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[NodeEvent, HubCommand], error)
+	// Wake-up signal only. Carries a revision number, never a payload.
+	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConfigNotice], error)
+	// Idempotent: the node calls it whenever its applied revision differs from
+	// the announced one, and also every 30s as a reconcile.
+	FetchConfig(ctx context.Context, in *FetchConfigRequest, opts ...grpc.CallOption) (*ConfigDocument, error)
+	// Everything the node reports. Unary and idempotent by batch_id.
+	Report(ctx context.Context, in *ReportRequest, opts ...grpc.CallOption) (*ReportResponse, error)
 }
 
 type nodeControlServiceClient struct {
@@ -61,26 +74,63 @@ func (c *nodeControlServiceClient) Renew(ctx context.Context, in *RenewRequest, 
 	return out, nil
 }
 
-func (c *nodeControlServiceClient) Connect(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[NodeEvent, HubCommand], error) {
+func (c *nodeControlServiceClient) Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConfigNotice], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &NodeControlService_ServiceDesc.Streams[0], NodeControlService_Connect_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &NodeControlService_ServiceDesc.Streams[0], NodeControlService_Watch_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[NodeEvent, HubCommand]{ClientStream: stream}
+	x := &grpc.GenericClientStream[WatchRequest, ConfigNotice]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type NodeControlService_ConnectClient = grpc.BidiStreamingClient[NodeEvent, HubCommand]
+type NodeControlService_WatchClient = grpc.ServerStreamingClient[ConfigNotice]
+
+func (c *nodeControlServiceClient) FetchConfig(ctx context.Context, in *FetchConfigRequest, opts ...grpc.CallOption) (*ConfigDocument, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConfigDocument)
+	err := c.cc.Invoke(ctx, NodeControlService_FetchConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeControlServiceClient) Report(ctx context.Context, in *ReportRequest, opts ...grpc.CallOption) (*ReportResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportResponse)
+	err := c.cc.Invoke(ctx, NodeControlService_Report_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 // NodeControlServiceServer is the server API for NodeControlService service.
 // All implementations must embed UnimplementedNodeControlServiceServer
 // for forward compatibility.
+//
+// The hub never pushes configuration payloads. It only tells the node which
+// revision it should be running; the node decides when to fetch and retries on
+// its own. That keeps the hub side of a session completely stateless: there is
+// no per-session bookkeeping to lose, and therefore no lease or fencing token.
 type NodeControlServiceServer interface {
 	Enroll(context.Context, *EnrollRequest) (*EnrollResponse, error)
 	Renew(context.Context, *RenewRequest) (*EnrollResponse, error)
-	Connect(grpc.BidiStreamingServer[NodeEvent, HubCommand]) error
+	// Wake-up signal only. Carries a revision number, never a payload.
+	Watch(*WatchRequest, grpc.ServerStreamingServer[ConfigNotice]) error
+	// Idempotent: the node calls it whenever its applied revision differs from
+	// the announced one, and also every 30s as a reconcile.
+	FetchConfig(context.Context, *FetchConfigRequest) (*ConfigDocument, error)
+	// Everything the node reports. Unary and idempotent by batch_id.
+	Report(context.Context, *ReportRequest) (*ReportResponse, error)
 	mustEmbedUnimplementedNodeControlServiceServer()
 }
 
@@ -97,8 +147,14 @@ func (UnimplementedNodeControlServiceServer) Enroll(context.Context, *EnrollRequ
 func (UnimplementedNodeControlServiceServer) Renew(context.Context, *RenewRequest) (*EnrollResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Renew not implemented")
 }
-func (UnimplementedNodeControlServiceServer) Connect(grpc.BidiStreamingServer[NodeEvent, HubCommand]) error {
-	return status.Error(codes.Unimplemented, "method Connect not implemented")
+func (UnimplementedNodeControlServiceServer) Watch(*WatchRequest, grpc.ServerStreamingServer[ConfigNotice]) error {
+	return status.Error(codes.Unimplemented, "method Watch not implemented")
+}
+func (UnimplementedNodeControlServiceServer) FetchConfig(context.Context, *FetchConfigRequest) (*ConfigDocument, error) {
+	return nil, status.Error(codes.Unimplemented, "method FetchConfig not implemented")
+}
+func (UnimplementedNodeControlServiceServer) Report(context.Context, *ReportRequest) (*ReportResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Report not implemented")
 }
 func (UnimplementedNodeControlServiceServer) mustEmbedUnimplementedNodeControlServiceServer() {}
 func (UnimplementedNodeControlServiceServer) testEmbeddedByValue()                            {}
@@ -157,12 +213,52 @@ func _NodeControlService_Renew_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NodeControlService_Connect_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(NodeControlServiceServer).Connect(&grpc.GenericServerStream[NodeEvent, HubCommand]{ServerStream: stream})
+func _NodeControlService_Watch_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(NodeControlServiceServer).Watch(m, &grpc.GenericServerStream[WatchRequest, ConfigNotice]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type NodeControlService_ConnectServer = grpc.BidiStreamingServer[NodeEvent, HubCommand]
+type NodeControlService_WatchServer = grpc.ServerStreamingServer[ConfigNotice]
+
+func _NodeControlService_FetchConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FetchConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeControlServiceServer).FetchConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeControlService_FetchConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeControlServiceServer).FetchConfig(ctx, req.(*FetchConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeControlService_Report_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeControlServiceServer).Report(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeControlService_Report_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeControlServiceServer).Report(ctx, req.(*ReportRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 // NodeControlService_ServiceDesc is the grpc.ServiceDesc for NodeControlService service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -179,13 +275,20 @@ var NodeControlService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Renew",
 			Handler:    _NodeControlService_Renew_Handler,
 		},
+		{
+			MethodName: "FetchConfig",
+			Handler:    _NodeControlService_FetchConfig_Handler,
+		},
+		{
+			MethodName: "Report",
+			Handler:    _NodeControlService_Report_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
-			StreamName:    "Connect",
-			Handler:       _NodeControlService_Connect_Handler,
+			StreamName:    "Watch",
+			Handler:       _NodeControlService_Watch_Handler,
 			ServerStreams: true,
-			ClientStreams: true,
 		},
 	},
 	Metadata: "node/v1/node.proto",

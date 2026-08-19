@@ -8,9 +8,13 @@ enum class QuotaPeriod { DAILY, WEEKLY, MONTHLY, NONE }
 /** ALERT только уведомляет, RESET начинает отсчёт заново, DISABLE выключает пользователя. */
 enum class QuotaAction { ALERT, RESET, DISABLE }
 
+/**
+ * Квота флотовая: лимит у пользователя один, а расход суммируется по всем нодам,
+ * где он размещён. Прежде квота была per-node, и панель складывала лимиты, чтобы
+ * показать одно число.
+ */
 data class TrafficQuota(
-    val nodeId: String,
-    val userTag: String,
+    val userId: String,
     val period: QuotaPeriod,
     val limitBytes: Long,
     val action: QuotaAction,
@@ -21,10 +25,19 @@ data class TrafficQuota(
     val counterStart: Instant? = null,
 ) {
     init {
-        require(nodeId.isNotBlank() && userTag.isNotBlank()) { "quota identity is required" }
+        require(userId.isNotBlank()) { "quota identity is required" }
         require(limitBytes > 0 && version > 0) { "quota limit and version must be positive" }
     }
 }
+
+/** Состояние текущего периода. [exceeded] — вход компилятора конфигурации. */
+data class TrafficQuotaState(
+    val userId: String,
+    val periodStart: Instant,
+    val usedBytes: Long,
+    val exceeded: Boolean,
+    val changedAt: Instant,
+)
 
 data class TrafficQuotaUsage(
     val quota: TrafficQuota,
@@ -32,6 +45,4 @@ data class TrafficQuotaUsage(
     val periodEnd: Instant,
     val usedBytes: Long,
     val exceeded: Boolean,
-    val exceededAt: Instant?,
-    val enforcedAt: Instant?,
 )

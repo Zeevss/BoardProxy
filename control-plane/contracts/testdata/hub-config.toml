@@ -1,0 +1,55 @@
+version = 1
+
+[server]
+  private_key = "base64:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+  idle_timeout = "1m30s"
+  allow_private_egress = false
+
+[transport]
+  window = 0
+  max_frame_payload = 4194304
+  stream_window = 1048576
+  max_stream_window = 33554432
+  ack_timeout = "6s"
+  coalesce_target = 0
+  stream_idle_timeout = "0s"
+
+[management]
+  grpc_listen = "unix:///run/bproxy/control.sock"
+
+[observability]
+  enabled = true
+  log_level = "info"
+
+[[boards]]
+  tag = "alpha"
+  name = "Alpha"
+  hash = "hash-a"
+  api_base = "https://example.test/api"
+  enabled = true
+  max_lanes = 2
+
+[[boards]]
+  tag = "zeta"
+  name = "Zeta"
+  hash = "hash-z"
+  enabled = true
+  max_lanes = 3
+
+[[users]]
+  tag = "alice"
+  name = "Alice"
+  private_key = "base64:AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM="
+  enabled = true
+  boards = ["alpha", "zeta"]
+  max_sessions = 2
+  max_lanes = 2
+
+[[users]]
+  tag = "zoe"
+  name = "Zoe"
+  private_key = "base64:BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ="
+  enabled = true
+  boards = ["zeta"]
+  max_sessions = 0
+  max_lanes = 2

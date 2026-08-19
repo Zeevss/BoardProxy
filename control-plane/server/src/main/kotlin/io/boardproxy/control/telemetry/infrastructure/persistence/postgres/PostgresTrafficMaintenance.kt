@@ -15,12 +15,12 @@ class PostgresTrafficMaintenance(private val jdbc: NamedParameterJdbcTemplate) :
         val interfaceRows = rebuild(
             "interface", "interface_traffic_deltas", "delta.interface_name", parameters,
         )
-        val userRows = rebuild("user", "user_traffic_deltas", "delta.user_tag", parameters)
+        val userRows = rebuild("user", "user_traffic_deltas", "delta.user_id", parameters)
         return interfaceRows + userRows
     }
 
     override fun deleteRawBefore(cutoff: Instant): Int = jdbc.update(
-        "DELETE FROM traffic_batches WHERE interval_end < :cutoff",
+        "DELETE FROM agent_reports WHERE received_at < :cutoff",
         mapOf("cutoff" to cutoff.toSqlTimestamp()),
     )
 
@@ -39,12 +39,11 @@ class PostgresTrafficMaintenance(private val jdbc: NamedParameterJdbcTemplate) :
         INSERT INTO traffic_hourly_rollups (
             node_id, traffic_kind, subject, bucket_start, rx_bytes, tx_bytes, updated_at
         )
-        SELECT delta.node_id, '$kind', $subject, date_trunc('hour', batch.interval_end),
+        SELECT delta.agent_id, '$kind', $subject, date_trunc('hour', delta.observed_at),
                SUM(delta.rx_bytes), SUM(delta.tx_bytes), now()
         FROM $table delta
-        JOIN traffic_batches batch USING (node_id, batch_id)
-        WHERE batch.interval_end >= :from AND batch.interval_end < :to
-        GROUP BY delta.node_id, $subject, date_trunc('hour', batch.interval_end)
+        WHERE delta.observed_at >= :from AND delta.observed_at < :to
+        GROUP BY delta.agent_id, $subject, date_trunc('hour', delta.observed_at)
         ON CONFLICT (node_id, traffic_kind, subject, bucket_start) DO UPDATE SET
             rx_bytes = EXCLUDED.rx_bytes,
             tx_bytes = EXCLUDED.tx_bytes,

@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.SmartLifecycle
 import org.springframework.stereotype.Component
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 @Component
@@ -37,6 +38,10 @@ class NodeGrpcServer(
             .build()
         server = NettyServerBuilder.forPort(port)
             .sslContext(ssl)
+            // Обработчики блокирующие: Watch ждёт сигнала, остальные — JDBC.
+            // На виртуальных потоках это стоит столько же, сколько корутины,
+            // и не требует ни одной из них.
+            .executor(Executors.newVirtualThreadPerTaskExecutor())
             .addService(ServerInterceptors.intercept(service, NodeIdentityInterceptor(connectionPolicy)))
             .build()
             .start()

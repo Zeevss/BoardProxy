@@ -17,10 +17,9 @@ class DistributedTrafficQuotaNotifier(
             events.publish(
                 ControlEvent(
                     "traffic.quota.exceeded",
-                    "${usage.quota.nodeId}:${usage.quota.userTag}",
+                    "user:${usage.quota.userId}",
                     mapOf(
-                        "nodeId" to usage.quota.nodeId,
-                        "userTag" to usage.quota.userTag,
+                        "userId" to usage.quota.userId,
                         "usedBytes" to usage.usedBytes,
                         "limitBytes" to usage.quota.limitBytes,
                         "action" to usage.quota.action.name.lowercase(),

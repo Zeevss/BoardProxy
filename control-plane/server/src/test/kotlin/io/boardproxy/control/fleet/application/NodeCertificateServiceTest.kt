@@ -1,7 +1,7 @@
 package io.boardproxy.control.fleet.application
 
-import io.boardproxy.control.audit.application.AuditRepository
-import io.boardproxy.control.audit.domain.AuditEvent
+import io.boardproxy.control.shared.audit.AuditRepository
+import io.boardproxy.control.shared.audit.AuditEvent
 import io.boardproxy.control.fleet.domain.IssuedCertificate
 import io.boardproxy.control.fleet.domain.NodeCertificate
 import io.boardproxy.control.shared.persistence.TransactionRunner

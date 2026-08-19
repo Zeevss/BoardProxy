@@ -5,15 +5,28 @@ import java.time.Instant
 data class AppliedConfig(
     val nodeId: String,
     val revision: Long,
-    val catalogVersion: Long,
     /** SHA-256 полного скомпилированного TOML — того, что реально применяет нода. */
     val configSha256: String,
     val toml: String,
-    val createdAt: Instant,
+    val updatedAt: Instant,
 )
 
 fun interface AppliedConfigQueries {
     fun latest(nodeId: String): AppliedConfig?
+}
+
+/** Текущая конфигурация ноды для панели — всегда после вырезания секретов. */
+class AppliedConfigService(private val configs: DesiredConfigRepository) : AppliedConfigQueries {
+    override fun latest(nodeId: String): AppliedConfig? {
+        val config = configs.find(nodeId) ?: return null
+        return AppliedConfig(
+            nodeId = config.nodeId,
+            revision = config.revision,
+            configSha256 = config.configSha256,
+            toml = CoreConfigRedaction.redact(config.configToml.toString(Charsets.UTF_8)),
+            updatedAt = config.updatedAt,
+        )
+    }
 }
 
 /**

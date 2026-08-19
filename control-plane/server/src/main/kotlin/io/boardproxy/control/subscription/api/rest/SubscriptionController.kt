@@ -4,7 +4,6 @@ import io.boardproxy.control.shared.errors.InvalidRequest
 import io.boardproxy.control.subscription.application.IssuedSubscription
 import io.boardproxy.control.subscription.application.SubscriptionCommands
 import io.boardproxy.control.subscription.application.SubscriptionDraft
-import io.boardproxy.control.subscription.application.SubscriptionKeyDraft
 import io.boardproxy.control.subscription.application.SubscriptionLinkBuilder
 import io.boardproxy.control.subscription.application.SubscriptionQueries
 import io.boardproxy.control.subscription.application.SubscriptionReplacement
@@ -14,6 +13,7 @@ import io.boardproxy.control.subscription.domain.SubscriptionState
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import java.security.Principal
 import java.time.Instant
@@ -38,7 +39,7 @@ class SubscriptionController(
         @RequestBody request: CreateSubscriptionRequest,
         principal: Principal,
     ): ResponseEntity<IssuedSubscriptionResponse> {
-        val issued = commands.create(request.toDraft(), principal.name)
+        val issued = commands.create(SubscriptionDraft(request.name, request.userId), principal.name)
         return ResponseEntity.status(HttpStatus.CREATED)
             .eTag(issued.subscription.version.toString())
             .body(issued.toResponse(links))
@@ -46,7 +47,14 @@ class SubscriptionController(
 
     @GetMapping
     @PreAuthorize("hasAnyRole('VIEWER', 'OPERATOR', 'ADMIN')")
-    fun list(): List<SubscriptionResponse> = queries.list().map(Subscription::toResponse)
+    fun list(
+        @RequestParam(required = false) userId: String?,
+        @RequestParam(defaultValue = "0") offset: Int,
+        @RequestParam(defaultValue = "50") limit: Int,
+    ): SubscriptionPageResponse {
+        val page = queries.list(userId, offset, limit.coerceIn(1, MAXIMUM_PAGE))
+        return SubscriptionPageResponse(page.items.map(Subscription::toResponse), page.offset, page.limit, page.total)
+    }
 
     @GetMapping("/{id}")
     @PreAuthorize("hasAnyRole('VIEWER', 'OPERATOR', 'ADMIN')")
@@ -63,17 +71,25 @@ class SubscriptionController(
         @RequestBody request: ReplaceSubscriptionRequest,
         principal: Principal,
     ): ResponseEntity<SubscriptionResponse> {
-        val version = ifMatch.removeSurrounding("\"").toLongOrNull()
-            ?: throw InvalidRequest("If-Match must contain the numeric subscription version")
-        val updated = commands.replace(id, version, request.toReplacement(), principal.name)
+        val updated = commands.replace(id, version(ifMatch), request.toReplacement(), principal.name)
         return ResponseEntity.ok().eTag(updated.version.toString()).body(updated.toResponse())
+    }
+
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('OPERATOR', 'ADMIN')")
+    fun delete(
+        @PathVariable id: String,
+        @RequestHeader("If-Match") ifMatch: String,
+        principal: Principal,
+    ): ResponseEntity<Void> {
+        commands.delete(id, version(ifMatch), principal.name)
+        return ResponseEntity.noContent().build()
     }
 
     /** Постоянная ссылка подписки: секреты хранятся зашифрованными и восстанавливаются по запросу. */
     @GetMapping("/{id}/link")
     @PreAuthorize("hasAnyRole('OPERATOR', 'ADMIN')")
-    fun link(@PathVariable id: String): SubscriptionLinkResponse =
-        SubscriptionLinkResponse(queries.link(id))
+    fun link(@PathVariable id: String): SubscriptionLinkResponse = SubscriptionLinkResponse(queries.link(id))
 
     /** Выпускает новую ссылку и немедленно обесценивает прежнюю. */
     @PostMapping("/{id}/rotate")
@@ -83,9 +99,7 @@ class SubscriptionController(
         @RequestHeader("If-Match") ifMatch: String,
         principal: Principal,
     ): ResponseEntity<IssuedSubscriptionResponse> {
-        val version = ifMatch.removeSurrounding("\"").toLongOrNull()
-            ?: throw InvalidRequest("If-Match must contain the numeric subscription version")
-        val issued = commands.rotate(id, version, principal.name)
+        val issued = commands.rotate(id, version(ifMatch), principal.name)
         return ResponseEntity.ok().eTag(issued.subscription.version.toString()).body(issued.toResponse(links))
     }
 
@@ -93,30 +107,35 @@ class SubscriptionController(
     @PreAuthorize("hasAnyRole('SUBSCRIBER', 'ADMIN')")
     fun resolve(@RequestBody request: ResolveSubscriptionRequest): SubscriptionSnapshot =
         queries.resolve(request.token, request.recoveryPublicKey)
+
+    private fun version(ifMatch: String): Long = ifMatch.removeSurrounding("\"").toLongOrNull()
+        ?: throw InvalidRequest("If-Match must contain the numeric subscription version")
+
+    private companion object {
+        const val MAXIMUM_PAGE = 200
+    }
 }
 
-/** url = null, когда доставка подписками выключена или у подписки нет сохранённых секретов. */
+/** url = null, когда доставка подписками выключена. */
 data class SubscriptionLinkResponse(val url: String?)
 
-data class SubscriptionKeyRequest(val id: String, val name: String, val nodeId: String, val userId: String)
-data class CreateSubscriptionRequest(val name: String, val keys: List<SubscriptionKeyRequest>)
-data class ReplaceSubscriptionRequest(val name: String, val state: String, val keys: List<SubscriptionKeyRequest>)
+data class CreateSubscriptionRequest(val name: String, val userId: String)
+data class ReplaceSubscriptionRequest(val name: String, val state: String)
 data class ResolveSubscriptionRequest(val token: String? = null, val recoveryPublicKey: String? = null)
 
-data class SubscriptionKeyResponse(
-    val id: String,
-    val name: String,
-    val nodeId: String,
-    val userId: String,
-    val position: Int,
+data class SubscriptionPageResponse(
+    val items: List<SubscriptionResponse>,
+    val offset: Int,
+    val limit: Int,
+    val total: Long,
 )
 
 data class SubscriptionResponse(
     val id: String,
     val name: String,
+    val userId: String,
     val recoveryClientPublicKey: String,
     val state: String,
-    val keys: List<SubscriptionKeyResponse>,
     val version: Long,
     val createdAt: Instant,
     val updatedAt: Instant,
@@ -130,16 +149,11 @@ data class IssuedSubscriptionResponse(
     val url: String?,
 )
 
-private fun CreateSubscriptionRequest.toDraft() = SubscriptionDraft(name, keys.map(SubscriptionKeyRequest::toDraft))
-
 private fun ReplaceSubscriptionRequest.toReplacement() = SubscriptionReplacement(
     name = name,
     state = runCatching { SubscriptionState.valueOf(state.uppercase()) }
         .getOrElse { throw InvalidRequest("subscription state must be enabled, disabled, or revoked") },
-    keys = keys.map(SubscriptionKeyRequest::toDraft),
 )
-
-private fun SubscriptionKeyRequest.toDraft() = SubscriptionKeyDraft(id, name, nodeId, userId)
 
 private fun IssuedSubscription.toResponse(links: SubscriptionLinkBuilder) = IssuedSubscriptionResponse(
     subscription.toResponse(), token, recoveryClientPrivateKey,
@@ -147,10 +161,6 @@ private fun IssuedSubscription.toResponse(links: SubscriptionLinkBuilder) = Issu
 )
 
 private fun Subscription.toResponse() = SubscriptionResponse(
-    id = id, name = name, recoveryClientPublicKey = recoveryPublicKey,
-    state = state.name.lowercase(),
-    keys = keys.sortedBy { it.position }.map {
-        SubscriptionKeyResponse(it.id, it.name, it.nodeId, it.userId, it.position)
-    },
-    version = version, createdAt = createdAt, updatedAt = updatedAt,
+    id = id, name = name, userId = userId, recoveryClientPublicKey = recoveryPublicKey,
+    state = state.name.lowercase(), version = version, createdAt = createdAt, updatedAt = updatedAt,
 )

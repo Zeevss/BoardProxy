@@ -22,113 +22,6 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type ResourceKind int32
-
-const (
-	ResourceKind_RESOURCE_KIND_UNSPECIFIED ResourceKind = 0
-	ResourceKind_RESOURCE_KIND_USER        ResourceKind = 1
-	ResourceKind_RESOURCE_KIND_BOARD       ResourceKind = 2
-)
-
-// Enum value maps for ResourceKind.
-var (
-	ResourceKind_name = map[int32]string{
-		0: "RESOURCE_KIND_UNSPECIFIED",
-		1: "RESOURCE_KIND_USER",
-		2: "RESOURCE_KIND_BOARD",
-	}
-	ResourceKind_value = map[string]int32{
-		"RESOURCE_KIND_UNSPECIFIED": 0,
-		"RESOURCE_KIND_USER":        1,
-		"RESOURCE_KIND_BOARD":       2,
-	}
-)
-
-func (x ResourceKind) Enum() *ResourceKind {
-	p := new(ResourceKind)
-	*p = x
-	return p
-}
-
-func (x ResourceKind) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (ResourceKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_node_v1_node_proto_enumTypes[0].Descriptor()
-}
-
-func (ResourceKind) Type() protoreflect.EnumType {
-	return &file_node_v1_node_proto_enumTypes[0]
-}
-
-func (x ResourceKind) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use ResourceKind.Descriptor instead.
-func (ResourceKind) EnumDescriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{0}
-}
-
-type ResourceOperation int32
-
-const (
-	ResourceOperation_RESOURCE_OPERATION_UNSPECIFIED ResourceOperation = 0
-	ResourceOperation_RESOURCE_OPERATION_ADDED       ResourceOperation = 1
-	ResourceOperation_RESOURCE_OPERATION_UPDATED     ResourceOperation = 2
-	ResourceOperation_RESOURCE_OPERATION_ENABLED     ResourceOperation = 3
-	ResourceOperation_RESOURCE_OPERATION_DISABLED    ResourceOperation = 4
-	ResourceOperation_RESOURCE_OPERATION_REMOVED     ResourceOperation = 5
-)
-
-// Enum value maps for ResourceOperation.
-var (
-	ResourceOperation_name = map[int32]string{
-		0: "RESOURCE_OPERATION_UNSPECIFIED",
-		1: "RESOURCE_OPERATION_ADDED",
-		2: "RESOURCE_OPERATION_UPDATED",
-		3: "RESOURCE_OPERATION_ENABLED",
-		4: "RESOURCE_OPERATION_DISABLED",
-		5: "RESOURCE_OPERATION_REMOVED",
-	}
-	ResourceOperation_value = map[string]int32{
-		"RESOURCE_OPERATION_UNSPECIFIED": 0,
-		"RESOURCE_OPERATION_ADDED":       1,
-		"RESOURCE_OPERATION_UPDATED":     2,
-		"RESOURCE_OPERATION_ENABLED":     3,
-		"RESOURCE_OPERATION_DISABLED":    4,
-		"RESOURCE_OPERATION_REMOVED":     5,
-	}
-)
-
-func (x ResourceOperation) Enum() *ResourceOperation {
-	p := new(ResourceOperation)
-	*p = x
-	return p
-}
-
-func (x ResourceOperation) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (ResourceOperation) Descriptor() protoreflect.EnumDescriptor {
-	return file_node_v1_node_proto_enumTypes[1].Descriptor()
-}
-
-func (ResourceOperation) Type() protoreflect.EnumType {
-	return &file_node_v1_node_proto_enumTypes[1]
-}
-
-func (x ResourceOperation) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use ResourceOperation.Descriptor instead.
-func (ResourceOperation) EnumDescriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{1}
-}
-
 type EnrollRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
@@ -309,35 +202,28 @@ func (x *RenewRequest) GetAgentVersion() string {
 	return ""
 }
 
-type NodeEvent struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to Payload:
-	//
-	//	*NodeEvent_Hello
-	//	*NodeEvent_ApplyResult
-	//	*NodeEvent_Heartbeat
-	//	*NodeEvent_InterfaceTraffic
-	//	*NodeEvent_UserTraffic
-	//	*NodeEvent_RuntimeEvents
-	Payload       isNodeEvent_Payload `protobuf_oneof:"payload"`
+type WatchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	AgentVersion  string                 `protobuf:"bytes,2,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *NodeEvent) Reset() {
-	*x = NodeEvent{}
+func (x *WatchRequest) Reset() {
+	*x = WatchRequest{}
 	mi := &file_node_v1_node_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *NodeEvent) String() string {
+func (x *WatchRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*NodeEvent) ProtoMessage() {}
+func (*WatchRequest) ProtoMessage() {}
 
-func (x *NodeEvent) ProtoReflect() protoreflect.Message {
+func (x *WatchRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_node_v1_node_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -349,318 +235,48 @@ func (x *NodeEvent) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use NodeEvent.ProtoReflect.Descriptor instead.
-func (*NodeEvent) Descriptor() ([]byte, []int) {
+// Deprecated: Use WatchRequest.ProtoReflect.Descriptor instead.
+func (*WatchRequest) Descriptor() ([]byte, []int) {
 	return file_node_v1_node_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *NodeEvent) GetPayload() isNodeEvent_Payload {
-	if x != nil {
-		return x.Payload
-	}
-	return nil
-}
-
-func (x *NodeEvent) GetHello() *NodeHello {
-	if x != nil {
-		if x, ok := x.Payload.(*NodeEvent_Hello); ok {
-			return x.Hello
-		}
-	}
-	return nil
-}
-
-func (x *NodeEvent) GetApplyResult() *ApplyResult {
-	if x != nil {
-		if x, ok := x.Payload.(*NodeEvent_ApplyResult); ok {
-			return x.ApplyResult
-		}
-	}
-	return nil
-}
-
-func (x *NodeEvent) GetHeartbeat() *NodeHeartbeat {
-	if x != nil {
-		if x, ok := x.Payload.(*NodeEvent_Heartbeat); ok {
-			return x.Heartbeat
-		}
-	}
-	return nil
-}
-
-func (x *NodeEvent) GetInterfaceTraffic() *InterfaceTrafficBatch {
-	if x != nil {
-		if x, ok := x.Payload.(*NodeEvent_InterfaceTraffic); ok {
-			return x.InterfaceTraffic
-		}
-	}
-	return nil
-}
-
-func (x *NodeEvent) GetUserTraffic() *UserTrafficBatch {
-	if x != nil {
-		if x, ok := x.Payload.(*NodeEvent_UserTraffic); ok {
-			return x.UserTraffic
-		}
-	}
-	return nil
-}
-
-func (x *NodeEvent) GetRuntimeEvents() *RuntimeEventBatch {
-	if x != nil {
-		if x, ok := x.Payload.(*NodeEvent_RuntimeEvents); ok {
-			return x.RuntimeEvents
-		}
-	}
-	return nil
-}
-
-type isNodeEvent_Payload interface {
-	isNodeEvent_Payload()
-}
-
-type NodeEvent_Hello struct {
-	Hello *NodeHello `protobuf:"bytes,1,opt,name=hello,proto3,oneof"`
-}
-
-type NodeEvent_ApplyResult struct {
-	ApplyResult *ApplyResult `protobuf:"bytes,2,opt,name=apply_result,json=applyResult,proto3,oneof"`
-}
-
-type NodeEvent_Heartbeat struct {
-	Heartbeat *NodeHeartbeat `protobuf:"bytes,3,opt,name=heartbeat,proto3,oneof"`
-}
-
-type NodeEvent_InterfaceTraffic struct {
-	InterfaceTraffic *InterfaceTrafficBatch `protobuf:"bytes,4,opt,name=interface_traffic,json=interfaceTraffic,proto3,oneof"`
-}
-
-type NodeEvent_UserTraffic struct {
-	UserTraffic *UserTrafficBatch `protobuf:"bytes,5,opt,name=user_traffic,json=userTraffic,proto3,oneof"`
-}
-
-type NodeEvent_RuntimeEvents struct {
-	RuntimeEvents *RuntimeEventBatch `protobuf:"bytes,6,opt,name=runtime_events,json=runtimeEvents,proto3,oneof"`
-}
-
-func (*NodeEvent_Hello) isNodeEvent_Payload() {}
-
-func (*NodeEvent_ApplyResult) isNodeEvent_Payload() {}
-
-func (*NodeEvent_Heartbeat) isNodeEvent_Payload() {}
-
-func (*NodeEvent_InterfaceTraffic) isNodeEvent_Payload() {}
-
-func (*NodeEvent_UserTraffic) isNodeEvent_Payload() {}
-
-func (*NodeEvent_RuntimeEvents) isNodeEvent_Payload() {}
-
-type HubCommand struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to Payload:
-	//
-	//	*HubCommand_DesiredState
-	//	*HubCommand_TrafficAck
-	//	*HubCommand_RuntimeEventAck
-	Payload       isHubCommand_Payload `protobuf_oneof:"payload"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *HubCommand) Reset() {
-	*x = HubCommand{}
-	mi := &file_node_v1_node_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *HubCommand) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*HubCommand) ProtoMessage() {}
-
-func (x *HubCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use HubCommand.ProtoReflect.Descriptor instead.
-func (*HubCommand) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *HubCommand) GetPayload() isHubCommand_Payload {
-	if x != nil {
-		return x.Payload
-	}
-	return nil
-}
-
-func (x *HubCommand) GetDesiredState() *DesiredState {
-	if x != nil {
-		if x, ok := x.Payload.(*HubCommand_DesiredState); ok {
-			return x.DesiredState
-		}
-	}
-	return nil
-}
-
-func (x *HubCommand) GetTrafficAck() *TrafficAck {
-	if x != nil {
-		if x, ok := x.Payload.(*HubCommand_TrafficAck); ok {
-			return x.TrafficAck
-		}
-	}
-	return nil
-}
-
-func (x *HubCommand) GetRuntimeEventAck() *RuntimeEventAck {
-	if x != nil {
-		if x, ok := x.Payload.(*HubCommand_RuntimeEventAck); ok {
-			return x.RuntimeEventAck
-		}
-	}
-	return nil
-}
-
-type isHubCommand_Payload interface {
-	isHubCommand_Payload()
-}
-
-type HubCommand_DesiredState struct {
-	DesiredState *DesiredState `protobuf:"bytes,1,opt,name=desired_state,json=desiredState,proto3,oneof"`
-}
-
-type HubCommand_TrafficAck struct {
-	TrafficAck *TrafficAck `protobuf:"bytes,2,opt,name=traffic_ack,json=trafficAck,proto3,oneof"`
-}
-
-type HubCommand_RuntimeEventAck struct {
-	RuntimeEventAck *RuntimeEventAck `protobuf:"bytes,3,opt,name=runtime_event_ack,json=runtimeEventAck,proto3,oneof"`
-}
-
-func (*HubCommand_DesiredState) isHubCommand_Payload() {}
-
-func (*HubCommand_TrafficAck) isHubCommand_Payload() {}
-
-func (*HubCommand_RuntimeEventAck) isHubCommand_Payload() {}
-
-type NodeHello struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	NodeId          string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	BootId          string                 `protobuf:"bytes,2,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
-	AgentVersion    string                 `protobuf:"bytes,3,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
-	CoreVersion     string                 `protobuf:"bytes,4,opt,name=core_version,json=coreVersion,proto3" json:"core_version,omitempty"`
-	AppliedRevision uint64                 `protobuf:"varint,5,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
-	ConfigSha256    string                 `protobuf:"bytes,6,opt,name=config_sha256,json=configSha256,proto3" json:"config_sha256,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
-}
-
-func (x *NodeHello) Reset() {
-	*x = NodeHello{}
-	mi := &file_node_v1_node_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *NodeHello) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*NodeHello) ProtoMessage() {}
-
-func (x *NodeHello) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use NodeHello.ProtoReflect.Descriptor instead.
-func (*NodeHello) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *NodeHello) GetNodeId() string {
+func (x *WatchRequest) GetNodeId() string {
 	if x != nil {
 		return x.NodeId
 	}
 	return ""
 }
 
-func (x *NodeHello) GetBootId() string {
-	if x != nil {
-		return x.BootId
-	}
-	return ""
-}
-
-func (x *NodeHello) GetAgentVersion() string {
+func (x *WatchRequest) GetAgentVersion() string {
 	if x != nil {
 		return x.AgentVersion
 	}
 	return ""
 }
 
-func (x *NodeHello) GetCoreVersion() string {
-	if x != nil {
-		return x.CoreVersion
-	}
-	return ""
-}
-
-func (x *NodeHello) GetAppliedRevision() uint64 {
-	if x != nil {
-		return x.AppliedRevision
-	}
-	return 0
-}
-
-func (x *NodeHello) GetConfigSha256() string {
-	if x != nil {
-		return x.ConfigSha256
-	}
-	return ""
-}
-
-type DesiredState struct {
+type ConfigNotice struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Revision      uint64                 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
-	ConfigToml    []byte                 `protobuf:"bytes,2,opt,name=config_toml,json=configToml,proto3" json:"config_toml,omitempty"`
-	ConfigSha256  string                 `protobuf:"bytes,3,opt,name=config_sha256,json=configSha256,proto3" json:"config_sha256,omitempty"`
+	ConfigSha256  string                 `protobuf:"bytes,2,opt,name=config_sha256,json=configSha256,proto3" json:"config_sha256,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *DesiredState) Reset() {
-	*x = DesiredState{}
-	mi := &file_node_v1_node_proto_msgTypes[6]
+func (x *ConfigNotice) Reset() {
+	*x = ConfigNotice{}
+	mi := &file_node_v1_node_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DesiredState) String() string {
+func (x *ConfigNotice) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DesiredState) ProtoMessage() {}
+func (*ConfigNotice) ProtoMessage() {}
 
-func (x *DesiredState) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[6]
+func (x *ConfigNotice) ProtoReflect() protoreflect.Message {
+	mi := &file_node_v1_node_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -671,211 +287,166 @@ func (x *DesiredState) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DesiredState.ProtoReflect.Descriptor instead.
-func (*DesiredState) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{6}
+// Deprecated: Use ConfigNotice.ProtoReflect.Descriptor instead.
+func (*ConfigNotice) Descriptor() ([]byte, []int) {
+	return file_node_v1_node_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *DesiredState) GetRevision() uint64 {
+func (x *ConfigNotice) GetRevision() uint64 {
 	if x != nil {
 		return x.Revision
 	}
 	return 0
 }
 
-func (x *DesiredState) GetConfigToml() []byte {
+func (x *ConfigNotice) GetConfigSha256() string {
+	if x != nil {
+		return x.ConfigSha256
+	}
+	return ""
+}
+
+type FetchConfigRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FetchConfigRequest) Reset() {
+	*x = FetchConfigRequest{}
+	mi := &file_node_v1_node_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchConfigRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchConfigRequest) ProtoMessage() {}
+
+func (x *FetchConfigRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_node_v1_node_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchConfigRequest.ProtoReflect.Descriptor instead.
+func (*FetchConfigRequest) Descriptor() ([]byte, []int) {
+	return file_node_v1_node_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *FetchConfigRequest) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+type ConfigDocument struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Revision      uint64                 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
+	ConfigSha256  string                 `protobuf:"bytes,2,opt,name=config_sha256,json=configSha256,proto3" json:"config_sha256,omitempty"`
+	ConfigToml    []byte                 `protobuf:"bytes,3,opt,name=config_toml,json=configToml,proto3" json:"config_toml,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigDocument) Reset() {
+	*x = ConfigDocument{}
+	mi := &file_node_v1_node_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigDocument) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigDocument) ProtoMessage() {}
+
+func (x *ConfigDocument) ProtoReflect() protoreflect.Message {
+	mi := &file_node_v1_node_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigDocument.ProtoReflect.Descriptor instead.
+func (*ConfigDocument) Descriptor() ([]byte, []int) {
+	return file_node_v1_node_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ConfigDocument) GetRevision() uint64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *ConfigDocument) GetConfigSha256() string {
+	if x != nil {
+		return x.ConfigSha256
+	}
+	return ""
+}
+
+func (x *ConfigDocument) GetConfigToml() []byte {
 	if x != nil {
 		return x.ConfigToml
 	}
 	return nil
 }
 
-func (x *DesiredState) GetConfigSha256() string {
-	if x != nil {
-		return x.ConfigSha256
-	}
-	return ""
-}
-
-type ApplyResult struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	DesiredRevision uint64                 `protobuf:"varint,1,opt,name=desired_revision,json=desiredRevision,proto3" json:"desired_revision,omitempty"`
-	RuntimeRevision uint64                 `protobuf:"varint,2,opt,name=runtime_revision,json=runtimeRevision,proto3" json:"runtime_revision,omitempty"`
-	ConfigSha256    string                 `protobuf:"bytes,3,opt,name=config_sha256,json=configSha256,proto3" json:"config_sha256,omitempty"`
-	Error           string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
-	AppliedAt       *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=applied_at,json=appliedAt,proto3" json:"applied_at,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
-}
-
-func (x *ApplyResult) Reset() {
-	*x = ApplyResult{}
-	mi := &file_node_v1_node_proto_msgTypes[7]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ApplyResult) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ApplyResult) ProtoMessage() {}
-
-func (x *ApplyResult) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[7]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ApplyResult.ProtoReflect.Descriptor instead.
-func (*ApplyResult) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *ApplyResult) GetDesiredRevision() uint64 {
-	if x != nil {
-		return x.DesiredRevision
-	}
-	return 0
-}
-
-func (x *ApplyResult) GetRuntimeRevision() uint64 {
-	if x != nil {
-		return x.RuntimeRevision
-	}
-	return 0
-}
-
-func (x *ApplyResult) GetConfigSha256() string {
-	if x != nil {
-		return x.ConfigSha256
-	}
-	return ""
-}
-
-func (x *ApplyResult) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
-}
-
-func (x *ApplyResult) GetAppliedAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.AppliedAt
-	}
-	return nil
-}
-
-type NodeHeartbeat struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	SampledAt       *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=sampled_at,json=sampledAt,proto3" json:"sampled_at,omitempty"`
-	CoreRunning     bool                   `protobuf:"varint,2,opt,name=core_running,json=coreRunning,proto3" json:"core_running,omitempty"`
-	CoreReady       bool                   `protobuf:"varint,3,opt,name=core_ready,json=coreReady,proto3" json:"core_ready,omitempty"`
-	AppliedRevision uint64                 `protobuf:"varint,4,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
-	Error           string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
-}
-
-func (x *NodeHeartbeat) Reset() {
-	*x = NodeHeartbeat{}
-	mi := &file_node_v1_node_proto_msgTypes[8]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *NodeHeartbeat) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*NodeHeartbeat) ProtoMessage() {}
-
-func (x *NodeHeartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[8]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use NodeHeartbeat.ProtoReflect.Descriptor instead.
-func (*NodeHeartbeat) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *NodeHeartbeat) GetSampledAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.SampledAt
-	}
-	return nil
-}
-
-func (x *NodeHeartbeat) GetCoreRunning() bool {
-	if x != nil {
-		return x.CoreRunning
-	}
-	return false
-}
-
-func (x *NodeHeartbeat) GetCoreReady() bool {
-	if x != nil {
-		return x.CoreReady
-	}
-	return false
-}
-
-func (x *NodeHeartbeat) GetAppliedRevision() uint64 {
-	if x != nil {
-		return x.AppliedRevision
-	}
-	return 0
-}
-
-func (x *NodeHeartbeat) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
-}
-
-// Raw traffic of the node container network namespace. This includes
-// BoardProxy payload, board transport and control-plane overhead.
-type InterfaceTrafficBatch struct {
-	state         protoimpl.MessageState   `protogen:"open.v1"`
-	BatchId       string                   `protobuf:"bytes,1,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"`
-	IntervalStart *timestamppb.Timestamp   `protobuf:"bytes,2,opt,name=interval_start,json=intervalStart,proto3" json:"interval_start,omitempty"`
-	IntervalEnd   *timestamppb.Timestamp   `protobuf:"bytes,3,opt,name=interval_end,json=intervalEnd,proto3" json:"interval_end,omitempty"`
-	Interfaces    []*InterfaceTrafficDelta `protobuf:"bytes,4,rep,name=interfaces,proto3" json:"interfaces,omitempty"`
+type ReportRequest struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	NodeId string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	// Changes on every core restart. A flapping boot_id means two agents are
+	// claiming the same node.
+	BootId string `protobuf:"bytes,2,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
+	// Monotonic within boot_id.
+	Seq uint64 `protobuf:"varint,3,opt,name=seq,proto3" json:"seq,omitempty"`
+	// Idempotency key: a repeated batch_id must not double-count traffic.
+	BatchId string  `protobuf:"bytes,4,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"`
+	Health  *Health `protobuf:"bytes,5,opt,name=health,proto3" json:"health,omitempty"`
+	// Full replacement, not a delta. The node knows its own runtime state better
+	// than the hub could reconstruct it from an event log.
+	Runtime          *RuntimeSnapshot         `protobuf:"bytes,6,opt,name=runtime,proto3" json:"runtime,omitempty"`
+	InterfaceTraffic []*InterfaceTrafficDelta `protobuf:"bytes,7,rep,name=interface_traffic,json=interfaceTraffic,proto3" json:"interface_traffic,omitempty"`
+	UserTraffic      []*UserTrafficDelta      `protobuf:"bytes,8,rep,name=user_traffic,json=userTraffic,proto3" json:"user_traffic,omitempty"`
+	// Activity log for the panel. Projects nothing, so a gap here is harmless.
+	Events        []*RuntimeEvent `protobuf:"bytes,9,rep,name=events,proto3" json:"events,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *InterfaceTrafficBatch) Reset() {
-	*x = InterfaceTrafficBatch{}
-	mi := &file_node_v1_node_proto_msgTypes[9]
+func (x *ReportRequest) Reset() {
+	*x = ReportRequest{}
+	mi := &file_node_v1_node_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *InterfaceTrafficBatch) String() string {
+func (x *ReportRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*InterfaceTrafficBatch) ProtoMessage() {}
+func (*ReportRequest) ProtoMessage() {}
 
-func (x *InterfaceTrafficBatch) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[9]
+func (x *ReportRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_node_v1_node_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -886,37 +457,263 @@ func (x *InterfaceTrafficBatch) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use InterfaceTrafficBatch.ProtoReflect.Descriptor instead.
-func (*InterfaceTrafficBatch) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{9}
+// Deprecated: Use ReportRequest.ProtoReflect.Descriptor instead.
+func (*ReportRequest) Descriptor() ([]byte, []int) {
+	return file_node_v1_node_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *InterfaceTrafficBatch) GetBatchId() string {
+func (x *ReportRequest) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *ReportRequest) GetBootId() string {
+	if x != nil {
+		return x.BootId
+	}
+	return ""
+}
+
+func (x *ReportRequest) GetSeq() uint64 {
+	if x != nil {
+		return x.Seq
+	}
+	return 0
+}
+
+func (x *ReportRequest) GetBatchId() string {
 	if x != nil {
 		return x.BatchId
 	}
 	return ""
 }
 
-func (x *InterfaceTrafficBatch) GetIntervalStart() *timestamppb.Timestamp {
+func (x *ReportRequest) GetHealth() *Health {
 	if x != nil {
-		return x.IntervalStart
+		return x.Health
 	}
 	return nil
 }
 
-func (x *InterfaceTrafficBatch) GetIntervalEnd() *timestamppb.Timestamp {
+func (x *ReportRequest) GetRuntime() *RuntimeSnapshot {
 	if x != nil {
-		return x.IntervalEnd
+		return x.Runtime
 	}
 	return nil
 }
 
-func (x *InterfaceTrafficBatch) GetInterfaces() []*InterfaceTrafficDelta {
+func (x *ReportRequest) GetInterfaceTraffic() []*InterfaceTrafficDelta {
 	if x != nil {
-		return x.Interfaces
+		return x.InterfaceTraffic
 	}
 	return nil
+}
+
+func (x *ReportRequest) GetUserTraffic() []*UserTrafficDelta {
+	if x != nil {
+		return x.UserTraffic
+	}
+	return nil
+}
+
+func (x *ReportRequest) GetEvents() []*RuntimeEvent {
+	if x != nil {
+		return x.Events
+	}
+	return nil
+}
+
+type Health struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	AppliedRevision uint64                 `protobuf:"varint,1,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
+	AppliedSha256   string                 `protobuf:"bytes,2,opt,name=applied_sha256,json=appliedSha256,proto3" json:"applied_sha256,omitempty"`
+	// Empty means the configuration applied cleanly.
+	ApplyError    string                 `protobuf:"bytes,3,opt,name=apply_error,json=applyError,proto3" json:"apply_error,omitempty"`
+	CoreVersion   string                 `protobuf:"bytes,4,opt,name=core_version,json=coreVersion,proto3" json:"core_version,omitempty"`
+	AgentVersion  string                 `protobuf:"bytes,5,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
+	UptimeSeconds int64                  `protobuf:"varint,6,opt,name=uptime_seconds,json=uptimeSeconds,proto3" json:"uptime_seconds,omitempty"`
+	ObservedAt    *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Health) Reset() {
+	*x = Health{}
+	mi := &file_node_v1_node_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Health) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Health) ProtoMessage() {}
+
+func (x *Health) ProtoReflect() protoreflect.Message {
+	mi := &file_node_v1_node_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Health.ProtoReflect.Descriptor instead.
+func (*Health) Descriptor() ([]byte, []int) {
+	return file_node_v1_node_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *Health) GetAppliedRevision() uint64 {
+	if x != nil {
+		return x.AppliedRevision
+	}
+	return 0
+}
+
+func (x *Health) GetAppliedSha256() string {
+	if x != nil {
+		return x.AppliedSha256
+	}
+	return ""
+}
+
+func (x *Health) GetApplyError() string {
+	if x != nil {
+		return x.ApplyError
+	}
+	return ""
+}
+
+func (x *Health) GetCoreVersion() string {
+	if x != nil {
+		return x.CoreVersion
+	}
+	return ""
+}
+
+func (x *Health) GetAgentVersion() string {
+	if x != nil {
+		return x.AgentVersion
+	}
+	return ""
+}
+
+func (x *Health) GetUptimeSeconds() int64 {
+	if x != nil {
+		return x.UptimeSeconds
+	}
+	return 0
+}
+
+func (x *Health) GetObservedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ObservedAt
+	}
+	return nil
+}
+
+type ReportResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Delivered exactly once. The hub tracks delivery because the node does not
+	// survive its own restart and would otherwise receive the same command again.
+	Commands      []*AgentCommand `protobuf:"bytes,1,rep,name=commands,proto3" json:"commands,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportResponse) Reset() {
+	*x = ReportResponse{}
+	mi := &file_node_v1_node_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportResponse) ProtoMessage() {}
+
+func (x *ReportResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_node_v1_node_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportResponse.ProtoReflect.Descriptor instead.
+func (*ReportResponse) Descriptor() ([]byte, []int) {
+	return file_node_v1_node_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ReportResponse) GetCommands() []*AgentCommand {
+	if x != nil {
+		return x.Commands
+	}
+	return nil
+}
+
+type AgentCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Nonce         uint64                 `protobuf:"varint,1,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentCommand) Reset() {
+	*x = AgentCommand{}
+	mi := &file_node_v1_node_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentCommand) ProtoMessage() {}
+
+func (x *AgentCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_node_v1_node_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentCommand.ProtoReflect.Descriptor instead.
+func (*AgentCommand) Descriptor() ([]byte, []int) {
+	return file_node_v1_node_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *AgentCommand) GetNonce() uint64 {
+	if x != nil {
+		return x.Nonce
+	}
+	return 0
+}
+
+func (x *AgentCommand) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
 }
 
 type InterfaceTrafficDelta struct {
@@ -930,13 +727,14 @@ type InterfaceTrafficDelta struct {
 	TxErrors      uint64                 `protobuf:"varint,7,opt,name=tx_errors,json=txErrors,proto3" json:"tx_errors,omitempty"`
 	RxDropped     uint64                 `protobuf:"varint,8,opt,name=rx_dropped,json=rxDropped,proto3" json:"rx_dropped,omitempty"`
 	TxDropped     uint64                 `protobuf:"varint,9,opt,name=tx_dropped,json=txDropped,proto3" json:"tx_dropped,omitempty"`
+	ObservedAt    *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *InterfaceTrafficDelta) Reset() {
 	*x = InterfaceTrafficDelta{}
-	mi := &file_node_v1_node_proto_msgTypes[10]
+	mi := &file_node_v1_node_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -948,7 +746,7 @@ func (x *InterfaceTrafficDelta) String() string {
 func (*InterfaceTrafficDelta) ProtoMessage() {}
 
 func (x *InterfaceTrafficDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[10]
+	mi := &file_node_v1_node_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -961,7 +759,7 @@ func (x *InterfaceTrafficDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InterfaceTrafficDelta.ProtoReflect.Descriptor instead.
 func (*InterfaceTrafficDelta) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{10}
+	return file_node_v1_node_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *InterfaceTrafficDelta) GetInterface() string {
@@ -1027,81 +825,21 @@ func (x *InterfaceTrafficDelta) GetTxDropped() uint64 {
 	return 0
 }
 
+func (x *InterfaceTrafficDelta) GetObservedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ObservedAt
+	}
+	return nil
+}
+
 // Decrypted BoardProxy payload attributed by core. It is never summed with
-// InterfaceTrafficBatch.
-type UserTrafficBatch struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	BatchId       string                 `protobuf:"bytes,1,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"`
-	IntervalStart *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=interval_start,json=intervalStart,proto3" json:"interval_start,omitempty"`
-	IntervalEnd   *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=interval_end,json=intervalEnd,proto3" json:"interval_end,omitempty"`
-	Users         []*UserTrafficDelta    `protobuf:"bytes,4,rep,name=users,proto3" json:"users,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UserTrafficBatch) Reset() {
-	*x = UserTrafficBatch{}
-	mi := &file_node_v1_node_proto_msgTypes[11]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UserTrafficBatch) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UserTrafficBatch) ProtoMessage() {}
-
-func (x *UserTrafficBatch) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[11]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UserTrafficBatch.ProtoReflect.Descriptor instead.
-func (*UserTrafficBatch) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{11}
-}
-
-func (x *UserTrafficBatch) GetBatchId() string {
-	if x != nil {
-		return x.BatchId
-	}
-	return ""
-}
-
-func (x *UserTrafficBatch) GetIntervalStart() *timestamppb.Timestamp {
-	if x != nil {
-		return x.IntervalStart
-	}
-	return nil
-}
-
-func (x *UserTrafficBatch) GetIntervalEnd() *timestamppb.Timestamp {
-	if x != nil {
-		return x.IntervalEnd
-	}
-	return nil
-}
-
-func (x *UserTrafficBatch) GetUsers() []*UserTrafficDelta {
-	if x != nil {
-		return x.Users
-	}
-	return nil
-}
-
+// InterfaceTrafficDelta.
 type UserTrafficDelta struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserTag       string                 `protobuf:"bytes,1,opt,name=user_tag,json=userTag,proto3" json:"user_tag,omitempty"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	RxBytes       uint64                 `protobuf:"varint,2,opt,name=rx_bytes,json=rxBytes,proto3" json:"rx_bytes,omitempty"` // client upload
 	TxBytes       uint64                 `protobuf:"varint,3,opt,name=tx_bytes,json=txBytes,proto3" json:"tx_bytes,omitempty"` // client download
+	ObservedAt    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1136,9 +874,9 @@ func (*UserTrafficDelta) Descriptor() ([]byte, []int) {
 	return file_node_v1_node_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *UserTrafficDelta) GetUserTag() string {
+func (x *UserTrafficDelta) GetUserId() string {
 	if x != nil {
-		return x.UserTag
+		return x.UserId
 	}
 	return ""
 }
@@ -1157,130 +895,26 @@ func (x *UserTrafficDelta) GetTxBytes() uint64 {
 	return 0
 }
 
-type TrafficAck struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	BatchId       string                 `protobuf:"bytes,1,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *TrafficAck) Reset() {
-	*x = TrafficAck{}
-	mi := &file_node_v1_node_proto_msgTypes[13]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *TrafficAck) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*TrafficAck) ProtoMessage() {}
-
-func (x *TrafficAck) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[13]
+func (x *UserTrafficDelta) GetObservedAt() *timestamppb.Timestamp {
 	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use TrafficAck.ProtoReflect.Descriptor instead.
-func (*TrafficAck) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{13}
-}
-
-func (x *TrafficAck) GetBatchId() string {
-	if x != nil {
-		return x.BatchId
-	}
-	return ""
-}
-
-// Runtime events are observed facts from core. They are delivered at least
-// once by node-agent and deduplicated by (node_id, core_boot_id, sequence).
-type RuntimeEventBatch struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	BatchId       string                 `protobuf:"bytes,1,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"`
-	Events        []*CoreRuntimeEvent    `protobuf:"bytes,2,rep,name=events,proto3" json:"events,omitempty"`
-	Snapshot      *RuntimeSnapshot       `protobuf:"bytes,3,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RuntimeEventBatch) Reset() {
-	*x = RuntimeEventBatch{}
-	mi := &file_node_v1_node_proto_msgTypes[14]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RuntimeEventBatch) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RuntimeEventBatch) ProtoMessage() {}
-
-func (x *RuntimeEventBatch) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[14]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RuntimeEventBatch.ProtoReflect.Descriptor instead.
-func (*RuntimeEventBatch) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{14}
-}
-
-func (x *RuntimeEventBatch) GetBatchId() string {
-	if x != nil {
-		return x.BatchId
-	}
-	return ""
-}
-
-func (x *RuntimeEventBatch) GetEvents() []*CoreRuntimeEvent {
-	if x != nil {
-		return x.Events
+		return x.ObservedAt
 	}
 	return nil
 }
 
-func (x *RuntimeEventBatch) GetSnapshot() *RuntimeSnapshot {
-	if x != nil {
-		return x.Snapshot
-	}
-	return nil
-}
-
-// Snapshot is sent after a stream reset/gap. It is an authoritative point-in-
-// time replacement for projections; events at or below latest_sequence are
-// then harmless replays.
 type RuntimeSnapshot struct {
-	state           protoimpl.MessageState  `protogen:"open.v1"`
-	CoreBootId      string                  `protobuf:"bytes,1,opt,name=core_boot_id,json=coreBootId,proto3" json:"core_boot_id,omitempty"`
-	LatestSequence  uint64                  `protobuf:"varint,2,opt,name=latest_sequence,json=latestSequence,proto3" json:"latest_sequence,omitempty"`
-	RuntimeRevision uint64                  `protobuf:"varint,3,opt,name=runtime_revision,json=runtimeRevision,proto3" json:"runtime_revision,omitempty"`
-	CapturedAt      *timestamppb.Timestamp  `protobuf:"bytes,4,opt,name=captured_at,json=capturedAt,proto3" json:"captured_at,omitempty"`
-	Users           []*RuntimeUserSnapshot  `protobuf:"bytes,5,rep,name=users,proto3" json:"users,omitempty"`
-	Boards          []*RuntimeBoardSnapshot `protobuf:"bytes,6,rep,name=boards,proto3" json:"boards,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	CoreBootId    string                  `protobuf:"bytes,1,opt,name=core_boot_id,json=coreBootId,proto3" json:"core_boot_id,omitempty"`
+	CapturedAt    *timestamppb.Timestamp  `protobuf:"bytes,2,opt,name=captured_at,json=capturedAt,proto3" json:"captured_at,omitempty"`
+	Users         []*RuntimeUserSnapshot  `protobuf:"bytes,3,rep,name=users,proto3" json:"users,omitempty"`
+	Boards        []*RuntimeBoardSnapshot `protobuf:"bytes,4,rep,name=boards,proto3" json:"boards,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RuntimeSnapshot) Reset() {
 	*x = RuntimeSnapshot{}
-	mi := &file_node_v1_node_proto_msgTypes[15]
+	mi := &file_node_v1_node_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1292,7 +926,7 @@ func (x *RuntimeSnapshot) String() string {
 func (*RuntimeSnapshot) ProtoMessage() {}
 
 func (x *RuntimeSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[15]
+	mi := &file_node_v1_node_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1305,7 +939,7 @@ func (x *RuntimeSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeSnapshot.ProtoReflect.Descriptor instead.
 func (*RuntimeSnapshot) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{15}
+	return file_node_v1_node_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RuntimeSnapshot) GetCoreBootId() string {
@@ -1313,20 +947,6 @@ func (x *RuntimeSnapshot) GetCoreBootId() string {
 		return x.CoreBootId
 	}
 	return ""
-}
-
-func (x *RuntimeSnapshot) GetLatestSequence() uint64 {
-	if x != nil {
-		return x.LatestSequence
-	}
-	return 0
-}
-
-func (x *RuntimeSnapshot) GetRuntimeRevision() uint64 {
-	if x != nil {
-		return x.RuntimeRevision
-	}
-	return 0
 }
 
 func (x *RuntimeSnapshot) GetCapturedAt() *timestamppb.Timestamp {
@@ -1352,17 +972,17 @@ func (x *RuntimeSnapshot) GetBoards() []*RuntimeBoardSnapshot {
 
 type RuntimeUserSnapshot struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
-	UserTag        string                 `protobuf:"bytes,1,opt,name=user_tag,json=userTag,proto3" json:"user_tag,omitempty"`
-	ActiveSessions uint64                 `protobuf:"varint,2,opt,name=active_sessions,json=activeSessions,proto3" json:"active_sessions,omitempty"`
-	RxBytes        uint64                 `protobuf:"varint,3,opt,name=rx_bytes,json=rxBytes,proto3" json:"rx_bytes,omitempty"`
-	TxBytes        uint64                 `protobuf:"varint,4,opt,name=tx_bytes,json=txBytes,proto3" json:"tx_bytes,omitempty"`
+	UserId         string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	ActiveSessions uint32                 `protobuf:"varint,2,opt,name=active_sessions,json=activeSessions,proto3" json:"active_sessions,omitempty"`
+	ActiveLanes    uint32                 `protobuf:"varint,3,opt,name=active_lanes,json=activeLanes,proto3" json:"active_lanes,omitempty"`
+	LastSeenAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=last_seen_at,json=lastSeenAt,proto3" json:"last_seen_at,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RuntimeUserSnapshot) Reset() {
 	*x = RuntimeUserSnapshot{}
-	mi := &file_node_v1_node_proto_msgTypes[16]
+	mi := &file_node_v1_node_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1374,7 +994,7 @@ func (x *RuntimeUserSnapshot) String() string {
 func (*RuntimeUserSnapshot) ProtoMessage() {}
 
 func (x *RuntimeUserSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[16]
+	mi := &file_node_v1_node_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1387,49 +1007,50 @@ func (x *RuntimeUserSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeUserSnapshot.ProtoReflect.Descriptor instead.
 func (*RuntimeUserSnapshot) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{16}
+	return file_node_v1_node_proto_rawDescGZIP(), []int{14}
 }
 
-func (x *RuntimeUserSnapshot) GetUserTag() string {
+func (x *RuntimeUserSnapshot) GetUserId() string {
 	if x != nil {
-		return x.UserTag
+		return x.UserId
 	}
 	return ""
 }
 
-func (x *RuntimeUserSnapshot) GetActiveSessions() uint64 {
+func (x *RuntimeUserSnapshot) GetActiveSessions() uint32 {
 	if x != nil {
 		return x.ActiveSessions
 	}
 	return 0
 }
 
-func (x *RuntimeUserSnapshot) GetRxBytes() uint64 {
+func (x *RuntimeUserSnapshot) GetActiveLanes() uint32 {
 	if x != nil {
-		return x.RxBytes
+		return x.ActiveLanes
 	}
 	return 0
 }
 
-func (x *RuntimeUserSnapshot) GetTxBytes() uint64 {
+func (x *RuntimeUserSnapshot) GetLastSeenAt() *timestamppb.Timestamp {
 	if x != nil {
-		return x.TxBytes
+		return x.LastSeenAt
 	}
-	return 0
+	return nil
 }
 
 type RuntimeBoardSnapshot struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	BoardTag      string                 `protobuf:"bytes,1,opt,name=board_tag,json=boardTag,proto3" json:"board_tag,omitempty"`
+	BoardId       string                 `protobuf:"bytes,1,opt,name=board_id,json=boardId,proto3" json:"board_id,omitempty"`
 	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
-	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	ActiveLanes   uint32                 `protobuf:"varint,3,opt,name=active_lanes,json=activeLanes,proto3" json:"active_lanes,omitempty"`
+	LastError     string                 `protobuf:"bytes,4,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RuntimeBoardSnapshot) Reset() {
 	*x = RuntimeBoardSnapshot{}
-	mi := &file_node_v1_node_proto_msgTypes[17]
+	mi := &file_node_v1_node_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1441,7 +1062,7 @@ func (x *RuntimeBoardSnapshot) String() string {
 func (*RuntimeBoardSnapshot) ProtoMessage() {}
 
 func (x *RuntimeBoardSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[17]
+	mi := &file_node_v1_node_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1454,12 +1075,12 @@ func (x *RuntimeBoardSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeBoardSnapshot.ProtoReflect.Descriptor instead.
 func (*RuntimeBoardSnapshot) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{17}
+	return file_node_v1_node_proto_rawDescGZIP(), []int{15}
 }
 
-func (x *RuntimeBoardSnapshot) GetBoardTag() string {
+func (x *RuntimeBoardSnapshot) GetBoardId() string {
 	if x != nil {
-		return x.BoardTag
+		return x.BoardId
 	}
 	return ""
 }
@@ -1471,47 +1092,45 @@ func (x *RuntimeBoardSnapshot) GetState() string {
 	return ""
 }
 
-func (x *RuntimeBoardSnapshot) GetError() string {
+func (x *RuntimeBoardSnapshot) GetActiveLanes() uint32 {
 	if x != nil {
-		return x.Error
+		return x.ActiveLanes
+	}
+	return 0
+}
+
+func (x *RuntimeBoardSnapshot) GetLastError() string {
+	if x != nil {
+		return x.LastError
 	}
 	return ""
 }
 
-type CoreRuntimeEvent struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	EventId         string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
-	CoreBootId      string                 `protobuf:"bytes,2,opt,name=core_boot_id,json=coreBootId,proto3" json:"core_boot_id,omitempty"`
-	Sequence        uint64                 `protobuf:"varint,3,opt,name=sequence,proto3" json:"sequence,omitempty"`
-	OccurredAt      *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
-	RuntimeRevision uint64                 `protobuf:"varint,5,opt,name=runtime_revision,json=runtimeRevision,proto3" json:"runtime_revision,omitempty"`
-	// Types that are valid to be assigned to Payload:
-	//
-	//	*CoreRuntimeEvent_ResourceChanged
-	//	*CoreRuntimeEvent_BoardStateChanged
-	//	*CoreRuntimeEvent_ClientSessionOpened
-	//	*CoreRuntimeEvent_ClientSessionClosed
-	//	*CoreRuntimeEvent_StreamReset
-	Payload       isCoreRuntimeEvent_Payload `protobuf_oneof:"payload"`
+type RuntimeEvent struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Type       string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	OccurredAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	// Free-form JSON payload rendered by the panel.
+	PayloadJson   string `protobuf:"bytes,3,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CoreRuntimeEvent) Reset() {
-	*x = CoreRuntimeEvent{}
-	mi := &file_node_v1_node_proto_msgTypes[18]
+func (x *RuntimeEvent) Reset() {
+	*x = RuntimeEvent{}
+	mi := &file_node_v1_node_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CoreRuntimeEvent) String() string {
+func (x *RuntimeEvent) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CoreRuntimeEvent) ProtoMessage() {}
+func (*RuntimeEvent) ProtoMessage() {}
 
-func (x *CoreRuntimeEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[18]
+func (x *RuntimeEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_node_v1_node_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1522,504 +1141,28 @@ func (x *CoreRuntimeEvent) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CoreRuntimeEvent.ProtoReflect.Descriptor instead.
-func (*CoreRuntimeEvent) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{18}
+// Deprecated: Use RuntimeEvent.ProtoReflect.Descriptor instead.
+func (*RuntimeEvent) Descriptor() ([]byte, []int) {
+	return file_node_v1_node_proto_rawDescGZIP(), []int{16}
 }
 
-func (x *CoreRuntimeEvent) GetEventId() string {
+func (x *RuntimeEvent) GetType() string {
 	if x != nil {
-		return x.EventId
+		return x.Type
 	}
 	return ""
 }
 
-func (x *CoreRuntimeEvent) GetCoreBootId() string {
-	if x != nil {
-		return x.CoreBootId
-	}
-	return ""
-}
-
-func (x *CoreRuntimeEvent) GetSequence() uint64 {
-	if x != nil {
-		return x.Sequence
-	}
-	return 0
-}
-
-func (x *CoreRuntimeEvent) GetOccurredAt() *timestamppb.Timestamp {
+func (x *RuntimeEvent) GetOccurredAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.OccurredAt
 	}
 	return nil
 }
 
-func (x *CoreRuntimeEvent) GetRuntimeRevision() uint64 {
+func (x *RuntimeEvent) GetPayloadJson() string {
 	if x != nil {
-		return x.RuntimeRevision
-	}
-	return 0
-}
-
-func (x *CoreRuntimeEvent) GetPayload() isCoreRuntimeEvent_Payload {
-	if x != nil {
-		return x.Payload
-	}
-	return nil
-}
-
-func (x *CoreRuntimeEvent) GetResourceChanged() *ResourceChanged {
-	if x != nil {
-		if x, ok := x.Payload.(*CoreRuntimeEvent_ResourceChanged); ok {
-			return x.ResourceChanged
-		}
-	}
-	return nil
-}
-
-func (x *CoreRuntimeEvent) GetBoardStateChanged() *BoardStateChanged {
-	if x != nil {
-		if x, ok := x.Payload.(*CoreRuntimeEvent_BoardStateChanged); ok {
-			return x.BoardStateChanged
-		}
-	}
-	return nil
-}
-
-func (x *CoreRuntimeEvent) GetClientSessionOpened() *ClientSessionOpened {
-	if x != nil {
-		if x, ok := x.Payload.(*CoreRuntimeEvent_ClientSessionOpened); ok {
-			return x.ClientSessionOpened
-		}
-	}
-	return nil
-}
-
-func (x *CoreRuntimeEvent) GetClientSessionClosed() *ClientSessionClosed {
-	if x != nil {
-		if x, ok := x.Payload.(*CoreRuntimeEvent_ClientSessionClosed); ok {
-			return x.ClientSessionClosed
-		}
-	}
-	return nil
-}
-
-func (x *CoreRuntimeEvent) GetStreamReset() *EventStreamReset {
-	if x != nil {
-		if x, ok := x.Payload.(*CoreRuntimeEvent_StreamReset); ok {
-			return x.StreamReset
-		}
-	}
-	return nil
-}
-
-type isCoreRuntimeEvent_Payload interface {
-	isCoreRuntimeEvent_Payload()
-}
-
-type CoreRuntimeEvent_ResourceChanged struct {
-	ResourceChanged *ResourceChanged `protobuf:"bytes,6,opt,name=resource_changed,json=resourceChanged,proto3,oneof"`
-}
-
-type CoreRuntimeEvent_BoardStateChanged struct {
-	BoardStateChanged *BoardStateChanged `protobuf:"bytes,7,opt,name=board_state_changed,json=boardStateChanged,proto3,oneof"`
-}
-
-type CoreRuntimeEvent_ClientSessionOpened struct {
-	ClientSessionOpened *ClientSessionOpened `protobuf:"bytes,8,opt,name=client_session_opened,json=clientSessionOpened,proto3,oneof"`
-}
-
-type CoreRuntimeEvent_ClientSessionClosed struct {
-	ClientSessionClosed *ClientSessionClosed `protobuf:"bytes,9,opt,name=client_session_closed,json=clientSessionClosed,proto3,oneof"`
-}
-
-type CoreRuntimeEvent_StreamReset struct {
-	StreamReset *EventStreamReset `protobuf:"bytes,10,opt,name=stream_reset,json=streamReset,proto3,oneof"`
-}
-
-func (*CoreRuntimeEvent_ResourceChanged) isCoreRuntimeEvent_Payload() {}
-
-func (*CoreRuntimeEvent_BoardStateChanged) isCoreRuntimeEvent_Payload() {}
-
-func (*CoreRuntimeEvent_ClientSessionOpened) isCoreRuntimeEvent_Payload() {}
-
-func (*CoreRuntimeEvent_ClientSessionClosed) isCoreRuntimeEvent_Payload() {}
-
-func (*CoreRuntimeEvent_StreamReset) isCoreRuntimeEvent_Payload() {}
-
-type ResourceChanged struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Kind          ResourceKind           `protobuf:"varint,1,opt,name=kind,proto3,enum=bproxy.node.v1.ResourceKind" json:"kind,omitempty"`
-	Operation     ResourceOperation      `protobuf:"varint,2,opt,name=operation,proto3,enum=bproxy.node.v1.ResourceOperation" json:"operation,omitempty"`
-	Tag           string                 `protobuf:"bytes,3,opt,name=tag,proto3" json:"tag,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ResourceChanged) Reset() {
-	*x = ResourceChanged{}
-	mi := &file_node_v1_node_proto_msgTypes[19]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ResourceChanged) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ResourceChanged) ProtoMessage() {}
-
-func (x *ResourceChanged) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[19]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ResourceChanged.ProtoReflect.Descriptor instead.
-func (*ResourceChanged) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{19}
-}
-
-func (x *ResourceChanged) GetKind() ResourceKind {
-	if x != nil {
-		return x.Kind
-	}
-	return ResourceKind_RESOURCE_KIND_UNSPECIFIED
-}
-
-func (x *ResourceChanged) GetOperation() ResourceOperation {
-	if x != nil {
-		return x.Operation
-	}
-	return ResourceOperation_RESOURCE_OPERATION_UNSPECIFIED
-}
-
-func (x *ResourceChanged) GetTag() string {
-	if x != nil {
-		return x.Tag
-	}
-	return ""
-}
-
-type BoardStateChanged struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	BoardTag      string                 `protobuf:"bytes,1,opt,name=board_tag,json=boardTag,proto3" json:"board_tag,omitempty"`
-	PreviousState string                 `protobuf:"bytes,2,opt,name=previous_state,json=previousState,proto3" json:"previous_state,omitempty"`
-	State         string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
-	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BoardStateChanged) Reset() {
-	*x = BoardStateChanged{}
-	mi := &file_node_v1_node_proto_msgTypes[20]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BoardStateChanged) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BoardStateChanged) ProtoMessage() {}
-
-func (x *BoardStateChanged) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[20]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BoardStateChanged.ProtoReflect.Descriptor instead.
-func (*BoardStateChanged) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{20}
-}
-
-func (x *BoardStateChanged) GetBoardTag() string {
-	if x != nil {
-		return x.BoardTag
-	}
-	return ""
-}
-
-func (x *BoardStateChanged) GetPreviousState() string {
-	if x != nil {
-		return x.PreviousState
-	}
-	return ""
-}
-
-func (x *BoardStateChanged) GetState() string {
-	if x != nil {
-		return x.State
-	}
-	return ""
-}
-
-func (x *BoardStateChanged) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
-}
-
-type ClientSessionOpened struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserTag       string                 `protobuf:"bytes,1,opt,name=user_tag,json=userTag,proto3" json:"user_tag,omitempty"`
-	BoardTag      string                 `protobuf:"bytes,2,opt,name=board_tag,json=boardTag,proto3" json:"board_tag,omitempty"`
-	BundleId      string                 `protobuf:"bytes,3,opt,name=bundle_id,json=bundleId,proto3" json:"bundle_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ClientSessionOpened) Reset() {
-	*x = ClientSessionOpened{}
-	mi := &file_node_v1_node_proto_msgTypes[21]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ClientSessionOpened) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ClientSessionOpened) ProtoMessage() {}
-
-func (x *ClientSessionOpened) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[21]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ClientSessionOpened.ProtoReflect.Descriptor instead.
-func (*ClientSessionOpened) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{21}
-}
-
-func (x *ClientSessionOpened) GetUserTag() string {
-	if x != nil {
-		return x.UserTag
-	}
-	return ""
-}
-
-func (x *ClientSessionOpened) GetBoardTag() string {
-	if x != nil {
-		return x.BoardTag
-	}
-	return ""
-}
-
-func (x *ClientSessionOpened) GetBundleId() string {
-	if x != nil {
-		return x.BundleId
-	}
-	return ""
-}
-
-type ClientSessionClosed struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserTag       string                 `protobuf:"bytes,1,opt,name=user_tag,json=userTag,proto3" json:"user_tag,omitempty"`
-	BoardTag      string                 `protobuf:"bytes,2,opt,name=board_tag,json=boardTag,proto3" json:"board_tag,omitempty"`
-	BundleId      string                 `protobuf:"bytes,3,opt,name=bundle_id,json=bundleId,proto3" json:"bundle_id,omitempty"`
-	RxBytes       uint64                 `protobuf:"varint,4,opt,name=rx_bytes,json=rxBytes,proto3" json:"rx_bytes,omitempty"`
-	TxBytes       uint64                 `protobuf:"varint,5,opt,name=tx_bytes,json=txBytes,proto3" json:"tx_bytes,omitempty"`
-	Reason        string                 `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ClientSessionClosed) Reset() {
-	*x = ClientSessionClosed{}
-	mi := &file_node_v1_node_proto_msgTypes[22]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ClientSessionClosed) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ClientSessionClosed) ProtoMessage() {}
-
-func (x *ClientSessionClosed) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[22]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ClientSessionClosed.ProtoReflect.Descriptor instead.
-func (*ClientSessionClosed) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{22}
-}
-
-func (x *ClientSessionClosed) GetUserTag() string {
-	if x != nil {
-		return x.UserTag
-	}
-	return ""
-}
-
-func (x *ClientSessionClosed) GetBoardTag() string {
-	if x != nil {
-		return x.BoardTag
-	}
-	return ""
-}
-
-func (x *ClientSessionClosed) GetBundleId() string {
-	if x != nil {
-		return x.BundleId
-	}
-	return ""
-}
-
-func (x *ClientSessionClosed) GetRxBytes() uint64 {
-	if x != nil {
-		return x.RxBytes
-	}
-	return 0
-}
-
-func (x *ClientSessionClosed) GetTxBytes() uint64 {
-	if x != nil {
-		return x.TxBytes
-	}
-	return 0
-}
-
-func (x *ClientSessionClosed) GetReason() string {
-	if x != nil {
-		return x.Reason
-	}
-	return ""
-}
-
-type EventStreamReset struct {
-	state                   protoimpl.MessageState `protogen:"open.v1"`
-	Reason                  string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
-	OldestAvailableSequence uint64                 `protobuf:"varint,2,opt,name=oldest_available_sequence,json=oldestAvailableSequence,proto3" json:"oldest_available_sequence,omitempty"`
-	LatestSequence          uint64                 `protobuf:"varint,3,opt,name=latest_sequence,json=latestSequence,proto3" json:"latest_sequence,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
-}
-
-func (x *EventStreamReset) Reset() {
-	*x = EventStreamReset{}
-	mi := &file_node_v1_node_proto_msgTypes[23]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *EventStreamReset) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*EventStreamReset) ProtoMessage() {}
-
-func (x *EventStreamReset) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[23]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use EventStreamReset.ProtoReflect.Descriptor instead.
-func (*EventStreamReset) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{23}
-}
-
-func (x *EventStreamReset) GetReason() string {
-	if x != nil {
-		return x.Reason
-	}
-	return ""
-}
-
-func (x *EventStreamReset) GetOldestAvailableSequence() uint64 {
-	if x != nil {
-		return x.OldestAvailableSequence
-	}
-	return 0
-}
-
-func (x *EventStreamReset) GetLatestSequence() uint64 {
-	if x != nil {
-		return x.LatestSequence
-	}
-	return 0
-}
-
-type RuntimeEventAck struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	BatchId       string                 `protobuf:"bytes,1,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RuntimeEventAck) Reset() {
-	*x = RuntimeEventAck{}
-	mi := &file_node_v1_node_proto_msgTypes[24]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RuntimeEventAck) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RuntimeEventAck) ProtoMessage() {}
-
-func (x *RuntimeEventAck) ProtoReflect() protoreflect.Message {
-	mi := &file_node_v1_node_proto_msgTypes[24]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RuntimeEventAck.ProtoReflect.Descriptor instead.
-func (*RuntimeEventAck) Descriptor() ([]byte, []int) {
-	return file_node_v1_node_proto_rawDescGZIP(), []int{24}
-}
-
-func (x *RuntimeEventAck) GetBatchId() string {
-	if x != nil {
-		return x.BatchId
+		return x.PayloadJson
 	}
 	return ""
 }
@@ -2041,56 +1184,45 @@ const file_node_v1_node_proto_rawDesc = "" +
 	"expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"L\n" +
 	"\fRenewRequest\x12\x17\n" +
 	"\acsr_pem\x18\x01 \x01(\fR\x06csrPem\x12#\n" +
-	"\ragent_version\x18\x02 \x01(\tR\fagentVersion\"\xb3\x03\n" +
-	"\tNodeEvent\x121\n" +
-	"\x05hello\x18\x01 \x01(\v2\x19.bproxy.node.v1.NodeHelloH\x00R\x05hello\x12@\n" +
-	"\fapply_result\x18\x02 \x01(\v2\x1b.bproxy.node.v1.ApplyResultH\x00R\vapplyResult\x12=\n" +
-	"\theartbeat\x18\x03 \x01(\v2\x1d.bproxy.node.v1.NodeHeartbeatH\x00R\theartbeat\x12T\n" +
-	"\x11interface_traffic\x18\x04 \x01(\v2%.bproxy.node.v1.InterfaceTrafficBatchH\x00R\x10interfaceTraffic\x12E\n" +
-	"\fuser_traffic\x18\x05 \x01(\v2 .bproxy.node.v1.UserTrafficBatchH\x00R\vuserTraffic\x12J\n" +
-	"\x0eruntime_events\x18\x06 \x01(\v2!.bproxy.node.v1.RuntimeEventBatchH\x00R\rruntimeEventsB\t\n" +
-	"\apayload\"\xea\x01\n" +
-	"\n" +
-	"HubCommand\x12C\n" +
-	"\rdesired_state\x18\x01 \x01(\v2\x1c.bproxy.node.v1.DesiredStateH\x00R\fdesiredState\x12=\n" +
-	"\vtraffic_ack\x18\x02 \x01(\v2\x1a.bproxy.node.v1.TrafficAckH\x00R\n" +
-	"trafficAck\x12M\n" +
-	"\x11runtime_event_ack\x18\x03 \x01(\v2\x1f.bproxy.node.v1.RuntimeEventAckH\x00R\x0fruntimeEventAckB\t\n" +
-	"\apayload\"\xd5\x01\n" +
-	"\tNodeHello\x12\x17\n" +
+	"\ragent_version\x18\x02 \x01(\tR\fagentVersion\"L\n" +
+	"\fWatchRequest\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12#\n" +
+	"\ragent_version\x18\x02 \x01(\tR\fagentVersion\"O\n" +
+	"\fConfigNotice\x12\x1a\n" +
+	"\brevision\x18\x01 \x01(\x04R\brevision\x12#\n" +
+	"\rconfig_sha256\x18\x02 \x01(\tR\fconfigSha256\"-\n" +
+	"\x12FetchConfigRequest\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"r\n" +
+	"\x0eConfigDocument\x12\x1a\n" +
+	"\brevision\x18\x01 \x01(\x04R\brevision\x12#\n" +
+	"\rconfig_sha256\x18\x02 \x01(\tR\fconfigSha256\x12\x1f\n" +
+	"\vconfig_toml\x18\x03 \x01(\fR\n" +
+	"configToml\"\xa8\x03\n" +
+	"\rReportRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x17\n" +
-	"\aboot_id\x18\x02 \x01(\tR\x06bootId\x12#\n" +
-	"\ragent_version\x18\x03 \x01(\tR\fagentVersion\x12!\n" +
-	"\fcore_version\x18\x04 \x01(\tR\vcoreVersion\x12)\n" +
-	"\x10applied_revision\x18\x05 \x01(\x04R\x0fappliedRevision\x12#\n" +
-	"\rconfig_sha256\x18\x06 \x01(\tR\fconfigSha256\"p\n" +
-	"\fDesiredState\x12\x1a\n" +
-	"\brevision\x18\x01 \x01(\x04R\brevision\x12\x1f\n" +
-	"\vconfig_toml\x18\x02 \x01(\fR\n" +
-	"configToml\x12#\n" +
-	"\rconfig_sha256\x18\x03 \x01(\tR\fconfigSha256\"\xd9\x01\n" +
-	"\vApplyResult\x12)\n" +
-	"\x10desired_revision\x18\x01 \x01(\x04R\x0fdesiredRevision\x12)\n" +
-	"\x10runtime_revision\x18\x02 \x01(\x04R\x0fruntimeRevision\x12#\n" +
-	"\rconfig_sha256\x18\x03 \x01(\tR\fconfigSha256\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\x129\n" +
-	"\n" +
-	"applied_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tappliedAt\"\xcd\x01\n" +
-	"\rNodeHeartbeat\x129\n" +
-	"\n" +
-	"sampled_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\tsampledAt\x12!\n" +
-	"\fcore_running\x18\x02 \x01(\bR\vcoreRunning\x12\x1d\n" +
-	"\n" +
-	"core_ready\x18\x03 \x01(\bR\tcoreReady\x12)\n" +
-	"\x10applied_revision\x18\x04 \x01(\x04R\x0fappliedRevision\x12\x14\n" +
-	"\x05error\x18\x05 \x01(\tR\x05error\"\xfb\x01\n" +
-	"\x15InterfaceTrafficBatch\x12\x19\n" +
-	"\bbatch_id\x18\x01 \x01(\tR\abatchId\x12A\n" +
-	"\x0einterval_start\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\rintervalStart\x12=\n" +
-	"\finterval_end\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vintervalEnd\x12E\n" +
-	"\n" +
-	"interfaces\x18\x04 \x03(\v2%.bproxy.node.v1.InterfaceTrafficDeltaR\n" +
-	"interfaces\"\xa1\x02\n" +
+	"\aboot_id\x18\x02 \x01(\tR\x06bootId\x12\x10\n" +
+	"\x03seq\x18\x03 \x01(\x04R\x03seq\x12\x19\n" +
+	"\bbatch_id\x18\x04 \x01(\tR\abatchId\x12.\n" +
+	"\x06health\x18\x05 \x01(\v2\x16.bproxy.node.v1.HealthR\x06health\x129\n" +
+	"\aruntime\x18\x06 \x01(\v2\x1f.bproxy.node.v1.RuntimeSnapshotR\aruntime\x12R\n" +
+	"\x11interface_traffic\x18\a \x03(\v2%.bproxy.node.v1.InterfaceTrafficDeltaR\x10interfaceTraffic\x12C\n" +
+	"\fuser_traffic\x18\b \x03(\v2 .bproxy.node.v1.UserTrafficDeltaR\vuserTraffic\x124\n" +
+	"\x06events\x18\t \x03(\v2\x1c.bproxy.node.v1.RuntimeEventR\x06events\"\xa7\x02\n" +
+	"\x06Health\x12)\n" +
+	"\x10applied_revision\x18\x01 \x01(\x04R\x0fappliedRevision\x12%\n" +
+	"\x0eapplied_sha256\x18\x02 \x01(\tR\rappliedSha256\x12\x1f\n" +
+	"\vapply_error\x18\x03 \x01(\tR\n" +
+	"applyError\x12!\n" +
+	"\fcore_version\x18\x04 \x01(\tR\vcoreVersion\x12#\n" +
+	"\ragent_version\x18\x05 \x01(\tR\fagentVersion\x12%\n" +
+	"\x0euptime_seconds\x18\x06 \x01(\x03R\ruptimeSeconds\x12;\n" +
+	"\vobserved_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"observedAt\"J\n" +
+	"\x0eReportResponse\x128\n" +
+	"\bcommands\x18\x01 \x03(\v2\x1c.bproxy.node.v1.AgentCommandR\bcommands\"8\n" +
+	"\fAgentCommand\x12\x14\n" +
+	"\x05nonce\x18\x01 \x01(\x04R\x05nonce\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\"\xde\x02\n" +
 	"\x15InterfaceTrafficDelta\x12\x1c\n" +
 	"\tinterface\x18\x01 \x01(\tR\tinterface\x12\x19\n" +
 	"\brx_bytes\x18\x02 \x01(\x04R\arxBytes\x12\x19\n" +
@@ -2104,97 +1236,46 @@ const file_node_v1_node_proto_rawDesc = "" +
 	"\n" +
 	"rx_dropped\x18\b \x01(\x04R\trxDropped\x12\x1d\n" +
 	"\n" +
-	"tx_dropped\x18\t \x01(\x04R\ttxDropped\"\xe7\x01\n" +
-	"\x10UserTrafficBatch\x12\x19\n" +
-	"\bbatch_id\x18\x01 \x01(\tR\abatchId\x12A\n" +
-	"\x0einterval_start\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\rintervalStart\x12=\n" +
-	"\finterval_end\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vintervalEnd\x126\n" +
-	"\x05users\x18\x04 \x03(\v2 .bproxy.node.v1.UserTrafficDeltaR\x05users\"c\n" +
-	"\x10UserTrafficDelta\x12\x19\n" +
-	"\buser_tag\x18\x01 \x01(\tR\auserTag\x12\x19\n" +
+	"tx_dropped\x18\t \x01(\x04R\ttxDropped\x12;\n" +
+	"\vobserved_at\x18\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"observedAt\"\x9e\x01\n" +
+	"\x10UserTrafficDelta\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x19\n" +
 	"\brx_bytes\x18\x02 \x01(\x04R\arxBytes\x12\x19\n" +
-	"\btx_bytes\x18\x03 \x01(\x04R\atxBytes\"'\n" +
-	"\n" +
-	"TrafficAck\x12\x19\n" +
-	"\bbatch_id\x18\x01 \x01(\tR\abatchId\"\xa5\x01\n" +
-	"\x11RuntimeEventBatch\x12\x19\n" +
-	"\bbatch_id\x18\x01 \x01(\tR\abatchId\x128\n" +
-	"\x06events\x18\x02 \x03(\v2 .bproxy.node.v1.CoreRuntimeEventR\x06events\x12;\n" +
-	"\bsnapshot\x18\x03 \x01(\v2\x1f.bproxy.node.v1.RuntimeSnapshotR\bsnapshot\"\xbd\x02\n" +
+	"\btx_bytes\x18\x03 \x01(\x04R\atxBytes\x12;\n" +
+	"\vobserved_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"observedAt\"\xe9\x01\n" +
 	"\x0fRuntimeSnapshot\x12 \n" +
 	"\fcore_boot_id\x18\x01 \x01(\tR\n" +
-	"coreBootId\x12'\n" +
-	"\x0flatest_sequence\x18\x02 \x01(\x04R\x0elatestSequence\x12)\n" +
-	"\x10runtime_revision\x18\x03 \x01(\x04R\x0fruntimeRevision\x12;\n" +
-	"\vcaptured_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"coreBootId\x12;\n" +
+	"\vcaptured_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"capturedAt\x129\n" +
-	"\x05users\x18\x05 \x03(\v2#.bproxy.node.v1.RuntimeUserSnapshotR\x05users\x12<\n" +
-	"\x06boards\x18\x06 \x03(\v2$.bproxy.node.v1.RuntimeBoardSnapshotR\x06boards\"\x8f\x01\n" +
-	"\x13RuntimeUserSnapshot\x12\x19\n" +
-	"\buser_tag\x18\x01 \x01(\tR\auserTag\x12'\n" +
-	"\x0factive_sessions\x18\x02 \x01(\x04R\x0eactiveSessions\x12\x19\n" +
-	"\brx_bytes\x18\x03 \x01(\x04R\arxBytes\x12\x19\n" +
-	"\btx_bytes\x18\x04 \x01(\x04R\atxBytes\"_\n" +
-	"\x14RuntimeBoardSnapshot\x12\x1b\n" +
-	"\tboard_tag\x18\x01 \x01(\tR\bboardTag\x12\x14\n" +
-	"\x05state\x18\x02 \x01(\tR\x05state\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"\xfe\x04\n" +
-	"\x10CoreRuntimeEvent\x12\x19\n" +
-	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12 \n" +
-	"\fcore_boot_id\x18\x02 \x01(\tR\n" +
-	"coreBootId\x12\x1a\n" +
-	"\bsequence\x18\x03 \x01(\x04R\bsequence\x12;\n" +
-	"\voccurred_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"occurredAt\x12)\n" +
-	"\x10runtime_revision\x18\x05 \x01(\x04R\x0fruntimeRevision\x12L\n" +
-	"\x10resource_changed\x18\x06 \x01(\v2\x1f.bproxy.node.v1.ResourceChangedH\x00R\x0fresourceChanged\x12S\n" +
-	"\x13board_state_changed\x18\a \x01(\v2!.bproxy.node.v1.BoardStateChangedH\x00R\x11boardStateChanged\x12Y\n" +
-	"\x15client_session_opened\x18\b \x01(\v2#.bproxy.node.v1.ClientSessionOpenedH\x00R\x13clientSessionOpened\x12Y\n" +
-	"\x15client_session_closed\x18\t \x01(\v2#.bproxy.node.v1.ClientSessionClosedH\x00R\x13clientSessionClosed\x12E\n" +
-	"\fstream_reset\x18\n" +
-	" \x01(\v2 .bproxy.node.v1.EventStreamResetH\x00R\vstreamResetB\t\n" +
-	"\apayload\"\x96\x01\n" +
-	"\x0fResourceChanged\x120\n" +
-	"\x04kind\x18\x01 \x01(\x0e2\x1c.bproxy.node.v1.ResourceKindR\x04kind\x12?\n" +
-	"\toperation\x18\x02 \x01(\x0e2!.bproxy.node.v1.ResourceOperationR\toperation\x12\x10\n" +
-	"\x03tag\x18\x03 \x01(\tR\x03tag\"\x83\x01\n" +
-	"\x11BoardStateChanged\x12\x1b\n" +
-	"\tboard_tag\x18\x01 \x01(\tR\bboardTag\x12%\n" +
-	"\x0eprevious_state\x18\x02 \x01(\tR\rpreviousState\x12\x14\n" +
-	"\x05state\x18\x03 \x01(\tR\x05state\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"j\n" +
-	"\x13ClientSessionOpened\x12\x19\n" +
-	"\buser_tag\x18\x01 \x01(\tR\auserTag\x12\x1b\n" +
-	"\tboard_tag\x18\x02 \x01(\tR\bboardTag\x12\x1b\n" +
-	"\tbundle_id\x18\x03 \x01(\tR\bbundleId\"\xb8\x01\n" +
-	"\x13ClientSessionClosed\x12\x19\n" +
-	"\buser_tag\x18\x01 \x01(\tR\auserTag\x12\x1b\n" +
-	"\tboard_tag\x18\x02 \x01(\tR\bboardTag\x12\x1b\n" +
-	"\tbundle_id\x18\x03 \x01(\tR\bbundleId\x12\x19\n" +
-	"\brx_bytes\x18\x04 \x01(\x04R\arxBytes\x12\x19\n" +
-	"\btx_bytes\x18\x05 \x01(\x04R\atxBytes\x12\x16\n" +
-	"\x06reason\x18\x06 \x01(\tR\x06reason\"\x8f\x01\n" +
-	"\x10EventStreamReset\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason\x12:\n" +
-	"\x19oldest_available_sequence\x18\x02 \x01(\x04R\x17oldestAvailableSequence\x12'\n" +
-	"\x0flatest_sequence\x18\x03 \x01(\x04R\x0elatestSequence\",\n" +
-	"\x0fRuntimeEventAck\x12\x19\n" +
-	"\bbatch_id\x18\x01 \x01(\tR\abatchId*^\n" +
-	"\fResourceKind\x12\x1d\n" +
-	"\x19RESOURCE_KIND_UNSPECIFIED\x10\x00\x12\x16\n" +
-	"\x12RESOURCE_KIND_USER\x10\x01\x12\x17\n" +
-	"\x13RESOURCE_KIND_BOARD\x10\x02*\xd6\x01\n" +
-	"\x11ResourceOperation\x12\"\n" +
-	"\x1eRESOURCE_OPERATION_UNSPECIFIED\x10\x00\x12\x1c\n" +
-	"\x18RESOURCE_OPERATION_ADDED\x10\x01\x12\x1e\n" +
-	"\x1aRESOURCE_OPERATION_UPDATED\x10\x02\x12\x1e\n" +
-	"\x1aRESOURCE_OPERATION_ENABLED\x10\x03\x12\x1f\n" +
-	"\x1bRESOURCE_OPERATION_DISABLED\x10\x04\x12\x1e\n" +
-	"\x1aRESOURCE_OPERATION_REMOVED\x10\x052\xea\x01\n" +
+	"\x05users\x18\x03 \x03(\v2#.bproxy.node.v1.RuntimeUserSnapshotR\x05users\x12<\n" +
+	"\x06boards\x18\x04 \x03(\v2$.bproxy.node.v1.RuntimeBoardSnapshotR\x06boards\"\xb8\x01\n" +
+	"\x13RuntimeUserSnapshot\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12'\n" +
+	"\x0factive_sessions\x18\x02 \x01(\rR\x0eactiveSessions\x12!\n" +
+	"\factive_lanes\x18\x03 \x01(\rR\vactiveLanes\x12<\n" +
+	"\flast_seen_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"lastSeenAt\"\x89\x01\n" +
+	"\x14RuntimeBoardSnapshot\x12\x19\n" +
+	"\bboard_id\x18\x01 \x01(\tR\aboardId\x12\x14\n" +
+	"\x05state\x18\x02 \x01(\tR\x05state\x12!\n" +
+	"\factive_lanes\x18\x03 \x01(\rR\vactiveLanes\x12\x1d\n" +
+	"\n" +
+	"last_error\x18\x04 \x01(\tR\tlastError\"\x82\x01\n" +
+	"\fRuntimeEvent\x12\x12\n" +
+	"\x04type\x18\x01 \x01(\tR\x04type\x12;\n" +
+	"\voccurred_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"occurredAt\x12!\n" +
+	"\fpayload_json\x18\x03 \x01(\tR\vpayloadJson2\x87\x03\n" +
 	"\x12NodeControlService\x12G\n" +
 	"\x06Enroll\x12\x1d.bproxy.node.v1.EnrollRequest\x1a\x1e.bproxy.node.v1.EnrollResponse\x12E\n" +
-	"\x05Renew\x12\x1c.bproxy.node.v1.RenewRequest\x1a\x1e.bproxy.node.v1.EnrollResponse\x12D\n" +
-	"\aConnect\x12\x19.bproxy.node.v1.NodeEvent\x1a\x1a.bproxy.node.v1.HubCommand(\x010\x01B&Z$bproxy-node-contracts/node/v1;nodev1b\x06proto3"
+	"\x05Renew\x12\x1c.bproxy.node.v1.RenewRequest\x1a\x1e.bproxy.node.v1.EnrollResponse\x12E\n" +
+	"\x05Watch\x12\x1c.bproxy.node.v1.WatchRequest\x1a\x1c.bproxy.node.v1.ConfigNotice0\x01\x12Q\n" +
+	"\vFetchConfig\x12\".bproxy.node.v1.FetchConfigRequest\x1a\x1e.bproxy.node.v1.ConfigDocument\x12G\n" +
+	"\x06Report\x12\x1d.bproxy.node.v1.ReportRequest\x1a\x1e.bproxy.node.v1.ReportResponseB&Z$bproxy-node-contracts/node/v1;nodev1b\x06proto3"
 
 var (
 	file_node_v1_node_proto_rawDescOnce sync.Once
@@ -2208,81 +1289,58 @@ func file_node_v1_node_proto_rawDescGZIP() []byte {
 	return file_node_v1_node_proto_rawDescData
 }
 
-var file_node_v1_node_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_node_v1_node_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_node_v1_node_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_node_v1_node_proto_goTypes = []any{
-	(ResourceKind)(0),             // 0: bproxy.node.v1.ResourceKind
-	(ResourceOperation)(0),        // 1: bproxy.node.v1.ResourceOperation
-	(*EnrollRequest)(nil),         // 2: bproxy.node.v1.EnrollRequest
-	(*EnrollResponse)(nil),        // 3: bproxy.node.v1.EnrollResponse
-	(*RenewRequest)(nil),          // 4: bproxy.node.v1.RenewRequest
-	(*NodeEvent)(nil),             // 5: bproxy.node.v1.NodeEvent
-	(*HubCommand)(nil),            // 6: bproxy.node.v1.HubCommand
-	(*NodeHello)(nil),             // 7: bproxy.node.v1.NodeHello
-	(*DesiredState)(nil),          // 8: bproxy.node.v1.DesiredState
-	(*ApplyResult)(nil),           // 9: bproxy.node.v1.ApplyResult
-	(*NodeHeartbeat)(nil),         // 10: bproxy.node.v1.NodeHeartbeat
-	(*InterfaceTrafficBatch)(nil), // 11: bproxy.node.v1.InterfaceTrafficBatch
-	(*InterfaceTrafficDelta)(nil), // 12: bproxy.node.v1.InterfaceTrafficDelta
-	(*UserTrafficBatch)(nil),      // 13: bproxy.node.v1.UserTrafficBatch
-	(*UserTrafficDelta)(nil),      // 14: bproxy.node.v1.UserTrafficDelta
-	(*TrafficAck)(nil),            // 15: bproxy.node.v1.TrafficAck
-	(*RuntimeEventBatch)(nil),     // 16: bproxy.node.v1.RuntimeEventBatch
-	(*RuntimeSnapshot)(nil),       // 17: bproxy.node.v1.RuntimeSnapshot
-	(*RuntimeUserSnapshot)(nil),   // 18: bproxy.node.v1.RuntimeUserSnapshot
-	(*RuntimeBoardSnapshot)(nil),  // 19: bproxy.node.v1.RuntimeBoardSnapshot
-	(*CoreRuntimeEvent)(nil),      // 20: bproxy.node.v1.CoreRuntimeEvent
-	(*ResourceChanged)(nil),       // 21: bproxy.node.v1.ResourceChanged
-	(*BoardStateChanged)(nil),     // 22: bproxy.node.v1.BoardStateChanged
-	(*ClientSessionOpened)(nil),   // 23: bproxy.node.v1.ClientSessionOpened
-	(*ClientSessionClosed)(nil),   // 24: bproxy.node.v1.ClientSessionClosed
-	(*EventStreamReset)(nil),      // 25: bproxy.node.v1.EventStreamReset
-	(*RuntimeEventAck)(nil),       // 26: bproxy.node.v1.RuntimeEventAck
-	(*timestamppb.Timestamp)(nil), // 27: google.protobuf.Timestamp
+	(*EnrollRequest)(nil),         // 0: bproxy.node.v1.EnrollRequest
+	(*EnrollResponse)(nil),        // 1: bproxy.node.v1.EnrollResponse
+	(*RenewRequest)(nil),          // 2: bproxy.node.v1.RenewRequest
+	(*WatchRequest)(nil),          // 3: bproxy.node.v1.WatchRequest
+	(*ConfigNotice)(nil),          // 4: bproxy.node.v1.ConfigNotice
+	(*FetchConfigRequest)(nil),    // 5: bproxy.node.v1.FetchConfigRequest
+	(*ConfigDocument)(nil),        // 6: bproxy.node.v1.ConfigDocument
+	(*ReportRequest)(nil),         // 7: bproxy.node.v1.ReportRequest
+	(*Health)(nil),                // 8: bproxy.node.v1.Health
+	(*ReportResponse)(nil),        // 9: bproxy.node.v1.ReportResponse
+	(*AgentCommand)(nil),          // 10: bproxy.node.v1.AgentCommand
+	(*InterfaceTrafficDelta)(nil), // 11: bproxy.node.v1.InterfaceTrafficDelta
+	(*UserTrafficDelta)(nil),      // 12: bproxy.node.v1.UserTrafficDelta
+	(*RuntimeSnapshot)(nil),       // 13: bproxy.node.v1.RuntimeSnapshot
+	(*RuntimeUserSnapshot)(nil),   // 14: bproxy.node.v1.RuntimeUserSnapshot
+	(*RuntimeBoardSnapshot)(nil),  // 15: bproxy.node.v1.RuntimeBoardSnapshot
+	(*RuntimeEvent)(nil),          // 16: bproxy.node.v1.RuntimeEvent
+	(*timestamppb.Timestamp)(nil), // 17: google.protobuf.Timestamp
 }
 var file_node_v1_node_proto_depIdxs = []int32{
-	27, // 0: bproxy.node.v1.EnrollResponse.expires_at:type_name -> google.protobuf.Timestamp
-	7,  // 1: bproxy.node.v1.NodeEvent.hello:type_name -> bproxy.node.v1.NodeHello
-	9,  // 2: bproxy.node.v1.NodeEvent.apply_result:type_name -> bproxy.node.v1.ApplyResult
-	10, // 3: bproxy.node.v1.NodeEvent.heartbeat:type_name -> bproxy.node.v1.NodeHeartbeat
-	11, // 4: bproxy.node.v1.NodeEvent.interface_traffic:type_name -> bproxy.node.v1.InterfaceTrafficBatch
-	13, // 5: bproxy.node.v1.NodeEvent.user_traffic:type_name -> bproxy.node.v1.UserTrafficBatch
-	16, // 6: bproxy.node.v1.NodeEvent.runtime_events:type_name -> bproxy.node.v1.RuntimeEventBatch
-	8,  // 7: bproxy.node.v1.HubCommand.desired_state:type_name -> bproxy.node.v1.DesiredState
-	15, // 8: bproxy.node.v1.HubCommand.traffic_ack:type_name -> bproxy.node.v1.TrafficAck
-	26, // 9: bproxy.node.v1.HubCommand.runtime_event_ack:type_name -> bproxy.node.v1.RuntimeEventAck
-	27, // 10: bproxy.node.v1.ApplyResult.applied_at:type_name -> google.protobuf.Timestamp
-	27, // 11: bproxy.node.v1.NodeHeartbeat.sampled_at:type_name -> google.protobuf.Timestamp
-	27, // 12: bproxy.node.v1.InterfaceTrafficBatch.interval_start:type_name -> google.protobuf.Timestamp
-	27, // 13: bproxy.node.v1.InterfaceTrafficBatch.interval_end:type_name -> google.protobuf.Timestamp
-	12, // 14: bproxy.node.v1.InterfaceTrafficBatch.interfaces:type_name -> bproxy.node.v1.InterfaceTrafficDelta
-	27, // 15: bproxy.node.v1.UserTrafficBatch.interval_start:type_name -> google.protobuf.Timestamp
-	27, // 16: bproxy.node.v1.UserTrafficBatch.interval_end:type_name -> google.protobuf.Timestamp
-	14, // 17: bproxy.node.v1.UserTrafficBatch.users:type_name -> bproxy.node.v1.UserTrafficDelta
-	20, // 18: bproxy.node.v1.RuntimeEventBatch.events:type_name -> bproxy.node.v1.CoreRuntimeEvent
-	17, // 19: bproxy.node.v1.RuntimeEventBatch.snapshot:type_name -> bproxy.node.v1.RuntimeSnapshot
-	27, // 20: bproxy.node.v1.RuntimeSnapshot.captured_at:type_name -> google.protobuf.Timestamp
-	18, // 21: bproxy.node.v1.RuntimeSnapshot.users:type_name -> bproxy.node.v1.RuntimeUserSnapshot
-	19, // 22: bproxy.node.v1.RuntimeSnapshot.boards:type_name -> bproxy.node.v1.RuntimeBoardSnapshot
-	27, // 23: bproxy.node.v1.CoreRuntimeEvent.occurred_at:type_name -> google.protobuf.Timestamp
-	21, // 24: bproxy.node.v1.CoreRuntimeEvent.resource_changed:type_name -> bproxy.node.v1.ResourceChanged
-	22, // 25: bproxy.node.v1.CoreRuntimeEvent.board_state_changed:type_name -> bproxy.node.v1.BoardStateChanged
-	23, // 26: bproxy.node.v1.CoreRuntimeEvent.client_session_opened:type_name -> bproxy.node.v1.ClientSessionOpened
-	24, // 27: bproxy.node.v1.CoreRuntimeEvent.client_session_closed:type_name -> bproxy.node.v1.ClientSessionClosed
-	25, // 28: bproxy.node.v1.CoreRuntimeEvent.stream_reset:type_name -> bproxy.node.v1.EventStreamReset
-	0,  // 29: bproxy.node.v1.ResourceChanged.kind:type_name -> bproxy.node.v1.ResourceKind
-	1,  // 30: bproxy.node.v1.ResourceChanged.operation:type_name -> bproxy.node.v1.ResourceOperation
-	2,  // 31: bproxy.node.v1.NodeControlService.Enroll:input_type -> bproxy.node.v1.EnrollRequest
-	4,  // 32: bproxy.node.v1.NodeControlService.Renew:input_type -> bproxy.node.v1.RenewRequest
-	5,  // 33: bproxy.node.v1.NodeControlService.Connect:input_type -> bproxy.node.v1.NodeEvent
-	3,  // 34: bproxy.node.v1.NodeControlService.Enroll:output_type -> bproxy.node.v1.EnrollResponse
-	3,  // 35: bproxy.node.v1.NodeControlService.Renew:output_type -> bproxy.node.v1.EnrollResponse
-	6,  // 36: bproxy.node.v1.NodeControlService.Connect:output_type -> bproxy.node.v1.HubCommand
-	34, // [34:37] is the sub-list for method output_type
-	31, // [31:34] is the sub-list for method input_type
-	31, // [31:31] is the sub-list for extension type_name
-	31, // [31:31] is the sub-list for extension extendee
-	0,  // [0:31] is the sub-list for field type_name
+	17, // 0: bproxy.node.v1.EnrollResponse.expires_at:type_name -> google.protobuf.Timestamp
+	8,  // 1: bproxy.node.v1.ReportRequest.health:type_name -> bproxy.node.v1.Health
+	13, // 2: bproxy.node.v1.ReportRequest.runtime:type_name -> bproxy.node.v1.RuntimeSnapshot
+	11, // 3: bproxy.node.v1.ReportRequest.interface_traffic:type_name -> bproxy.node.v1.InterfaceTrafficDelta
+	12, // 4: bproxy.node.v1.ReportRequest.user_traffic:type_name -> bproxy.node.v1.UserTrafficDelta
+	16, // 5: bproxy.node.v1.ReportRequest.events:type_name -> bproxy.node.v1.RuntimeEvent
+	17, // 6: bproxy.node.v1.Health.observed_at:type_name -> google.protobuf.Timestamp
+	10, // 7: bproxy.node.v1.ReportResponse.commands:type_name -> bproxy.node.v1.AgentCommand
+	17, // 8: bproxy.node.v1.InterfaceTrafficDelta.observed_at:type_name -> google.protobuf.Timestamp
+	17, // 9: bproxy.node.v1.UserTrafficDelta.observed_at:type_name -> google.protobuf.Timestamp
+	17, // 10: bproxy.node.v1.RuntimeSnapshot.captured_at:type_name -> google.protobuf.Timestamp
+	14, // 11: bproxy.node.v1.RuntimeSnapshot.users:type_name -> bproxy.node.v1.RuntimeUserSnapshot
+	15, // 12: bproxy.node.v1.RuntimeSnapshot.boards:type_name -> bproxy.node.v1.RuntimeBoardSnapshot
+	17, // 13: bproxy.node.v1.RuntimeUserSnapshot.last_seen_at:type_name -> google.protobuf.Timestamp
+	17, // 14: bproxy.node.v1.RuntimeEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	0,  // 15: bproxy.node.v1.NodeControlService.Enroll:input_type -> bproxy.node.v1.EnrollRequest
+	2,  // 16: bproxy.node.v1.NodeControlService.Renew:input_type -> bproxy.node.v1.RenewRequest
+	3,  // 17: bproxy.node.v1.NodeControlService.Watch:input_type -> bproxy.node.v1.WatchRequest
+	5,  // 18: bproxy.node.v1.NodeControlService.FetchConfig:input_type -> bproxy.node.v1.FetchConfigRequest
+	7,  // 19: bproxy.node.v1.NodeControlService.Report:input_type -> bproxy.node.v1.ReportRequest
+	1,  // 20: bproxy.node.v1.NodeControlService.Enroll:output_type -> bproxy.node.v1.EnrollResponse
+	1,  // 21: bproxy.node.v1.NodeControlService.Renew:output_type -> bproxy.node.v1.EnrollResponse
+	4,  // 22: bproxy.node.v1.NodeControlService.Watch:output_type -> bproxy.node.v1.ConfigNotice
+	6,  // 23: bproxy.node.v1.NodeControlService.FetchConfig:output_type -> bproxy.node.v1.ConfigDocument
+	9,  // 24: bproxy.node.v1.NodeControlService.Report:output_type -> bproxy.node.v1.ReportResponse
+	20, // [20:25] is the sub-list for method output_type
+	15, // [15:20] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_node_v1_node_proto_init() }
@@ -2290,39 +1348,18 @@ func file_node_v1_node_proto_init() {
 	if File_node_v1_node_proto != nil {
 		return
 	}
-	file_node_v1_node_proto_msgTypes[3].OneofWrappers = []any{
-		(*NodeEvent_Hello)(nil),
-		(*NodeEvent_ApplyResult)(nil),
-		(*NodeEvent_Heartbeat)(nil),
-		(*NodeEvent_InterfaceTraffic)(nil),
-		(*NodeEvent_UserTraffic)(nil),
-		(*NodeEvent_RuntimeEvents)(nil),
-	}
-	file_node_v1_node_proto_msgTypes[4].OneofWrappers = []any{
-		(*HubCommand_DesiredState)(nil),
-		(*HubCommand_TrafficAck)(nil),
-		(*HubCommand_RuntimeEventAck)(nil),
-	}
-	file_node_v1_node_proto_msgTypes[18].OneofWrappers = []any{
-		(*CoreRuntimeEvent_ResourceChanged)(nil),
-		(*CoreRuntimeEvent_BoardStateChanged)(nil),
-		(*CoreRuntimeEvent_ClientSessionOpened)(nil),
-		(*CoreRuntimeEvent_ClientSessionClosed)(nil),
-		(*CoreRuntimeEvent_StreamReset)(nil),
-	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_node_v1_node_proto_rawDesc), len(file_node_v1_node_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   25,
+			NumEnums:      0,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_node_v1_node_proto_goTypes,
 		DependencyIndexes: file_node_v1_node_proto_depIdxs,
-		EnumInfos:         file_node_v1_node_proto_enumTypes,
 		MessageInfos:      file_node_v1_node_proto_msgTypes,
 	}.Build()
 	File_node_v1_node_proto = out.File

@@ -4,8 +4,8 @@ import io.boardproxy.control.access.domain.AccessPrincipal
 import io.boardproxy.control.access.domain.AccessRole
 import io.boardproxy.control.access.domain.PanelAdministrator
 import io.boardproxy.control.access.domain.PanelSession
-import io.boardproxy.control.audit.application.AuditRepository
-import io.boardproxy.control.audit.domain.AuditEvent
+import io.boardproxy.control.shared.audit.AuditRepository
+import io.boardproxy.control.shared.audit.AuditEvent
 import io.boardproxy.control.shared.errors.AuthenticationFailed
 import io.boardproxy.control.shared.errors.InvalidRequest
 import io.boardproxy.control.shared.errors.ResourceConflict
@@ -108,7 +108,7 @@ class PanelAuthService(
     private fun event(action: String, actor: String, resourceType: String, resourceId: String, now: Instant) = AuditEvent(
         id = nextId(), nodeId = null, actor = actor, action = action,
         resourceType = resourceType, resourceId = resourceId,
-        resourceVersion = 0, catalogVersion = 0, occurredAt = now,
+        resourceVersion = 0, occurredAt = now,
     )
 
     private fun String.sha256Hex(): String = MessageDigest.getInstance("SHA-256")

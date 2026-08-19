@@ -29,7 +29,34 @@ type Service struct {
 	core     coreRuntime
 	state    appliedState
 	bootID   string
-	log      *slog.Logger
+	// Monotonic within bootID: lets the hub order reports without trusting clocks.
+	seq        uint64
+	applyError string
+	startedAt  time.Time
+	restart    func()
+	log        *slog.Logger
+}
+
+// requestRestart stops the agent process. The hub tracks delivery, so a command
+// acted upon once is never offered again.
+func (s *Service) requestRestart() {
+	if s.restart != nil {
+		s.restart()
+	}
+}
+
+func (s *Service) uptimeSeconds() int64 {
+	if s.startedAt.IsZero() {
+		return 0
+	}
+	return int64(time.Since(s.startedAt).Seconds())
+}
+
+func (s *Service) coreVersion(ready bool) string {
+	if !ready {
+		return ""
+	}
+	return s.version
 }
 
 type stateStore interface {
@@ -56,15 +83,17 @@ func Run(ctx context.Context, config nodeconfig.Config, version string, stdout, 
 	if err != nil {
 		return err
 	}
+	runContext, stop := context.WithCancel(ctx)
+	defer stop()
 	service := &Service{
 		config: config, version: version, store: store, core: core,
-		state: state, bootID: randomID(), log: log,
+		state: state, bootID: randomID(), startedAt: time.Now(), restart: stop, log: log,
 	}
 	collector := statscollector.New(config.Interfaces, config.SysClassNet, config.CoreControl, store)
-	go collectTraffic(ctx, store, collector, config.CollectInterval, log)
-	go superviseCore(ctx, core, log)
-	go collectCoreRuntimeEvents(ctx, core, store, log)
-	return service.reconnect(ctx)
+	go collectTraffic(runContext, store, collector, config.CollectInterval, log)
+	go superviseCore(runContext, core, log)
+	go collectCoreRuntimeEvents(runContext, core, store, log)
+	return service.reconnect(runContext)
 }
 
 func (s *Service) reconnect(ctx context.Context) error {
@@ -83,7 +112,7 @@ func (s *Service) reconnect(ctx context.Context) error {
 		if time.Since(connectedAt) >= s.config.Heartbeat {
 			delay = initialReconnectDelay
 		}
-		s.log.Warn("hub stream disconnected", "err", err, "retry_in", delay)
+		s.log.Warn("hub watch disconnected", "err", err, "retry_in", delay)
 		if err := wait(ctx, delay); err != nil {
 			return nil
 		}

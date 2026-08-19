@@ -1,128 +1,151 @@
 package io.boardproxy.control.shared.persistence
 
+import io.boardproxy.control.testing.PostgresSupport
+import org.springframework.dao.DataIntegrityViolationException
+import kotlin.test.BeforeTest
 import kotlin.test.Test
-import kotlin.test.assertContains
-import kotlin.test.assertFalse
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
+/**
+ * Контракт схемы проверяется на живой базе, а не сравнением строк в .sql.
+ *
+ * Доступ к данным рукописный, поэтому компилятор не поймает расхождение схемы
+ * и кода — эту роль берут на себя эти тесты и Testcontainers-тесты репозиториев.
+ */
 class MigrationContractTest {
-    @Test
-    fun `initial migration contains durable control and runtime boundaries`() {
-        val sql = requireNotNull(javaClass.getResource("/db/migration/V1__control_plane.sql")).readText()
-        listOf(
-            "CREATE TABLE desired_config_revisions",
-            "CREATE TABLE runtime_events",
-            "CREATE TABLE node_runtime_projection",
-            "CREATE TABLE traffic_batches",
-            "CREATE TABLE interface_traffic_deltas",
-            "CREATE TABLE user_traffic_deltas",
-            "CREATE TABLE audit_events",
-            "CREATE TABLE outbox_events",
-        ).forEach { assertContains(sql, it) }
-        assertContains(sql, "private_key_ciphertext")
-        assertContains(sql, "server_key_ciphertext")
-        assertContains(sql, "config_ciphertext")
-        assertFalse(sql.contains("private_key text", ignoreCase = true))
-        assertFalse(sql.contains("server_private_key", ignoreCase = true))
-        assertFalse(sql.contains("config_toml", ignoreCase = true))
+    private val jdbc get() = PostgresSupport.jdbc
+
+    @BeforeTest
+    fun prepare() {
+        kotlin.test.assertTrue(PostgresSupport.dockerAvailable, "тесты схемы требуют Docker")
+        PostgresSupport.truncate()
     }
 
     @Test
-    fun `runtime projection migration stores replay and session completeness state`() {
-        val migration = requireNotNull(javaClass.getResource("/db/migration/V3__runtime_projection.sql")).readText()
-        listOf(
-            "PRIMARY KEY (node_id, event_id)",
-            "ADD COLUMN runtime_revision",
-            "ADD COLUMN captured_at",
-            "ADD COLUMN sessions",
-            "ADD COLUMN session_details_complete",
-        ).forEach { expected -> assertTrue(migration.contains(expected), "missing: $expected") }
+    fun `схема содержит ровно ожидаемый набор таблиц`() {
+        val actual = jdbc.queryForList(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'flyway_schema_history'",
+            String::class.java,
+        ).toSortedSet()
+
+        val expected = sortedSetOf(
+            // агенты
+            "agents", "agent_status", "agent_commands", "agent_reports",
+            // владеемое состояние
+            "nodes", "boards", "users", "grants",
+            // производное
+            "node_desired_config", "node_config_snapshots",
+            // наблюдаемое
+            "node_runtime", "runtime_events",
+            // трафик
+            "interface_traffic_deltas", "user_traffic_deltas", "traffic_hourly_rollups",
+            "user_traffic_quotas", "user_traffic_quota_state",
+            // доступ
+            "credentials", "panel_administrators",
+            // подписки
+            "subscriptions", "subscription_service_settings",
+            // pki и журналы
+            "enrollment_tokens", "node_certificates", "audit_events", "outbox_events",
+        )
+
+        assertEquals(expected, actual)
     }
 
     @Test
-    fun `access migration stores hashes and never plaintext tokens`() {
-        val sql = requireNotNull(javaClass.getResource("/db/migration/V2__access_tokens.sql")).readText()
-        assertContains(sql, "CREATE TABLE api_tokens")
-        assertContains(sql, "token_hash")
-        assertFalse(sql.contains("token_secret", ignoreCase = true))
-        assertFalse(sql.contains("plaintext", ignoreCase = true))
+    fun `секреты не хранятся открытым текстом`() {
+        val secretish = jdbc.queryForList(
+            """SELECT table_name || '.' || column_name
+                 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND data_type IN ('text', 'character varying', 'character')
+                  AND (column_name LIKE '%private%' OR column_name LIKE '%password%'
+                       OR column_name LIKE '%secret%' OR column_name LIKE '%token%')
+                  AND column_name NOT LIKE '%\_hash'
+                  AND column_name NOT LIKE '%\_id'""",
+            String::class.java,
+        )
+
+        assertTrue(secretish.isEmpty(), "секрет в открытом виде: $secretish")
     }
 
     @Test
-    fun `catalog history migration encrypts snapshots and allows rollback hashes`() {
-        val sql = requireNotNull(javaClass.getResource("/db/migration/V4__catalog_history.sql")).readText()
-        assertContains(sql, "CREATE TABLE catalog_snapshots")
-        assertContains(sql, "payload_ciphertext")
-        assertContains(sql, "DROP CONSTRAINT desired_config_revisions_node_id_config_sha256_key")
-        assertFalse(sql.contains("payload json", ignoreCase = true))
+    fun `удаление ноды не удаляет флотового пользователя`() {
+        seedNodeWithUser()
+
+        jdbc.update("DELETE FROM agents WHERE id = 'n1'")
+
+        assertEquals(0, count("nodes"), "нода должна уйти")
+        assertEquals(0, count("boards"), "борды ноды должны уйти каскадом")
+        assertEquals(0, count("grants"), "гранты на борды ноды должны уйти каскадом")
+        assertEquals(1, count("users"), "пользователь флотовый и ноду переживает")
     }
 
     @Test
-    fun `telemetry migration keeps traffic kinds separate and persists quota state`() {
-        val sql = requireNotNull(javaClass.getResource("/db/migration/V5__traffic_rollups_and_quotas.sql")).readText()
-        listOf("CREATE TABLE traffic_hourly_rollups", "traffic_kind", "CREATE TABLE user_traffic_quotas", "CREATE TABLE user_traffic_quota_state")
-            .forEach { assertContains(sql, it) }
+    fun `грант нельзя выдать на борд чужой ноды`() {
+        seedNodeWithUser()
+        jdbc.update("INSERT INTO agents(id, kind, name) VALUES ('n2', 'node', 'node two')")
+        jdbc.update(
+            """INSERT INTO nodes VALUES
+               ('n2', 'node two', 'enabled', '{}'::jsonb, '\x00', '\x00', 'k1', 1, now())""",
+        )
+
+        assertFailsWith<DataIntegrityViolationException> {
+            jdbc.update("INSERT INTO grants VALUES ('u1', 'n2', 'b1')")
+        }
     }
 
     @Test
-    fun `ha migration provides certificate revocation fencing and durable retries`() {
-        val sql = requireNotNull(javaClass.getResource("/db/migration/V6__security_and_ha.sql")).readText()
-        listOf("fingerprint_sha256", "revoked_reason", "CREATE TABLE node_session_leases", "fencing_token", "next_attempt_at", "dead_lettered_at")
-            .forEach { assertContains(sql, it) }
+    fun `отпечаток пользователя уникален во всём флоте`() {
+        seedNodeWithUser()
+
+        assertFailsWith<DataIntegrityViolationException> {
+            jdbc.update(
+                """INSERT INTO users VALUES
+                   ('u2', 'other', NULL, NULL, NULL, 'pub2', 'fp1', 'enabled', 2, 4, 1, now())""",
+            )
+        }
     }
 
     @Test
-    fun `runtime replay migration persists authoritative snapshot separately from protobuf payload`() {
-        val sql = requireNotNull(javaClass.getResource("/db/migration/V7__runtime_replay.sql")).readText()
-        assertContains(sql, "ADD COLUMN snapshot jsonb")
-        assertContains(sql, "WHERE snapshot IS NOT NULL")
+    fun `пользователь обязан иметь либо приватный ключ, либо публичный`() {
+        assertFailsWith<DataIntegrityViolationException> {
+            jdbc.update(
+                """INSERT INTO users VALUES
+                   ('u3', 'broken', NULL, NULL, NULL, NULL, 'fp3', 'enabled', 2, 4, 1, now())""",
+            )
+        }
     }
 
     @Test
-    fun `subscription migration stores only token hashes and supports multiple ordered keys`() {
-        val sql = requireNotNull(javaClass.getResource("/db/migration/V8__subscriptions.sql")).readText()
-        assertContains(sql, "CREATE TABLE subscriptions")
-        assertContains(sql, "token_hash")
-        assertContains(sql, "recovery_public_key")
-        assertContains(sql, "CREATE TABLE subscription_keys")
-        assertContains(sql, "UNIQUE (subscription_id, node_id, user_id)")
-        kotlin.test.assertFalse(sql.contains("client_private_key"))
+    fun `повторный отчёт агента отсекается первичным ключом`() {
+        seedNodeWithUser()
+        jdbc.update("INSERT INTO agent_reports(agent_id, batch_id) VALUES ('n1', 'batch-1')")
+
+        val inserted = jdbc.update(
+            "INSERT INTO agent_reports(agent_id, batch_id) VALUES ('n1', 'batch-1') ON CONFLICT DO NOTHING",
+        )
+
+        assertEquals(0, inserted, "дубликат отчёта не должен приниматься повторно")
     }
 
-    @Test
-    fun `panel authentication migration stores password and session hashes only`() {
-        val sql = requireNotNull(javaClass.getResource("/db/migration/V9__panel_authentication.sql")).readText()
-        assertContains(sql, "CREATE TABLE panel_administrators")
-        assertContains(sql, "password_hash")
-        assertContains(sql, "CREATE TABLE panel_sessions")
-        assertContains(sql, "token_hash")
-        assertFalse(sql.contains("password text", ignoreCase = true))
-        assertFalse(sql.contains("token_secret", ignoreCase = true))
+    private fun seedNodeWithUser() {
+        jdbc.update("INSERT INTO agents(id, kind, name) VALUES ('n1', 'node', 'node one')")
+        jdbc.update(
+            """INSERT INTO nodes VALUES
+               ('n1', 'node one', 'enabled', '{}'::jsonb, '\x00', '\x00', 'k1', 1, now())""",
+        )
+        jdbc.update(
+            """INSERT INTO boards VALUES
+               ('n1', 'b1', 'board', 'hash1', NULL, NULL, NULL, 'enabled', 4, 1, now())""",
+        )
+        jdbc.update(
+            """INSERT INTO users VALUES
+               ('u1', 'user', NULL, NULL, NULL, 'pub', 'fp1', 'enabled', 2, 4, 1, now())""",
+        )
+        jdbc.update("INSERT INTO grants VALUES ('u1', 'n1', 'b1')")
     }
 
-    @Test
-    fun `quota migration widens periods and actions and keeps the reset counter`() {
-        val sql = requireNotNull(javaClass.getResource("/db/migration/V10__quota_periods_and_actions.sql")).readText()
-        // Констрейнты пересоздаются по автоимени PostgreSQL — проверено применением V1..V10 на живой базе.
-        assertContains(sql, "DROP CONSTRAINT user_traffic_quotas_period_check")
-        assertContains(sql, "DROP CONSTRAINT user_traffic_quotas_action_check")
-        assertContains(sql, "CHECK (period IN ('daily', 'weekly', 'monthly', 'none'))")
-        assertContains(sql, "CHECK (action IN ('alert', 'reset', 'disable'))")
-        assertContains(sql, "ADD COLUMN counter_start")
-    }
-
-    @Test
-    fun `subscription link migration stores secrets encrypted and keeps the token hash`() {
-        val sql = requireNotNull(javaClass.getResource("/db/migration/V11__subscription_recoverable_link.sql")).readText()
-        listOf(
-            "ADD COLUMN token_ciphertext",
-            "ADD COLUMN token_nonce",
-            "ADD COLUMN recovery_private_ciphertext",
-            "subscriptions_secrets_complete",
-            "subscriptions_recovery_secrets_complete",
-        ).forEach { assertContains(sql, it) }
-        // Открытый токен в базе не появляется: хранится только шифртекст.
-        assertFalse(sql.contains("token text", ignoreCase = true))
-        assertFalse(sql.contains("recovery_private_key text", ignoreCase = true))
-    }
+    private fun count(table: String): Int = jdbc.queryForObject("SELECT count(*) FROM $table", Int::class.java) ?: 0
 }

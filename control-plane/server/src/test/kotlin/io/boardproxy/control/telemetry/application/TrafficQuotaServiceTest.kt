@@ -1,143 +1,129 @@
 package io.boardproxy.control.telemetry.application
 
-import io.boardproxy.control.provisioning.application.CatalogQueries
-import io.boardproxy.control.provisioning.application.CatalogResourceCommands
-import io.boardproxy.control.provisioning.application.UserInput
-import io.boardproxy.control.provisioning.application.CatalogMutationResult
-import io.boardproxy.control.provisioning.domain.model.ConfigRevision
+import io.boardproxy.control.shared.events.OutboxEvent
+import io.boardproxy.control.shared.events.OutboxRepository
 import io.boardproxy.control.telemetry.domain.QuotaAction
 import io.boardproxy.control.telemetry.domain.QuotaPeriod
 import io.boardproxy.control.telemetry.domain.TrafficQuota
-import io.boardproxy.control.testing.TestCatalogs
+import io.boardproxy.control.telemetry.domain.TrafficQuotaState
+import io.boardproxy.control.telemetry.domain.TrafficQuotaUsage
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
+/**
+ * Телеметрия не должна писать в desired state. Её единственный выход — флаг
+ * exceeded и событие quota.changed, поэтому проверяем именно их, а не побочные
+ * эффекты в каталоге, как было раньше.
+ */
 class TrafficQuotaServiceTest {
-    private val now = Instant.parse("2026-08-12T12:00:00Z")
+    private val now = Instant.parse("2026-08-18T12:00:00Z")
+    private val quotas = FakeQuotas()
+    private val outbox = FakeOutbox()
+    private val notifications = mutableListOf<TrafficQuotaUsage>()
+
+    private val service = TrafficQuotaService(
+        quotas = quotas,
+        notifier = { notifications += it },
+        outbox = outbox,
+        clock = Clock.fixed(now, ZoneOffset.UTC),
+        nextId = { "event-${outbox.events.size + 1}" },
+    )
 
     @Test
-    fun `alert quota notifies once and never mutates desired state`() {
-        val repository = Quotas(usedBytes = 150)
-        val resources = Resources()
-        val notifications = mutableListOf<Long>()
-        val service = service(repository, resources) { notifications += it.usedBytes }
-        repository.values += TrafficQuota("node-1", "user-1", QuotaPeriod.DAILY, 100, QuotaAction.ALERT, true, 1, now)
-
-        service.evaluate()
-        service.evaluate()
-
-        assertEquals(listOf(150L), notifications)
-        assertEquals(0, resources.calls)
-    }
-
-    @Test
-    fun `explicit disable quota disables enabled user and records enforcement`() {
-        val repository = Quotas(usedBytes = 100)
-        val resources = Resources()
-        val service = service(repository, resources) {}
-        repository.values += TrafficQuota("node-1", "user-1", QuotaPeriod.MONTHLY, 100, QuotaAction.DISABLE, true, 1, now)
+    fun `превышение с политикой disable поднимает флаг и рождает событие`() {
+        quotas.put(quota(QuotaAction.DISABLE, limit = 100))
+        quotas.used = 150
 
         service.evaluate()
 
-        assertEquals(1, resources.calls)
-        assertTrue(repository.enforced)
-        assertTrue(repository.exceeded)
+        assertTrue(quotas.state("u1")!!.exceeded)
+        assertEquals(setOf("u1"), service.exceededUsers())
+        assertEquals(listOf("quota.changed"), outbox.events.map(OutboxEvent::type))
+        assertEquals(1, notifications.size)
+    }
+
+    /**
+     * Симметрия — главное, ради чего убрана запись в каталог: новый период
+     * снимает флаг сам, оператору не нужно включать пользователя руками.
+     */
+    @Test
+    fun `снятие превышения возвращает пользователя в строй`() {
+        quotas.put(quota(QuotaAction.DISABLE, limit = 100))
+        quotas.used = 150
+        service.evaluate()
+        outbox.events.clear()
+
+        quotas.used = 10
+        service.evaluate()
+
+        assertFalse(quotas.state("u1")!!.exceeded)
+        assertEquals(emptySet(), service.exceededUsers())
+        assertEquals(listOf("quota.changed"), outbox.events.map(OutboxEvent::type))
     }
 
     @Test
-    fun `reset quota restarts the counter and keeps the user enabled`() {
-        val repository = Quotas(usedBytes = 250)
-        val resources = Resources()
-        val service = service(repository, resources) {}
-        repository.values += TrafficQuota("node-1", "user-1", QuotaPeriod.WEEKLY, 100, QuotaAction.RESET, true, 1, now)
+    fun `политика alert не влияет на конфигурацию`() {
+        quotas.put(quota(QuotaAction.ALERT, limit = 100))
+        quotas.used = 150
 
         service.evaluate()
 
-        assertEquals(now, repository.counterStart)
-        assertEquals(0, resources.calls)
-        assertTrue(repository.exceeded)
+        assertFalse(quotas.state("u1")!!.exceeded, "alert только уведомляет")
+        assertEquals(emptySet(), service.exceededUsers())
+        assertEquals(1, notifications.size)
     }
 
     @Test
-    fun `weekly period counts from monday of the current week`() {
-        val repository = Quotas(usedBytes = 10)
-        val service = service(repository, Resources()) {}
-        repository.values += TrafficQuota("node-1", "user-1", QuotaPeriod.WEEKLY, 100, QuotaAction.ALERT, true, 1, now)
+    fun `неизменное состояние не порождает событий`() {
+        quotas.put(quota(QuotaAction.DISABLE, limit = 100))
+        quotas.used = 150
+        service.evaluate()
+        outbox.events.clear()
 
-        val usage = service.list("node-1").single()
+        service.evaluate()
 
-        // 2026-08-12 — среда, значит окно открывается в понедельник 2026-08-10.
-        assertEquals(Instant.parse("2026-08-10T00:00:00Z"), usage.periodStart)
-        assertEquals(Instant.parse("2026-08-17T00:00:00Z"), usage.periodEnd)
+        assertTrue(outbox.events.isEmpty(), "расход обновляется каждую минуту, событие — только на смену флага")
     }
 
-    @Test
-    fun `lifetime period never resets and counts from the epoch`() {
-        val repository = Quotas(usedBytes = 10)
-        val service = service(repository, Resources()) {}
-        repository.values += TrafficQuota("node-1", "user-1", QuotaPeriod.NONE, 100, QuotaAction.ALERT, true, 1, now)
+    private fun quota(action: QuotaAction, limit: Long) = TrafficQuota(
+        userId = "u1", period = QuotaPeriod.MONTHLY, limitBytes = limit,
+        action = action, enabled = true, version = 1, updatedAt = now,
+    )
 
-        val usage = service.list("node-1").single()
+    private class FakeQuotas : TrafficQuotaRepository {
+        private val stored = mutableMapOf<String, TrafficQuota>()
+        private val states = mutableMapOf<String, TrafficQuotaState>()
+        var used: Long = 0
 
-        assertEquals(Instant.EPOCH, usage.periodStart)
-        assertTrue(usage.periodEnd.isAfter(now.plusSeconds(365L * 24 * 3600)))
-    }
+        fun put(quota: TrafficQuota) { stored[quota.userId] = quota }
 
-    @Test
-    fun `a reset counter shortens the counted window without moving the period`() {
-        val resetAt = Instant.parse("2026-08-12T09:00:00Z")
-        val repository = Quotas(usedBytes = 10)
-        val service = service(repository, Resources()) {}
-        repository.values += TrafficQuota(
-            "node-1", "user-1", QuotaPeriod.DAILY, 100, QuotaAction.RESET, true, 1, now, counterStart = resetAt,
-        )
-
-        val usage = service.list("node-1").single()
-
-        assertEquals(Instant.parse("2026-08-12T00:00:00Z"), usage.periodStart)
-        assertEquals(resetAt, repository.countedFrom)
-    }
-
-    private fun service(repository: Quotas, resources: Resources, notify: (io.boardproxy.control.telemetry.domain.TrafficQuotaUsage) -> Unit) =
-        TrafficQuotaService(repository, CatalogQueries { TestCatalogs.catalog() }, resources, TrafficQuotaNotifier(notify), Clock.fixed(now, ZoneOffset.UTC))
-
-    private inner class Resources : CatalogResourceCommands {
-        var calls = 0
-        override fun updateNode(nodeId: String, expectedVersion: Long, input: io.boardproxy.control.provisioning.application.NodeInput, actor: String) = error("not used")
-        override fun putBoard(nodeId: String, boardId: String, expectedVersion: Long, input: io.boardproxy.control.provisioning.application.BoardInput, actor: String) = error("not used")
-        override fun removeBoard(nodeId: String, boardId: String, expectedVersion: Long, actor: String) = error("not used")
-        override fun putUser(nodeId: String, userId: String, expectedVersion: Long, input: UserInput, actor: String): CatalogMutationResult {
-            calls++
-            val catalog = TestCatalogs.catalog()
-            return CatalogMutationResult(
-                catalog,
-                ConfigRevision(nodeId, 2, 1, catalog.version, byteArrayOf(), "hash", "quota", now),
-                true,
-            )
+        override fun find(userId: String) = stored[userId]
+        override fun list() = stored.values.toList()
+        override fun enabled() = stored.values.filter(TrafficQuota::enabled)
+        override fun save(quota: TrafficQuota, expectedVersion: Long?): Boolean {
+            stored[quota.userId] = quota
+            return true
         }
-        override fun removeUser(nodeId: String, userId: String, expectedVersion: Long, actor: String) = error("not used")
-        override fun replaceAssignment(nodeId: String, expectedVersion: Long, boardIds: List<String>, users: List<io.boardproxy.control.provisioning.domain.model.AssignedUser>, actor: String) = error("not used")
+        override fun delete(userId: String, expectedVersion: Long) = stored.remove(userId) != null
+        override fun usedBytes(userId: String, from: Instant, to: Instant) = used
+        override fun state(userId: String) = states[userId]
+        override fun saveState(state: TrafficQuotaState): Boolean {
+            val previous = states.put(state.userId, state)
+            return previous == null || previous.exceeded != state.exceeded
+        }
+        override fun exceededUsers() = states.filterValues(TrafficQuotaState::exceeded).keys
+        override fun startNewCounter(userId: String, at: Instant) {
+            stored[userId] = stored.getValue(userId).copy(counterStart = at)
+        }
     }
 
-    private inner class Quotas(private val usedBytes: Long) : TrafficQuotaRepository {
-        val values = mutableListOf<TrafficQuota>()
-        var exceeded = false
-        var enforced = false
-        var counterStart: Instant? = null
-        var countedFrom: Instant? = null
-        override fun find(nodeId: String, userTag: String) = values.firstOrNull()
-        override fun list(nodeId: String) = values.toList()
-        override fun save(quota: TrafficQuota, expectedVersion: Long?) = true
-        override fun delete(nodeId: String, userTag: String, expectedVersion: Long) = true
-        override fun enabled() = values.filter { it.enabled }
-        override fun usedBytes(nodeId: String, userTag: String, from: Instant, to: Instant) = usedBytes.also { countedFrom = from }
-        override fun recordExceeded(nodeId: String, userTag: String, periodStart: Instant, at: Instant): Boolean = (!exceeded).also { exceeded = true }
-        override fun recordEnforced(nodeId: String, userTag: String, periodStart: Instant, at: Instant) { enforced = true }
-        override fun state(nodeId: String, userTag: String, periodStart: Instant) = (if (exceeded) now else null) to (if (enforced) now else null)
-        override fun startNewCounter(nodeId: String, userTag: String, at: Instant) { counterStart = at }
+    private class FakeOutbox : OutboxRepository {
+        val events = mutableListOf<OutboxEvent>()
+        override fun append(event: OutboxEvent) { events += event }
     }
 }

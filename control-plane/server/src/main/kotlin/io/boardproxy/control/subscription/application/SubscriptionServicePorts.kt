@@ -1,6 +1,6 @@
 package io.boardproxy.control.subscription.application
 
-import io.boardproxy.control.access.application.IssuedApiToken
+import io.boardproxy.control.shared.contracts.IssuedServiceToken
 import java.time.Instant
 
 data class SubscriptionApp(val platform: String, val url: String)
@@ -90,7 +90,7 @@ interface SubscriptionServiceRepository {
 
 interface SubscriptionServiceCommands {
     fun update(update: SubscriptionServiceUpdate, expectedRevision: Long, actor: String): SubscriptionServiceSettings
-    fun issueToken(actor: String): IssuedApiToken
+    fun issueToken(actor: String): IssuedServiceToken
     fun requestRestart(actor: String)
 }
 

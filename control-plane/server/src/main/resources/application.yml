@@ -9,6 +9,11 @@ spring:
     enabled: true
   lifecycle:
     timeout-per-shutdown-phase: 20s
+  threads:
+    # Обработчики блокируются на JDBC, а не на CPU: виртуальные потоки снимают
+    # ограничение пула и убирают необходимость в корутинах в слое доставки.
+    virtual:
+      enabled: true
 
 control:
   instance-id: ${CONTROL_INSTANCE_ID:}

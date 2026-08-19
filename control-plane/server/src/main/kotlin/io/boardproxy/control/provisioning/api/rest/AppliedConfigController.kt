@@ -23,11 +23,10 @@ class AppliedConfigController(private val queries: AppliedConfigQueries) {
 data class AppliedConfigResponse(
     val nodeId: String,
     val revision: Long,
-    val catalogVersion: Long,
     val configSha256: String,
     val toml: String,
-    val createdAt: Instant,
+    val updatedAt: Instant,
 )
 
 private fun AppliedConfig.toResponse() =
-    AppliedConfigResponse(nodeId, revision, catalogVersion, configSha256, toml, createdAt)
+    AppliedConfigResponse(nodeId, revision, configSha256, toml, updatedAt)

@@ -6,10 +6,23 @@ option go_package = "bproxy-node-contracts/node/v1;nodev1";
 
 import "google/protobuf/timestamp.proto";
 
+// The hub never pushes configuration payloads. It only tells the node which
+// revision it should be running; the node decides when to fetch and retries on
+// its own. That keeps the hub side of a session completely stateless: there is
+// no per-session bookkeeping to lose, and therefore no lease or fencing token.
 service NodeControlService {
   rpc Enroll(EnrollRequest) returns (EnrollResponse);
   rpc Renew(RenewRequest) returns (EnrollResponse);
-  rpc Connect(stream NodeEvent) returns (stream HubCommand);
+
+  // Wake-up signal only. Carries a revision number, never a payload.
+  rpc Watch(WatchRequest) returns (stream ConfigNotice);
+
+  // Idempotent: the node calls it whenever its applied revision differs from
+  // the announced one, and also every 30s as a reconcile.
+  rpc FetchConfig(FetchConfigRequest) returns (ConfigDocument);
+
+  // Everything the node reports. Unary and idempotent by batch_id.
+  rpc Report(ReportRequest) returns (ReportResponse);
 }
 
 message EnrollRequest {
@@ -30,63 +43,66 @@ message RenewRequest {
   string agent_version = 2;
 }
 
-message NodeEvent {
-  oneof payload {
-    NodeHello hello = 1;
-    ApplyResult apply_result = 2;
-    NodeHeartbeat heartbeat = 3;
-    InterfaceTrafficBatch interface_traffic = 4;
-    UserTrafficBatch user_traffic = 5;
-    RuntimeEventBatch runtime_events = 6;
-  }
-}
-
-message HubCommand {
-  oneof payload {
-    DesiredState desired_state = 1;
-    TrafficAck traffic_ack = 2;
-    RuntimeEventAck runtime_event_ack = 3;
-  }
-}
-
-message NodeHello {
+message WatchRequest {
   string node_id = 1;
-  string boot_id = 2;
-  string agent_version = 3;
-  string core_version = 4;
-  uint64 applied_revision = 5;
-  string config_sha256 = 6;
+  string agent_version = 2;
 }
 
-message DesiredState {
+message ConfigNotice {
   uint64 revision = 1;
-  bytes config_toml = 2;
-  string config_sha256 = 3;
+  string config_sha256 = 2;
 }
 
-message ApplyResult {
-  uint64 desired_revision = 1;
-  uint64 runtime_revision = 2;
-  string config_sha256 = 3;
-  string error = 4;
-  google.protobuf.Timestamp applied_at = 5;
+message FetchConfigRequest {
+  string node_id = 1;
 }
 
-message NodeHeartbeat {
-  google.protobuf.Timestamp sampled_at = 1;
-  bool core_running = 2;
-  bool core_ready = 3;
-  uint64 applied_revision = 4;
-  string error = 5;
+message ConfigDocument {
+  uint64 revision = 1;
+  string config_sha256 = 2;
+  bytes config_toml = 3;
 }
 
-// Raw traffic of the node container network namespace. This includes
-// BoardProxy payload, board transport and control-plane overhead.
-message InterfaceTrafficBatch {
-  string batch_id = 1;
-  google.protobuf.Timestamp interval_start = 2;
-  google.protobuf.Timestamp interval_end = 3;
-  repeated InterfaceTrafficDelta interfaces = 4;
+message ReportRequest {
+  string node_id = 1;
+  // Changes on every core restart. A flapping boot_id means two agents are
+  // claiming the same node.
+  string boot_id = 2;
+  // Monotonic within boot_id.
+  uint64 seq = 3;
+  // Idempotency key: a repeated batch_id must not double-count traffic.
+  string batch_id = 4;
+
+  Health health = 5;
+  // Full replacement, not a delta. The node knows its own runtime state better
+  // than the hub could reconstruct it from an event log.
+  RuntimeSnapshot runtime = 6;
+  repeated InterfaceTrafficDelta interface_traffic = 7;
+  repeated UserTrafficDelta user_traffic = 8;
+  // Activity log for the panel. Projects nothing, so a gap here is harmless.
+  repeated RuntimeEvent events = 9;
+}
+
+message Health {
+  uint64 applied_revision = 1;
+  string applied_sha256 = 2;
+  // Empty means the configuration applied cleanly.
+  string apply_error = 3;
+  string core_version = 4;
+  string agent_version = 5;
+  int64 uptime_seconds = 6;
+  google.protobuf.Timestamp observed_at = 7;
+}
+
+message ReportResponse {
+  // Delivered exactly once. The hub tracks delivery because the node does not
+  // survive its own restart and would otherwise receive the same command again.
+  repeated AgentCommand commands = 1;
+}
+
+message AgentCommand {
+  uint64 nonce = 1;
+  string kind = 2;
 }
 
 message InterfaceTrafficDelta {
@@ -99,120 +115,42 @@ message InterfaceTrafficDelta {
   uint64 tx_errors = 7;
   uint64 rx_dropped = 8;
   uint64 tx_dropped = 9;
+  google.protobuf.Timestamp observed_at = 10;
 }
 
 // Decrypted BoardProxy payload attributed by core. It is never summed with
-// InterfaceTrafficBatch.
-message UserTrafficBatch {
-  string batch_id = 1;
-  google.protobuf.Timestamp interval_start = 2;
-  google.protobuf.Timestamp interval_end = 3;
-  repeated UserTrafficDelta users = 4;
-}
-
+// InterfaceTrafficDelta.
 message UserTrafficDelta {
-  string user_tag = 1;
+  string user_id = 1;
   uint64 rx_bytes = 2; // client upload
   uint64 tx_bytes = 3; // client download
+  google.protobuf.Timestamp observed_at = 4;
 }
 
-message TrafficAck { string batch_id = 1; }
-
-// Runtime events are observed facts from core. They are delivered at least
-// once by node-agent and deduplicated by (node_id, core_boot_id, sequence).
-message RuntimeEventBatch {
-  string batch_id = 1;
-  repeated CoreRuntimeEvent events = 2;
-  RuntimeSnapshot snapshot = 3;
-}
-
-// Snapshot is sent after a stream reset/gap. It is an authoritative point-in-
-// time replacement for projections; events at or below latest_sequence are
-// then harmless replays.
 message RuntimeSnapshot {
   string core_boot_id = 1;
-  uint64 latest_sequence = 2;
-  uint64 runtime_revision = 3;
-  google.protobuf.Timestamp captured_at = 4;
-  repeated RuntimeUserSnapshot users = 5;
-  repeated RuntimeBoardSnapshot boards = 6;
+  google.protobuf.Timestamp captured_at = 2;
+  repeated RuntimeUserSnapshot users = 3;
+  repeated RuntimeBoardSnapshot boards = 4;
 }
 
 message RuntimeUserSnapshot {
-  string user_tag = 1;
-  uint64 active_sessions = 2;
-  uint64 rx_bytes = 3;
-  uint64 tx_bytes = 4;
+  string user_id = 1;
+  uint32 active_sessions = 2;
+  uint32 active_lanes = 3;
+  google.protobuf.Timestamp last_seen_at = 4;
 }
 
 message RuntimeBoardSnapshot {
-  string board_tag = 1;
+  string board_id = 1;
   string state = 2;
-  string error = 3;
+  uint32 active_lanes = 3;
+  string last_error = 4;
 }
 
-message CoreRuntimeEvent {
-  string event_id = 1;
-  string core_boot_id = 2;
-  uint64 sequence = 3;
-  google.protobuf.Timestamp occurred_at = 4;
-  uint64 runtime_revision = 5;
-  oneof payload {
-    ResourceChanged resource_changed = 6;
-    BoardStateChanged board_state_changed = 7;
-    ClientSessionOpened client_session_opened = 8;
-    ClientSessionClosed client_session_closed = 9;
-    EventStreamReset stream_reset = 10;
-  }
+message RuntimeEvent {
+  string type = 1;
+  google.protobuf.Timestamp occurred_at = 2;
+  // Free-form JSON payload rendered by the panel.
+  string payload_json = 3;
 }
-
-enum ResourceKind {
-  RESOURCE_KIND_UNSPECIFIED = 0;
-  RESOURCE_KIND_USER = 1;
-  RESOURCE_KIND_BOARD = 2;
-}
-
-enum ResourceOperation {
-  RESOURCE_OPERATION_UNSPECIFIED = 0;
-  RESOURCE_OPERATION_ADDED = 1;
-  RESOURCE_OPERATION_UPDATED = 2;
-  RESOURCE_OPERATION_ENABLED = 3;
-  RESOURCE_OPERATION_DISABLED = 4;
-  RESOURCE_OPERATION_REMOVED = 5;
-}
-
-message ResourceChanged {
-  ResourceKind kind = 1;
-  ResourceOperation operation = 2;
-  string tag = 3;
-}
-
-message BoardStateChanged {
-  string board_tag = 1;
-  string previous_state = 2;
-  string state = 3;
-  string error = 4;
-}
-
-message ClientSessionOpened {
-  string user_tag = 1;
-  string board_tag = 2;
-  string bundle_id = 3;
-}
-
-message ClientSessionClosed {
-  string user_tag = 1;
-  string board_tag = 2;
-  string bundle_id = 3;
-  uint64 rx_bytes = 4;
-  uint64 tx_bytes = 5;
-  string reason = 6;
-}
-
-message EventStreamReset {
-  string reason = 1;
-  uint64 oldest_available_sequence = 2;
-  uint64 latest_sequence = 3;
-}
-
-message RuntimeEventAck { string batch_id = 1; }
