@@ -1,6 +1,8 @@
 package io.boardproxy.control.telemetry.application
 
 import io.boardproxy.control.shared.contracts.QuotaExceededQueries
+import io.boardproxy.control.shared.contracts.UserQuotaSummary
+import io.boardproxy.control.shared.contracts.UserQuotaSummaryQueries
 import io.boardproxy.control.shared.errors.ResourceConflict
 import io.boardproxy.control.shared.errors.ResourceNotFound
 import io.boardproxy.control.shared.events.OutboxEvent
@@ -67,9 +69,24 @@ class TrafficQuotaService(
     private val outbox: OutboxRepository,
     private val clock: Clock,
     private val nextId: () -> String = { UUID.randomUUID().toString() },
-) : TrafficQuotaCommands, QuotaExceededQueries {
+) : TrafficQuotaCommands, QuotaExceededQueries, UserQuotaSummaryQueries {
 
     override fun exceededUsers(): Set<String> = quotas.exceededUsers()
+
+    /**
+     * Пользователи без квоты в карту не попадают — для панели это и значит
+     * «без ограничения».
+     */
+    override fun all(): Map<String, UserQuotaSummary> = quotas.list().associate { quota ->
+        val usage = usage(quota)
+        quota.userId to UserQuotaSummary(
+            limitBytes = quota.limitBytes,
+            usedBytes = usage.usedBytes,
+            exceeded = usage.exceeded,
+            enabled = quota.enabled,
+            periodEnd = usage.periodEnd,
+        )
+    }
 
     override fun put(
         userId: String,

@@ -58,6 +58,13 @@ interface GrantRepository {
     fun replaceOnNode(nodeId: String, placements: Map<String, Set<String>>)
 
     fun nodesOf(userId: String): Set<String>
+
+    /**
+     * Ноды сразу для набора пользователей: список показывает размещение в каждой
+     * строке, а [nodesOf] на страницу из полусотни человек означала бы полусотню
+     * запросов ради одной таблицы.
+     */
+    fun nodesOfAll(userIds: Collection<String>): Map<String, Set<String>>
 }
 
 /** Текущая конфигурация ноды. История — в [NodeSnapshotRepository]. */

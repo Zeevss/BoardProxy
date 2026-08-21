@@ -63,4 +63,14 @@ class PostgresGrantRepository(
         mapOf("userId" to userId),
         String::class.java,
     ).toSet()
+
+    override fun nodesOfAll(userIds: Collection<String>): Map<String, Set<String>> {
+        if (userIds.isEmpty()) return emptyMap()
+        return jdbc.query(
+            "SELECT DISTINCT user_id, node_id FROM grants WHERE user_id IN (:userIds)",
+            mapOf("userIds" to userIds),
+        ) { rs, _ -> rs.getString("user_id") to rs.getString("node_id") }
+            .groupBy({ it.first }, { it.second })
+            .mapValues { (_, nodes) -> nodes.toSortedSet() }
+    }
 }

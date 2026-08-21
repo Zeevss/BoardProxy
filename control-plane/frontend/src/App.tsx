@@ -1,104 +1,70 @@
-import { useEffect, useState } from 'react'
-import { AppShell } from './components/AppShell'
-import { Icon } from './components/Icon'
-import { PanelAuthApi } from './api/controlApi'
-import { useControlPlane } from './hooks/useControlPlane'
-import { t } from './i18n'
-import { Overview } from './screens/Overview'
-import { Nodes } from './screens/Nodes'
-import { Users } from './screens/Users'
-import { Boards } from './screens/Boards'
-import { Traffic } from './screens/Traffic'
-import { Activity } from './screens/Activity'
-import { Settings } from './screens/Settings'
-import { PanelAuthScreen } from './screens/PanelAuthScreen'
-import { GettingStarted } from './screens/GettingStarted'
-import type { Language, PanelUser, Section } from './types'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { useState } from 'react'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
+import { useControlEvents } from './api/events'
+import { AppShell } from './app/AppShell'
+import { AuthProvider, useAuth } from './app/auth'
+import { LanguageProvider, useT } from './app/language'
+import { createQueryClient } from './app/query'
+import { ToastProvider } from './components/ui/toast'
+import { AuthScreen } from './screens/AuthScreen'
+import { NodesScreen } from './screens/NodesScreen'
+import { UsersScreen } from './screens/UsersScreen'
 
-const TOKEN_KEY = 'boardproxy-control-panel-session-v1'
-const LANG_KEY = 'boardproxy-control-language-v1'
-const authApi = new PanelAuthApi()
+type TitleKey = 'overview' | 'boards' | 'traffic' | 'settings'
+type SubKey = 'overviewSub' | 'boardsSub' | 'trafficSub' | 'settingsSub'
 
-type AuthState =
-  | { kind: 'checking' }
-  | { kind: 'setup'; error?: string }
-  | { kind: 'login'; error?: string }
-  | { kind: 'ready'; token: string; user: PanelUser }
+/** Заглушка экрана: маршруты ставятся раньше, чем сами экраны. */
+function Placeholder({ titleKey, subKey }: { titleKey: TitleKey; subKey: SubKey }) {
+  const t = useT()
+  return (
+    <section className="mx-auto flex max-w-6xl flex-col gap-1">
+      <h1 className="text-xl font-medium">{t[titleKey]}</h1>
+      <p className="text-sm text-dim">{t[subKey]}</p>
+    </section>
+  )
+}
+
+function Routed() {
+  const { session } = useAuth()
+
+  // Поток событий держим только за авторизованной сессией: без токена он всё
+  // равно получит 401 и уйдёт в бесконечный цикл переподключений.
+  useControlEvents(session !== null)
+
+  if (!session) return <AuthScreen />
+
+  return (
+    <Routes>
+      <Route element={<AppShell />}>
+        <Route index element={<Placeholder titleKey="overview" subKey="overviewSub" />} />
+        <Route path="nodes" element={<NodesScreen />} />
+        <Route path="users" element={<UsersScreen />} />
+        <Route path="boards" element={<Placeholder titleKey="boards" subKey="boardsSub" />} />
+        <Route path="traffic" element={<Placeholder titleKey="traffic" subKey="trafficSub" />} />
+        <Route path="settings" element={<Placeholder titleKey="settings" subKey="settingsSub" />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </Routes>
+  )
+}
 
 export function App() {
-  const [auth, setAuth] = useState<AuthState>({ kind: 'checking' })
-  const [authRevision, setAuthRevision] = useState(0)
+  // Клиент создаётся один раз на монтирование: пересоздание в рендере сбрасывало
+  // бы весь кэш на каждое обновление состояния.
+  const [queryClient] = useState(createQueryClient)
 
-  useEffect(() => {
-    const controller = new AbortController()
-    const storedToken = sessionStorage.getItem(TOKEN_KEY)
-    const statusPromise = authApi.status(controller.signal)
-    const userPromise = storedToken
-      ? authApi.me(storedToken, controller.signal).catch(() => undefined)
-      : Promise.resolve(undefined)
-    void Promise.all([statusPromise, userPromise]).then(([status, user]) => {
-      if (controller.signal.aborted) return
-      if (storedToken && user) {
-        setAuth({ kind: 'ready', token: storedToken, user })
-        return
-      }
-      sessionStorage.removeItem(TOKEN_KEY)
-      setAuth({ kind: status.setupRequired ? 'setup' : 'login' })
-    }).catch(cause => {
-      if (!controller.signal.aborted) {
-        setAuth({ kind: 'login', error: cause instanceof Error ? cause.message : 'Control plane недоступен' })
-      }
-    })
-    return () => controller.abort()
-  }, [authRevision])
-
-  if (auth.kind === 'checking') return <AuthLoading/>
-  if (auth.kind === 'setup' || auth.kind === 'login') {
-    return <PanelAuthScreen
-      mode={auth.kind}
-      initialError={auth.error}
-      onRetry={() => { setAuth({ kind: 'checking' }); setAuthRevision(value => value + 1) }}
-      onAuthenticated={session => {
-        sessionStorage.setItem(TOKEN_KEY, session.token)
-        setAuth({ kind: 'ready', token: session.token, user: session.user })
-      }}
-    />
-  }
-  return <AuthenticatedApp
-    token={auth.token}
-    user={auth.user}
-    onLogout={() => {
-      void authApi.logout(auth.token).catch(() => undefined)
-      sessionStorage.removeItem(TOKEN_KEY)
-      setAuth({ kind: 'login' })
-    }}
-  />
-}
-
-function AuthenticatedApp({ token, user, onLogout }: { token: string; user: PanelUser; onLogout: () => void }) {
-  const [language, setLanguage] = useState<Language>(() => localStorage.getItem(LANG_KEY) === 'en' ? 'en' : 'ru')
-  const [section, setSection] = useState<Section>('overview')
-  const [search, setSearch] = useState('')
-  const [hours] = useState(24)
-  // Ноду больше не выбирают вручную: control-plane отдаёт весь флот, а разрезы
-  // по конкретной ноде остались только внутри её карточки.
-  const { api, data, loading, error, unauthorized, streamConnected, refresh } = useControlPlane(token, undefined, hours)
-  const selected = data.nodes[0]
-  const common = { language, data, api, onChanged: refresh }
-  return <AppShell username={user.username} language={language} section={section} nodes={data.nodes} search={search} streamConnected={streamConnected} onLanguage={next => { localStorage.setItem(LANG_KEY, next); setLanguage(next) }} onSection={setSection} onSearch={setSearch} onRefresh={() => void refresh()} onLogout={onLogout}>
-    {loading ? <div className="loading-line" aria-label={t(language).loading}/> : null}
-    {error ? <div className="global-error"><Icon name="warning" size={17}/><span>{error}</span>{unauthorized ? <button type="button" onClick={onLogout}>{t(language).logout}</button> : <button type="button" onClick={() => void refresh()}>{t(language).refresh}</button>}</div> : null}
-    {section === 'overview' && !loading && data.nodes.length === 0 ? <GettingStarted onCreateNode={() => setSection('nodes')}/> : null}
-    {section === 'overview' && (loading || data.nodes.length > 0) ? <Overview language={language} data={data} selected={selected}/> : null}
-    {section === 'nodes' ? <Nodes {...common} search={search}/> : null}
-    {section === 'users' ? <Users {...common} search={search}/> : null}
-    {section === 'boards' ? <Boards {...common} search={search}/> : null}
-    {section === 'traffic' ? <Traffic {...common}/> : null}
-    {section === 'activity' ? <Activity language={language} data={data} search={search}/> : null}
-    {section === 'settings' ? <Settings {...common}/> : null}
-  </AppShell>
-}
-
-function AuthLoading() {
-  return <main className="login-screen"><div className="login-panel auth-loading"><div className="brand login-brand"><span className="brand-mark"><span/></span><div><strong>BoardProxy</strong><small>Control plane</small></div></div><div className="auth-spinner"/><p>Проверяем состояние панели…</p></div></main>
+  return (
+    <QueryClientProvider client={queryClient}>
+      <LanguageProvider>
+        <ToastProvider>
+          <AuthProvider>
+            <BrowserRouter>
+              <Routed />
+            </BrowserRouter>
+          </AuthProvider>
+        </ToastProvider>
+      </LanguageProvider>
+    </QueryClientProvider>
+  )
 }

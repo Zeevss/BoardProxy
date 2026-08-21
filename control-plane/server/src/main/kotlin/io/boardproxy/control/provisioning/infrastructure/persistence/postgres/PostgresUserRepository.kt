@@ -10,7 +10,7 @@ import org.springframework.stereotype.Repository
 import java.sql.ResultSet
 
 private const val COLUMNS =
-    """id, name, private_key_ciphertext, private_key_nonce, private_key_key_id,
+    """id, name, description, private_key_ciphertext, private_key_nonce, private_key_key_id,
        public_key, state, max_sessions, max_lanes, resource_version, updated_at"""
 
 /**
@@ -55,11 +55,11 @@ class PostgresUserRepository(
         jdbc.update(
             """
             INSERT INTO users (
-                id, name, private_key_ciphertext, private_key_nonce, private_key_key_id,
+                id, name, description, private_key_ciphertext, private_key_nonce, private_key_key_id,
                 public_key, identity_fingerprint, state, max_sessions, max_lanes,
                 resource_version, updated_at
             ) VALUES (
-                :id, :name, :ciphertext, :nonce, :keyId, :publicKey, :fingerprint,
+                :id, :name, :description, :ciphertext, :nonce, :keyId, :publicKey, :fingerprint,
                 :state, :maxSessions, :maxLanes, :version, :updatedAt
             )
             """.trimIndent(),
@@ -70,7 +70,7 @@ class PostgresUserRepository(
     override fun replace(user: User, expectedVersion: Long): Boolean = jdbc.update(
         """
         UPDATE users SET
-            name = :name, private_key_ciphertext = :ciphertext, private_key_nonce = :nonce,
+            name = :name, description = :description, private_key_ciphertext = :ciphertext, private_key_nonce = :nonce,
             private_key_key_id = :keyId, public_key = :publicKey, identity_fingerprint = :fingerprint,
             state = :state, max_sessions = :maxSessions, max_lanes = :maxLanes,
             resource_version = :version, updated_at = :updatedAt
@@ -88,6 +88,7 @@ class PostgresUserRepository(
         return mapOf(
             "id" to user.id,
             "name" to user.name,
+            "description" to user.description,
             "ciphertext" to encrypted?.ciphertext,
             "nonce" to encrypted?.nonce,
             "keyId" to encrypted?.keyId,
@@ -112,6 +113,7 @@ class PostgresUserRepository(
         return User(
             id = rs.getString("id"),
             name = rs.getString("name"),
+            description = rs.getString("description"),
             privateKey = privateKey,
             publicKey = rs.getString("public_key"),
             state = rs.getString("state").resourceState(),
@@ -127,7 +129,12 @@ class PostgresUserRepository(
             if (!nodeId.isNullOrBlank()) {
                 add("EXISTS (SELECT 1 FROM grants g WHERE g.user_id = users.id AND g.node_id = :nodeId)")
             }
-            if (!query.isNullOrBlank()) add("(id ILIKE '%' || :query || '%' OR name ILIKE '%' || :query || '%')")
+            if (!query.isNullOrBlank()) {
+                add(
+                    "(id ILIKE '%' || :query || '%' OR name ILIKE '%' || :query || '%' " +
+                        "OR description ILIKE '%' || :query || '%')",
+                )
+            }
         }
         return if (conditions.isEmpty()) "" else "WHERE ${conditions.joinToString(" AND ")}"
     }

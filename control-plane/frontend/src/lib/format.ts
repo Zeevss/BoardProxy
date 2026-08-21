@@ -1,25 +1,71 @@
-export function bytes(value = 0) {
+import type { Language } from './i18n'
+
+/**
+ * Объём в десятичных единицах: 1 GB — это 10⁹ байт.
+ *
+ * Не двоичные намеренно. Квота задаётся полем «Лимит трафика, ГБ» и уходит на
+ * хаб умножением на 10⁹; при делении на 1024 оператор вводил бы 1000 и видел
+ * 931 — расхождение, которое выглядит как ошибка счёта, а не как выбор единиц.
+ */
+export function bytes(value: number | null | undefined): string {
+  if (!value) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
-  let amount = Math.max(0, value)
-  let unit = 0
-  while (amount >= 1000 && unit < units.length - 1) { amount /= 1000; unit++ }
-  return `${amount >= 100 || unit === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unit]}`
+  let index = 0
+  let scaled = value
+  while (scaled >= 1000 && index < units.length - 1) {
+    scaled /= 1000
+    index += 1
+  }
+  // Десятая доля показывается только когда она есть: «1.0 TB» читается как
+  // случайная точность, хотя означает ровно то же, что «1 TB».
+  const rounded =
+    scaled >= 100 || index === 0 ? Math.round(scaled) : Number(scaled.toFixed(1))
+  return `${rounded} ${units[index]}`
 }
-export function rate(bytesPerBucket = 0, seconds = 300) { return `${bytes(bytesPerBucket / seconds)}/s` }
-export function ago(value?: string) {
-  if (!value) return '—'
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000))
-  if (seconds < 60) return `${seconds}s`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`
-  return `${Math.floor(seconds / 86400)}d`
+
+const RELATIVE_STEPS: Array<[limit: number, divisor: number, unit: Intl.RelativeTimeFormatUnit]> = [
+  [60, 1, 'second'],
+  [3600, 60, 'minute'],
+  [86_400, 3600, 'hour'],
+  [2_592_000, 86_400, 'day'],
+  [31_536_000, 2_592_000, 'month'],
+  [Number.POSITIVE_INFINITY, 31_536_000, 'year'],
+]
+
+/**
+ * «2 мин назад» из ISO-времени хаба.
+ *
+ * Считается от часов браузера, а они могут разойтись с серверными. Небольшой
+ * рассинхрон дал бы «через 3 секунды» вместо «только что», поэтому будущее в
+ * пределах минуты схлопывается в ноль.
+ */
+export function relativeTime(iso: string | null | undefined, language: Language): string | null {
+  if (!iso) return null
+  const timestamp = Date.parse(iso)
+  if (Number.isNaN(timestamp)) return null
+
+  const deltaSeconds = (timestamp - Date.now()) / 1000
+  const clamped = deltaSeconds > 0 && deltaSeconds < 60 ? 0 : deltaSeconds
+  const magnitude = Math.abs(clamped)
+
+  const step = RELATIVE_STEPS.find(([limit]) => magnitude < limit) ?? RELATIVE_STEPS.at(-1)!
+  const [, divisor, unit] = step
+
+  const formatter = new Intl.RelativeTimeFormat(language, { numeric: 'auto' })
+  return formatter.format(Math.round(clamped / divisor), unit)
 }
-export function date(value?: string) { return value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—' }
-export function short(value?: string, length = 18) { return value && value.length > length ? `${value.slice(0, length / 2)}…${value.slice(-length / 2)}` : value ?? '—' }
-export function eventKind(type: string) { return type.includes('runtime') || type.includes('session') || type.includes('board') ? 'runtime' : type.includes('cert') || type.includes('token') || type.includes('security') ? 'security' : type.includes('catalog') || type.includes('user') ? 'catalog' : 'status' }
-export function message(payload: Record<string, unknown>) {
-  const preferred = ['message', 'detail', 'error', 'reason']
-  for (const key of preferred) if (typeof payload[key] === 'string') return payload[key] as string
-  const entries = Object.entries(payload).slice(0, 4).map(([key, value]) => `${key}=${String(value)}`)
-  return entries.join(' · ') || '—'
+
+/** Абсолютное время для подсказок и таблиц журнала. */
+export function absoluteTime(iso: string | null | undefined, language: Language): string | null {
+  if (!iso) return null
+  const timestamp = Date.parse(iso)
+  if (Number.isNaN(timestamp)) return null
+  return new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeStyle: 'medium' }).format(
+    timestamp,
+  )
+}
+
+export function percent(part: number, whole: number): number {
+  if (!whole) return 0
+  return Math.min(100, Math.round((part / whole) * 100))
 }

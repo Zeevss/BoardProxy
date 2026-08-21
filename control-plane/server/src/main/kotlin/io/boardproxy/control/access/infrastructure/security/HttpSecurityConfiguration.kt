@@ -11,6 +11,8 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
 import org.springframework.security.web.SecurityFilterChain
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter
+import org.springframework.security.web.util.matcher.RequestMatcher
+import jakarta.servlet.http.HttpServletRequest
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.web.cors.CorsConfiguration
 import org.springframework.web.cors.CorsConfigurationSource
@@ -73,6 +75,9 @@ class HttpSecurityConfiguration {
                     .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                     .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                     .requestMatchers("/actuator/**").hasRole("ADMIN")
+                    // Оболочка панели: сам по себе index.html ничего не выдаёт,
+                    // данные всё равно требуют токена на каждом запросе к API.
+                    .requestMatchers(SpaShellRequests).permitAll()
                     .anyRequest().authenticated()
             }
             .exceptionHandling {
@@ -88,5 +93,22 @@ class HttpSecurityConfiguration {
         response.status = status
         response.contentType = MediaType.APPLICATION_PROBLEM_JSON_VALUE
         response.writer.write("""{"status":$status,"title":"$title"}""")
+    }
+}
+
+/**
+ * GET по клиентскому маршруту панели: `/nodes`, `/users/u-alice` и прочие
+ * состояния, которые роутер разворачивает уже в браузере.
+ *
+ * Серверные префиксы исключены явно, иначе это правило перекрыло бы и защиту
+ * `/actuator`, и 401 на неавторизованном обращении к API.
+ */
+private object SpaShellRequests : RequestMatcher {
+    private val BACKEND_PREFIXES = listOf("/api/", "/actuator", "/v3/api-docs", "/swagger-ui")
+
+    override fun matches(request: HttpServletRequest): Boolean {
+        if (request.method != "GET") return false
+        val path = request.requestURI ?: return false
+        return BACKEND_PREFIXES.none(path::startsWith)
     }
 }

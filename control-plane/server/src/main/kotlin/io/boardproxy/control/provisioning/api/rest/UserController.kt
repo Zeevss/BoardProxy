@@ -8,6 +8,9 @@ import io.boardproxy.control.provisioning.domain.model.Grant
 import io.boardproxy.control.provisioning.domain.model.User
 import io.boardproxy.control.shared.contracts.KeylinkQueries
 import io.boardproxy.control.shared.contracts.NodeKeylink
+import io.boardproxy.control.shared.contracts.UserActivityQueries
+import io.boardproxy.control.shared.contracts.UserQuotaSummary
+import io.boardproxy.control.shared.contracts.UserQuotaSummaryQueries
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.security.access.prepost.PreAuthorize
@@ -33,6 +36,8 @@ import java.time.Instant
 class UserController(
     private val service: UserService,
     private val keylinks: KeylinkQueries,
+    private val quotas: UserQuotaSummaryQueries,
+    private val activity: UserActivityQueries,
 ) {
     @GetMapping
     @PreAuthorize("hasAnyRole('VIEWER', 'OPERATOR', 'ADMIN')")
@@ -42,7 +47,7 @@ class UserController(
         @RequestParam(defaultValue = "0") offset: Int,
         @RequestParam(defaultValue = "50") limit: Int,
     ): Page<UserResponse> = service.list(query, nodeId, offset, limit.coerceIn(1, MAXIMUM_PAGE))
-        .let { Page(it.items.map(User::toResponse), it.offset, it.limit, it.total) }
+        .let { page -> Page(enrich(page.items), page.offset, page.limit, page.total) }
 
     @GetMapping("/{id}")
     @PreAuthorize("hasAnyRole('VIEWER', 'OPERATOR', 'ADMIN')")
@@ -52,7 +57,8 @@ class UserController(
     @PreAuthorize("hasAnyRole('OPERATOR', 'ADMIN')")
     fun create(@RequestBody request: UserRequest, principal: Principal): ResponseEntity<UserResponse> {
         val user = service.create(request.toInput(), principal.name)
-        return ResponseEntity.status(HttpStatus.CREATED).eTag(user.version.toString()).body(user.toResponse())
+        return ResponseEntity.status(HttpStatus.CREATED).eTag(user.version.toString())
+            .body(enrich(listOf(user)).single())
     }
 
     @PutMapping("/{id}")
@@ -105,7 +111,28 @@ class UserController(
     fun keylinks(@PathVariable id: String): List<NodeKeylink> =
         keylinks.forUser(id, service.get(id).name)
 
-    private fun User.ok() = ResponseEntity.ok().eTag(version.toString()).body(toResponse())
+    private fun User.ok() = ResponseEntity.ok().eTag(version.toString()).body(enrich(listOf(this)).single())
+
+    /**
+     * Достраивает строки списка размещением, квотой и последней активностью.
+     *
+     * Три запроса на всю страницу, а не три на строку: панель показывает эти
+     * поля в каждой строке, и поштучное чтение упирало её в лимит запросов
+     * раньше, чем оператор успевал что-либо сделать.
+     */
+    private fun enrich(users: List<User>): List<UserResponse> {
+        if (users.isEmpty()) return emptyList()
+        val nodes = service.nodesOfAll(users.map(User::id))
+        val quotas = quotas.all()
+        val lastSeen = activity.lastSeen()
+        return users.map { user ->
+            user.toResponse(
+                nodeIds = nodes[user.id].orEmpty().sorted(),
+                quota = quotas[user.id]?.toResponse(),
+                lastSeenAt = lastSeen[user.id],
+            )
+        }
+    }
 
     private companion object {
         const val MAXIMUM_PAGE = 200
@@ -115,6 +142,7 @@ class UserController(
 data class UserRequest(
     val id: String? = null,
     val name: String,
+    val description: String = "",
     /** Задан — хаб хранит только публичный ключ и keylink собрать не может. */
     val publicKey: String? = null,
     val state: String = "enabled",
@@ -130,25 +158,50 @@ data class GrantResponse(val nodeId: String, val boardIds: List<String>)
 data class UserResponse(
     val id: String,
     val name: String,
+    val description: String,
     /** Отпечаток вместо ключа: приватный ключ наружу не выходит. */
     val identityFingerprint: String,
     val hubIssuedKey: Boolean,
     val state: String,
     val maxSessions: Int,
     val maxLanes: Int,
+    /** Ноды размещения. Полные гранты с бордами — в `/users/{id}/grants`. */
+    val nodeIds: List<String>,
+    /** null — квота не задана, то есть ограничения нет. */
+    val quota: UserQuotaResponse?,
+    val lastSeenAt: Instant?,
+    /** Пользователь хоть раз выходил на связь: первый байт трафика и есть активация. */
+    val activated: Boolean,
     val version: Long,
     val updatedAt: Instant,
 )
 
+data class UserQuotaResponse(
+    val limitBytes: Long,
+    val usedBytes: Long,
+    val exceeded: Boolean,
+    val enabled: Boolean,
+    val periodEnd: Instant,
+)
+
+private fun UserQuotaSummary.toResponse() =
+    UserQuotaResponse(limitBytes, usedBytes, exceeded, enabled, periodEnd)
+
 private fun UserRequest.toInput() = UserInput(
-    id = id, name = name, publicKey = publicKey, state = state.resourceState(),
+    id = id, name = name, description = description, publicKey = publicKey, state = state.resourceState(),
     maxSessions = maxSessions, maxLanes = maxLanes,
 )
 
 private fun Grant.toResponse() = GrantResponse(nodeId, boardIds.sorted())
 
-private fun User.toResponse() = UserResponse(
-    id = id, name = name, identityFingerprint = identityFingerprint(),
+private fun User.toResponse(
+    nodeIds: List<String>,
+    quota: UserQuotaResponse?,
+    lastSeenAt: Instant?,
+) = UserResponse(
+    id = id, name = name, description = description, identityFingerprint = identityFingerprint(),
     hubIssuedKey = privateKey != null, state = state.name.lowercase(),
-    maxSessions = maxSessions, maxLanes = maxLanes, version = version, updatedAt = updatedAt,
+    maxSessions = maxSessions, maxLanes = maxLanes,
+    nodeIds = nodeIds, quota = quota, lastSeenAt = lastSeenAt, activated = lastSeenAt != null,
+    version = version, updatedAt = updatedAt,
 )

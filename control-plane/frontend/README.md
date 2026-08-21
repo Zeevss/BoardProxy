@@ -1,22 +1,64 @@
-# BoardProxy Control Plane frontend
+# Панель control-plane
 
-React/TypeScript operator console for the Kotlin control-plane. The production
-Docker build copies `dist/` into Spring Boot static resources, so REST and SSE
-requests stay same-origin.
+React + TypeScript + Vite. Собранная статика уезжает в `src/main/resources/static`
+хаба (см. `control-plane/server/Dockerfile`), поэтому в продакшне панель и API
+отдаёт один origin и CORS не участвует.
 
-```bash
-npm ci --include=dev
-npm run test
-npm run lint
-npm run build
+## Разработка
+
+```sh
+npm install
 npm run dev
 ```
 
-Vite proxies `/api` and `/actuator` to `http://localhost:8080` in development.
-The bearer token is kept in `sessionStorage`; API writes use the current entity
-version through `If-Match`. Subscription, enrollment and API-token secrets are
-shown only from the creation response and are never persisted by the UI.
+Дев-сервер поднимается на `http://127.0.0.1:5174` и проксирует `/api` и
+`/actuator` на хаб. Адрес хаба задаётся переменной `CONTROL_API`:
 
-The interface follows the supplied `Control Plane v1.dc.html` design: neutral
-near-black surfaces, compact IBM Plex typography, dense tables, thin borders and
-green/violet traffic accents. Desktop and mobile layouts are both supported.
+```sh
+CONTROL_API=http://127.0.0.1:18080 npm run dev
+```
+
+Это нужно чаще, чем кажется: если рядом крутится собственный стек
+(`docker compose up hub`), 8080 уже занят, и хаб для разработки приходится
+поднимать на другом порту.
+
+### Почему прокси снимает заголовок Origin
+
+`changeOrigin: true` подменяет только `Host`, оставляя `Origin` дев-сервера.
+Хаб видит cross-origin, не находит его в пустом `CONTROL_ALLOWED_ORIGINS` и
+отвечает **403 на каждый POST**, пропуская при этом GET — браузер не шлёт
+`Origin` на простых запросах. В продакшне запросы same-origin, поэтому прокси
+снимает заголовок и воспроизводит продовое поведение, а не включает CORS ради
+разработки.
+
+## Проверки
+
+```sh
+npm run lint
+npm test
+npm run build
+```
+
+## Устройство
+
+| Каталог | Что внутри |
+| --- | --- |
+| `src/api` | Клиент хаба, типы DTO, сессия панели, классы ошибок |
+| `src/app` | Провайдеры (язык, сессия, query-клиент), оболочка и навигация |
+| `src/components/ui` | Примитивы в духе shadcn/ui поверх Radix |
+| `src/lib` | Словарь, форматирование, вывод состояний нод и пользователей |
+| `src/screens` | Экраны |
+
+### Версии и `If-Match`
+
+Кэша ETag нет намеренно: хаб кладёт версию сущности прямо в тело ответа
+(`version`, у настроек сервиса подписок — `revision`). Вызывающий передаёт её в
+`api.put(..., { ifMatch })` из объекта, который только что прочитал. Отдельный
+кэш заголовков был бы вторым источником правды о том же числе.
+
+### Ошибки
+
+`src/api/client.ts` разбирает problem+json и бросает типизированные ошибки:
+`UnauthorizedError` (гасит сессию сам), `ConflictError` (409/412 — версия
+разошлась), `RateLimitedError` (429), `NotFoundError`. Политика повторов в
+`src/app/query.ts` намеренно не повторяет ни одну из них.

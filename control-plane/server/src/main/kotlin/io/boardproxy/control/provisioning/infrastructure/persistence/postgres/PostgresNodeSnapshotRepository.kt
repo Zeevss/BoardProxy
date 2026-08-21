@@ -179,8 +179,17 @@ private data class StoredPlacement(
     val updatedAt: Instant,
     val boardIds: Set<String>,
 ) {
+    /**
+     * Описание в снимок не попадает намеренно: оно ни на что не влияет в
+     * конфигурации, а откат свойства пользователей и не восстанавливает —
+     * только размещения.
+     */
     fun toDomain() = UserPlacement(
-        User(id, name, privateKey, publicKey, ResourceState.valueOf(state), maxSessions, maxLanes, version, updatedAt),
+        User(
+            id = id, name = name, privateKey = privateKey, publicKey = publicKey,
+            state = ResourceState.valueOf(state), maxSessions = maxSessions, maxLanes = maxLanes,
+            version = version, updatedAt = updatedAt,
+        ),
         boardIds,
     )
 

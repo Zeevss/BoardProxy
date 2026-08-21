@@ -11,10 +11,27 @@ data class TrafficPoint(
     val txBytes: Long,
 )
 
+/**
+ * Везде, где стоит `nodeId: String?`, `null` означает весь флот.
+ *
+ * Экран трафика по умолчанию открывается в масштабе флота, и собирать этот
+ * масштаб на клиенте означало бы по запросу на ноду — при том, что база
+ * складывает те же строки одним `GROUP BY`.
+ */
 interface TrafficQueries {
-    fun interfaceTotals(nodeId: String, from: Instant, to: Instant): List<TrafficTotal>
-    fun userTotals(nodeId: String, from: Instant, to: Instant): List<TrafficTotal>
-    fun series(nodeId: String, kind: TrafficKind, from: Instant, to: Instant, bucketSeconds: Long): List<TrafficPoint>
+    fun interfaceTotals(nodeId: String?, from: Instant, to: Instant): List<TrafficTotal>
+    fun userTotals(nodeId: String?, from: Instant, to: Instant): List<TrafficTotal>
+
+    /** Разбивка по нодам: subject — это `nodeId`. */
+    fun nodeTotals(kind: TrafficKind, from: Instant, to: Instant): List<TrafficTotal>
+
+    fun series(
+        nodeId: String?,
+        kind: TrafficKind,
+        from: Instant,
+        to: Instant,
+        bucketSeconds: Long,
+    ): List<TrafficPoint>
 }
 
 enum class TrafficKind { INTERFACE, USER }

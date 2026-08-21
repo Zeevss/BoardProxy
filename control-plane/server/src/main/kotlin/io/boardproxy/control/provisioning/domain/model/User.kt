@@ -15,6 +15,8 @@ private const val MAXIMUM_LANES = 32
 data class User(
     val id: String,
     val name: String,
+    /** Свободная пометка оператора; на компиляцию конфигурации не влияет. */
+    val description: String = "",
     val privateKey: String? = null,
     val publicKey: String? = null,
     val state: ResourceState,

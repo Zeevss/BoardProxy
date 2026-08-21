@@ -13,6 +13,7 @@ import java.time.Clock
 data class UserInput(
     val id: String? = null,
     val name: String,
+    val description: String = "",
     /** Если публичный ключ не задан, хаб выпускает приватный сам и умеет собрать keylink. */
     val publicKey: String? = null,
     val state: ResourceState = ResourceState.ENABLED,
@@ -41,12 +42,16 @@ class UserService(
         return grants.of(id)
     }
 
+    /** Размещения сразу для страницы списка — без запроса на каждую строку. */
+    fun nodesOfAll(userIds: Collection<String>): Map<String, Set<String>> = grants.nodesOfAll(userIds)
+
     fun create(input: UserInput, actor: String): User = transactions.required {
         val id = input.id?.trim().orEmpty().ifBlank { throw InvalidRequest("user id is required") }
         if (users.find(id) != null) throw ResourceConflict("user $id already exists")
         val user = User(
             id = id,
             name = input.name.trim(),
+            description = input.description.trim(),
             privateKey = if (input.publicKey == null) generatePrivateKey() else null,
             publicKey = input.publicKey,
             state = input.state,
@@ -70,6 +75,7 @@ class UserService(
         val current = get(id)
         val updated = current.copy(
             name = input.name.trim(),
+            description = input.description.trim(),
             state = input.state,
             maxSessions = input.maxSessions,
             maxLanes = input.maxLanes,
