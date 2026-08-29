@@ -8,7 +8,10 @@ import io.boardproxy.control.shared.errors.InvalidRequest
 import io.boardproxy.control.shared.errors.ResourceConflict
 import io.boardproxy.control.shared.errors.ResourceNotFound
 import io.boardproxy.control.shared.persistence.TransactionRunner
+import io.boardproxy.control.shared.audit.AuditEvent
+import io.boardproxy.control.shared.audit.AuditRepository
 import java.time.Clock
+import java.util.UUID
 
 data class UserInput(
     val id: String? = null,
@@ -17,6 +20,7 @@ data class UserInput(
     /** Если публичный ключ не задан, хаб выпускает приватный сам и умеет собрать keylink. */
     val publicKey: String? = null,
     val state: ResourceState = ResourceState.ENABLED,
+    /** Лимит применяется каждым core независимо; это не fleet-wide semaphore. */
     val maxSessions: Int = 0,
     val maxLanes: Int = 4,
 )
@@ -31,6 +35,8 @@ class UserService(
     private val publisher: DesiredConfigPublisher,
     private val transactions: TransactionRunner,
     private val clock: Clock,
+    private val audit: AuditRepository = AuditRepository { },
+    private val nextId: () -> String = { UUID.randomUUID().toString() },
 ) {
     fun get(id: String): User = users.find(id) ?: throw ResourceNotFound("user $id not found")
 
@@ -64,6 +70,7 @@ class UserService(
             throw ResourceConflict("user identity already exists")
         }
         users.create(user)
+        audit(user, "user.created", actor)
         user
     }
 
@@ -83,6 +90,7 @@ class UserService(
             updatedAt = clock.instant(),
         )
         if (!users.replace(updated, expectedVersion)) throw ResourceConflict("user $id version changed")
+        audit(updated, "user.updated", actor)
         publisher.publish(grants.nodesOf(id), "user.updated", actor)
         updated
     }
@@ -97,6 +105,7 @@ class UserService(
             updatedAt = clock.instant(),
         )
         if (!users.replace(rotated, expectedVersion)) throw ResourceConflict("user $id version changed")
+        audit(rotated, "user.key-rotated", actor)
         publisher.publish(grants.nodesOf(id), "user.key-rotated", actor)
         rotated
     }
@@ -106,6 +115,7 @@ class UserService(
         if (current.version != expectedVersion) throw ResourceConflict("user $id version changed")
         // Ноды запоминаются до удаления: после каскада гранты уже не прочитать.
         val affected = grants.nodesOf(id)
+        audit(current, "user.deleted", actor)
         if (!users.delete(id)) throw ResourceNotFound("user $id not found")
         publisher.publish(affected, "user.deleted", actor)
     }
@@ -116,7 +126,7 @@ class UserService(
      * он остался бы жить до следующей случайной правки.
      */
     fun replaceGrants(id: String, placements: List<GrantInput>, actor: String): List<Grant> = transactions.required {
-        get(id)
+        val user = get(id)
         val previous = grants.nodesOf(id)
         val resolved = placements.map { placement ->
             val available = boards.listByNode(placement.nodeId)
@@ -131,7 +141,16 @@ class UserService(
             Grant(id, placement.nodeId, boardIds)
         }
         grants.replace(id, resolved)
+        audit(user, "user.grants-changed", actor, resourceType = "user-grants")
         publisher.publish(previous + resolved.map(Grant::nodeId), "user.grants-changed", actor)
         resolved
     }
+
+    private fun audit(user: User, action: String, actor: String, resourceType: String = "user") = audit.append(
+        AuditEvent(
+            id = nextId(), nodeId = null, actor = actor, action = action,
+            resourceType = resourceType, resourceId = user.id, resourceVersion = user.version,
+            occurredAt = clock.instant(),
+        ),
+    )
 }

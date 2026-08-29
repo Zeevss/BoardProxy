@@ -3,10 +3,9 @@ import {
   useAgents,
   useBoards,
   useDeleteNode,
-  useIssueEnrollmentToken,
   useNodeConfig,
   useNodeEvents,
-  useToggleBoard,
+  useUpdateBoard,
   useUpdateNode,
 } from '@/api/nodes'
 import type { Agent, Board, Node } from '@/api/types'
@@ -15,12 +14,17 @@ import { useLanguage } from '@/app/language'
 import { Button } from '@/components/ui/button'
 import { CopyButton } from '@/components/ui/copy'
 import { Sheet } from '@/components/ui/sheet'
-import { Badge, StatusDot } from '@/components/ui/status'
+import { StatusDot } from '@/components/ui/status'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/toast'
+import { Switch } from '@/components/ui/switch'
+import { useUsers } from '@/api/users'
 import { absoluteTime, relativeTime } from '@/lib/format'
 import { nodeHealth } from '@/lib/health'
+import { cn } from '@/lib/utils'
+import { BoardDialog } from './BoardDialog'
 import { EnrollmentSecretDialog } from './EnrollmentSecretDialog'
+import { IssueSecretDialog } from './IssueSecretDialog'
 
 export function NodeSheet({ node, onClose }: { node: Node | null; onClose: () => void }) {
   const { t } = useLanguage()
@@ -40,23 +44,32 @@ export function NodeSheet({ node, onClose }: { node: Node | null; onClose: () =>
   )
 }
 
+const HEALTH_TEXT: Record<ReturnType<typeof nodeHealth>['tone'], string> = {
+  ok: 'text-ok-fg',
+  warn: 'text-warn-fg',
+  danger: 'text-danger',
+  info: 'text-info',
+  muted: 'text-dim',
+}
+
 function SheetTitle({ node, agent }: { node: Node; agent: Agent | undefined }) {
   const { t, language } = useLanguage()
   const health = nodeHealth(node, agent, t)
   const seen = relativeTime(agent?.lastReportAt, language)
 
   return (
-    <div className="flex items-start gap-3">
-      <StatusDot tone={health.tone} live={health.live} className="mt-1.5" />
+    <div className="flex gap-3">
+      <StatusDot tone={health.tone} live={health.live} className="mt-1.5 size-2.5" />
       <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <h2 className="truncate text-base font-medium">{node.name}</h2>
-          <Badge tone={health.tone}>{health.label}</Badge>
+        <h2 className="truncate text-lg font-semibold tracking-tight">{node.name}</h2>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <span className="font-mono text-xs text-dim">{node.id}</span>
+          <span className={cn('text-[12.5px]', HEALTH_TEXT[health.tone])}>· {health.label}</span>
+          <span className="text-xs text-muted">
+            · {health.meta}
+            {seen ? ` ${seen}` : ''}
+          </span>
         </div>
-        <p className="mt-0.5 truncate font-mono text-xs text-dim">
-          {node.id} · {health.meta}
-          {seen ? ` · ${seen}` : ''}
-        </p>
       </div>
     </div>
   )
@@ -67,7 +80,7 @@ function SheetActions({ node, onClose }: { node: Node; onClose: () => void }) {
   const { toast } = useToast()
   const update = useUpdateNode()
   const remove = useDeleteNode()
-  const issue = useIssueEnrollmentToken()
+  const [issuing, setIssuing] = useState(false)
   const [secret, setSecret] = useState<{ nodeSecret: string; expiresAt: string } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
@@ -82,46 +95,42 @@ function SheetActions({ node, onClose }: { node: Node; onClose: () => void }) {
     return t.errorOffline
   }
 
-  const busy = update.isPending || remove.isPending || issue.isPending
+  const busy = update.isPending || remove.isPending
 
   return (
     <>
       <Button
-        size="sm"
+        size="lg"
+        variant="primary"
         disabled={busy}
         onClick={() =>
           update.mutate(
             { node, patch: { state: node.state === 'enabled' ? 'disabled' : 'enabled' } },
             {
-              onSuccess: () => toast(t.save),
+              onSuccess: () => toast(t.saved),
               onError: (error) => toast(explain(error), 'danger'),
             },
           )
         }
       >
+        <span
+          aria-hidden
+          className={cn(
+            'size-1.75 rounded-full',
+            node.state === 'enabled' ? 'bg-danger-solid' : 'bg-ok',
+          )}
+        />
         {node.state === 'enabled' ? t.disable : t.enable}
       </Button>
 
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={busy}
-        onClick={() =>
-          issue.mutate(
-            { nodeId: node.id, hubUrl: window.location.origin },
-            {
-              onSuccess: (issued) => setSecret(issued),
-              onError: (error) => toast(explain(error), 'danger'),
-            },
-          )
-        }
-      >
+      <Button size="lg" variant="secondary" disabled={busy} onClick={() => setIssuing(true)}>
         {t.issueSecret}
       </Button>
 
       <Button
-        size="sm"
+        size="lg"
         variant={confirmDelete ? 'danger' : 'dangerGhost'}
+        className="ml-auto"
         disabled={busy}
         onClick={() => {
           // Удаление ноды уносит каскадом её борды, гранты, конфигурацию и
@@ -143,6 +152,11 @@ function SheetActions({ node, onClose }: { node: Node; onClose: () => void }) {
         {confirmDelete ? `${t.delete}?` : t.delete}
       </Button>
 
+      <IssueSecretDialog
+        nodeId={issuing ? node.id : null}
+        onIssued={setSecret}
+        onClose={() => setIssuing(false)}
+      />
       <EnrollmentSecretDialog secret={secret} onClose={() => setSecret(null)} />
     </>
   )
@@ -150,29 +164,52 @@ function SheetActions({ node, onClose }: { node: Node; onClose: () => void }) {
 
 function SheetBody({ node, agent }: { node: Node; agent: Agent | undefined }) {
   const { t } = useLanguage()
+  const users = useUsers()
+  const boards = useBoards()
+
+  // Пользователи ноды считаются по размещениям, которые уже пришли со списком.
+  const nodeUsers = (users.data?.items ?? []).filter((user) => user.nodeIds.includes(node.id))
+  const nodeBoards = (boards.data?.items ?? []).filter((board) => board.nodeId === node.id)
 
   return (
-    <Tabs defaultValue="overview">
-      <TabsList>
-        <TabsTrigger value="overview">{t.overview}</TabsTrigger>
-        <TabsTrigger value="boards">{t.boards}</TabsTrigger>
-        <TabsTrigger value="config">TOML</TabsTrigger>
-        <TabsTrigger value="logs">{t.logs}</TabsTrigger>
-      </TabsList>
+    <div className="flex flex-col gap-4 px-5.5 pt-4 pb-6">
+      <div className="grid grid-cols-3 gap-2.5">
+        <Stat label={t.sessions} value={agent?.activeSessions ?? 0} />
+        <Stat label="lanes" value={agent?.activeLanes ?? 0} />
+        <Stat label={t.users} value={nodeUsers.length} />
+      </div>
 
-      <TabsContent value="overview">
-        <OverviewTab node={node} agent={agent} />
-      </TabsContent>
-      <TabsContent value="boards">
-        <BoardsTab nodeId={node.id} />
-      </TabsContent>
-      <TabsContent value="config">
-        <ConfigTab nodeId={node.id} />
-      </TabsContent>
-      <TabsContent value="logs">
-        <LogsTab nodeId={node.id} />
-      </TabsContent>
-    </Tabs>
+      <Tabs defaultValue="overview">
+        <TabsList>
+          <TabsTrigger value="overview">{t.overview}</TabsTrigger>
+          <TabsTrigger value="boards">{t.boards}</TabsTrigger>
+          <TabsTrigger value="config">TOML</TabsTrigger>
+          <TabsTrigger value="logs">{t.logs}</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview">
+          <OverviewTab node={node} agent={agent} />
+        </TabsContent>
+        <TabsContent value="boards">
+          <BoardsTab nodeId={node.id} boards={nodeBoards} loading={boards.isLoading} />
+        </TabsContent>
+        <TabsContent value="config">
+          <ConfigTab nodeId={node.id} />
+        </TabsContent>
+        <TabsContent value="logs">
+          <LogsTab nodeId={node.id} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-[10px] border border-line bg-canvas px-3.5 py-3">
+      <p className="text-[11.5px] font-medium text-dim">{label}</p>
+      <p className="mt-1.5 text-xl font-semibold tracking-tight tabular-nums">{value}</p>
+    </div>
   )
 }
 
@@ -232,48 +269,69 @@ function OverviewTab({ node, agent }: { node: Node; agent: Agent | undefined }) 
   )
 }
 
-function BoardsTab({ nodeId }: { nodeId: string }) {
+function BoardsTab({
+  nodeId,
+  boards,
+  loading,
+}: {
+  nodeId: string
+  boards: Board[]
+  loading: boolean
+}) {
   const { t } = useLanguage()
   const { toast } = useToast()
-  const boards = useBoards()
-  const toggle = useToggleBoard()
-  const rows = (boards.data?.items ?? []).filter((board) => board.nodeId === nodeId)
+  const update = useUpdateBoard()
+  const [creating, setCreating] = useState(false)
 
-  if (boards.isLoading) return <p className="text-sm text-dim">{t.loading}</p>
-  if (rows.length === 0) return <p className="text-sm text-dim">{t.nothingFound}</p>
+  if (loading) return <p className="text-sm text-dim">{t.loading}</p>
 
   return (
-    <ul className="flex flex-col gap-2">
-      {rows.map((board) => (
-        <li
+    <div className="flex flex-col gap-2.5">
+      {boards.map((board) => (
+        <div
           key={board.id}
-          className="flex items-center justify-between gap-3 rounded-lg border border-line px-3 py-2.5"
+          className="flex items-center gap-3.5 rounded-[11px] border border-line bg-canvas px-3.75 py-3.25 transition-colors hover:border-line-strong"
         >
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="truncate text-sm">{board.name}</span>
-              <span className="font-mono text-xs text-muted">{board.id}</span>
+              <span className="truncate text-[13.5px] font-medium">{board.name}</span>
+              <span className="font-mono text-[11px] text-muted">{board.id}</span>
             </div>
-            <p className="truncate font-mono text-xs text-dim">
-              hash {board.hash} · {board.maxLanes} lanes
-            </p>
+            <p className="mt-1 truncate font-mono text-[11.5px] text-dim">{board.hash}</p>
           </div>
-          <Button
-            size="sm"
-            variant={board.state === 'enabled' ? 'secondary' : 'outline'}
-            disabled={toggle.isPending}
-            onClick={() =>
-              toggle.mutate(board as Board, {
-                onSuccess: () => toast(t.save),
-                onError: () => toast(t.errorConflict, 'danger'),
-              })
+          <span className="shrink-0 text-[11.5px] text-muted tabular-nums">
+            {board.maxLanes} lanes
+          </span>
+          <Switch
+            label={board.name}
+            checked={board.state === 'enabled'}
+            disabled={update.isPending}
+            onCheckedChange={(next) =>
+              update.mutate(
+                { board, patch: { state: next ? 'enabled' : 'disabled' } },
+                {
+                  onSuccess: () => toast(t.saved),
+                  onError: () => toast(t.errorConflict, 'danger'),
+                },
+              )
             }
-          >
-            {board.state === 'enabled' ? t.disable : t.enable}
-          </Button>
-        </li>
+          />
+        </div>
       ))}
-    </ul>
+
+      <button
+        type="button"
+        onClick={() => setCreating(true)}
+        className="h-9.5 rounded-[11px] border border-dashed border-line-strong text-[13px] font-medium text-soft transition-colors hover:bg-raised"
+      >
+        + {t.newBoard}
+      </button>
+
+      <BoardDialog
+        target={creating ? { mode: 'create', nodeId } : null}
+        onClose={() => setCreating(false)}
+      />
+    </div>
   )
 }
 

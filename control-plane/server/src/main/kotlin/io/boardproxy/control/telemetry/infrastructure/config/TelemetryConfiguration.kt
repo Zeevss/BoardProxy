@@ -2,6 +2,9 @@ package io.boardproxy.control.telemetry.infrastructure.config
 
 import io.boardproxy.control.shared.contracts.QuotaExceededQueries
 import io.boardproxy.control.shared.events.OutboxRepository
+import io.boardproxy.control.shared.contracts.QuotaConfigChangeRepository
+import io.boardproxy.control.shared.persistence.TransactionRunner
+import io.boardproxy.control.shared.audit.AuditRepository
 import io.boardproxy.control.telemetry.application.TrafficQuotaNotifier
 import io.boardproxy.control.telemetry.application.TrafficQuotaRepository
 import io.boardproxy.control.telemetry.application.TrafficQuotaService
@@ -21,6 +24,9 @@ class TelemetryConfiguration {
         quotas: TrafficQuotaRepository,
         notifier: TrafficQuotaNotifier,
         outbox: OutboxRepository,
+        changes: QuotaConfigChangeRepository,
+        transactions: TransactionRunner,
+        audit: AuditRepository,
         clock: Clock,
-    ) = TrafficQuotaService(quotas, notifier, outbox, clock)
+    ) = TrafficQuotaService(quotas, notifier, outbox, changes, transactions, audit, clock)
 }

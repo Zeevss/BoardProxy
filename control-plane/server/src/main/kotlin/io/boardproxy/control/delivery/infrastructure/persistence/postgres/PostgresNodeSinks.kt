@@ -10,6 +10,8 @@ import io.boardproxy.control.delivery.application.UserTrafficInput
 import io.boardproxy.control.shared.persistence.toSqlTimestamp
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate
 import org.springframework.stereotype.Repository
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 /**
  * Дельты привязаны к отчёту, а не к собственной таблице батчей: идемпотентность
@@ -48,6 +50,11 @@ class PostgresNodeTrafficSink(private val jdbc: NamedParameterJdbcTemplate) : No
                     )
                 }.toTypedArray(),
             )
+            rollup(
+                nodeId,
+                "interface",
+                interfaces.map { RollupInput(it.interfaceName, it.observedAt, it.rxBytes, it.txBytes) },
+            )
         }
         if (users.isNotEmpty()) {
             jdbc.batchUpdate(
@@ -64,8 +71,53 @@ class PostgresNodeTrafficSink(private val jdbc: NamedParameterJdbcTemplate) : No
                     )
                 }.toTypedArray(),
             )
+            rollup(
+                nodeId,
+                "user",
+                users.map { RollupInput(it.userId, it.observedAt, it.rxBytes, it.txBytes) },
+            )
         }
     }
+
+    /**
+     * Rollup обновляется в той же транзакции, что и raw delta. Поэтому даже
+     * отчёт с очень старым observedAt не потеряется из-за ограниченного окна
+     * фонового rebuild.
+     */
+    private fun rollup(nodeId: String, kind: String, inputs: List<RollupInput>) {
+        val rows = inputs.groupBy { it.subject to it.observedAt.truncatedTo(ChronoUnit.HOURS) }
+            .map { (key, values) ->
+                mapOf(
+                    "nodeId" to nodeId,
+                    "kind" to kind,
+                    "subject" to key.first,
+                    "bucketStart" to key.second.toSqlTimestamp(),
+                    "rxBytes" to values.sumOf(RollupInput::rxBytes),
+                    "txBytes" to values.sumOf(RollupInput::txBytes),
+                )
+            }
+        jdbc.batchUpdate(
+            """
+            INSERT INTO traffic_hourly_rollups (
+                node_id, traffic_kind, subject, bucket_start, rx_bytes, tx_bytes, updated_at
+            ) VALUES (
+                :nodeId, :kind, :subject, :bucketStart, :rxBytes, :txBytes, now()
+            )
+            ON CONFLICT (node_id, traffic_kind, subject, bucket_start) DO UPDATE SET
+                rx_bytes = traffic_hourly_rollups.rx_bytes + EXCLUDED.rx_bytes,
+                tx_bytes = traffic_hourly_rollups.tx_bytes + EXCLUDED.tx_bytes,
+                updated_at = now()
+            """.trimIndent(),
+            rows.toTypedArray(),
+        )
+    }
+
+    private data class RollupInput(
+        val subject: String,
+        val observedAt: Instant,
+        val rxBytes: Long,
+        val txBytes: Long,
+    )
 }
 
 /**
@@ -87,6 +139,7 @@ class PostgresNodeRuntimeSink(
             ON CONFLICT (node_id) DO UPDATE SET
                 snapshot = EXCLUDED.snapshot,
                 observed_at = EXCLUDED.observed_at
+            WHERE node_runtime.observed_at <= EXCLUDED.observed_at
             """.trimIndent(),
             mapOf(
                 "nodeId" to nodeId,

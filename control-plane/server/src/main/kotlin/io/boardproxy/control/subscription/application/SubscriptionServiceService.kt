@@ -61,7 +61,7 @@ class SubscriptionServiceManager(
         return transactions.required {
             // Перевыпуск обязан обесценить прежний токен: два живых секрета у
             // одного сервиса означают, что отозвать утёкший невозможно.
-            repository.tokenId()?.let { previous -> runCatching { tokens.revoke(previous, actor) } }
+            repository.tokenId()?.let { previous -> tokens.revoke(previous, actor) }
             val issued = tokens.issueSubscriberToken("subscription-service", actor)
             repository.attachToken(issued.id, now)
             audit.append(event("subscription-service.token-issued", actor, now, emptyMap()))

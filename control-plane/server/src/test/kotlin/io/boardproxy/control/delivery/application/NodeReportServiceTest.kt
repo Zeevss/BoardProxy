@@ -119,6 +119,49 @@ class NodeReportServiceTest {
     }
 
     @Test
+    fun `меньший seq текущего boot не откатывает status и runtime`() {
+        service.accept(report(batchId = "batch-new", seq = 10, appliedRevision = 10, sessions = 10))
+        service.accept(report(batchId = "batch-late", seq = 9, appliedRevision = 9, sessions = 99))
+
+        val status = assertNotNull(statuses.find("node-1"))
+        assertEquals(10, status.seq)
+        assertEquals(10, status.appliedRevision)
+        assertEquals(10, runtimeSessions())
+    }
+
+    @Test
+    fun `старый boot не воскресает после нового`() {
+        service.accept(
+            report(batchId = "batch-a1", bootId = "boot-a", seq = 10, appliedRevision = 10, sessions = 10, uptime = 100),
+        )
+        service.accept(
+            report(batchId = "batch-b1", bootId = "boot-b", seq = 1, appliedRevision = 20, sessions = 20, uptime = 1),
+        )
+
+        commands.issue("node-1", "restart", "operator", TEST_TIME)
+        val staleCommands = service.accept(
+            report(
+                batchId = "batch-a2", bootId = "boot-a", seq = 11,
+                appliedRevision = 99, sessions = 99, uptime = 101,
+            ),
+        )
+
+        val status = assertNotNull(statuses.find("node-1"))
+        assertEquals("boot-b", status.bootId)
+        assertEquals(20, status.appliedRevision)
+        assertEquals(20, runtimeSessions())
+        assertTrue(staleCommands.isEmpty(), "устаревший процесс не должен получать команды")
+
+        val currentCommands = service.accept(
+            report(
+                batchId = "batch-b2", bootId = "boot-b", seq = 2,
+                appliedRevision = 20, sessions = 20, uptime = 2,
+            ),
+        )
+        assertEquals(listOf("restart"), currentCommands.map { it.kind })
+    }
+
+    @Test
     fun `события копятся журналом`() {
         service.accept(report(batchId = "batch-1"))
         service.accept(report(batchId = "batch-2"))
@@ -131,20 +174,23 @@ class NodeReportServiceTest {
 
     private fun report(
         batchId: String,
+        bootId: String = "boot-1",
+        seq: Long = 3,
         appliedRevision: Long = 1,
         applyError: String = "",
         sessions: Int = 1,
+        uptime: Long = 42,
     ) = NodeReport(
         nodeId = "node-1",
-        bootId = "boot-1",
-        seq = 3,
+        bootId = bootId,
+        seq = seq,
         batchId = batchId,
         appliedRevision = appliedRevision,
         appliedSha256 = "a".repeat(64),
         applyError = applyError,
         coreVersion = "1.2.3",
         agentVersion = "0.9.0",
-        uptimeSeconds = 42,
+        uptimeSeconds = uptime,
         observedAt = TEST_TIME,
         runtime = RuntimeSnapshotInput(
             coreBootId = "boot-1",
@@ -166,4 +212,14 @@ class NodeReportServiceTest {
 
     private fun deltaRows(table: String): Int =
         PostgresSupport.jdbc.queryForObject("SELECT count(*) FROM $table", Int::class.java) ?: 0
+
+    private fun runtimeSessions(): Int {
+        val stored = PostgresSupport.jdbc.queryForObject(
+            "SELECT snapshot::text FROM node_runtime WHERE node_id = 'node-1'",
+            String::class.java,
+        )
+        val snapshot = PostgresSupport.json.readValue<Map<String, Any>>(assertNotNull(stored))
+        @Suppress("UNCHECKED_CAST")
+        return ((snapshot["users"] as List<Map<String, Any>>).single()["activeSessions"] as Number).toInt()
+    }
 }

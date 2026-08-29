@@ -4,10 +4,19 @@ import { cn } from '@/lib/utils'
 
 export const Tabs = TabsPrimitive.Root
 
+/**
+ * Сегментированный переключатель в общей рамке.
+ *
+ * Не подчёркивание: вкладки здесь делят одну панель на равные части, и рамка
+ * показывает, что выбрана ровно одна из них.
+ */
 export function TabsList({ className, ...props }: ComponentProps<typeof TabsPrimitive.List>) {
   return (
     <TabsPrimitive.List
-      className={cn('flex items-center gap-1 border-b border-line px-4', className)}
+      className={cn(
+        'flex gap-[3px] rounded-[9px] border border-line bg-canvas p-[3px]',
+        className,
+      )}
       {...props}
     />
   )
@@ -17,8 +26,8 @@ export function TabsTrigger({ className, ...props }: ComponentProps<typeof TabsP
   return (
     <TabsPrimitive.Trigger
       className={cn(
-        '-mb-px border-b-2 border-transparent px-3 py-2.5 text-sm text-dim transition-colors',
-        'hover:text-soft data-[state=active]:border-fg data-[state=active]:text-fg',
+        'h-7 flex-1 rounded-md text-[12.5px] font-medium text-dim transition-colors',
+        'hover:text-soft data-[state=active]:bg-line data-[state=active]:text-fg',
         className,
       )}
       {...props}
@@ -26,6 +35,7 @@ export function TabsTrigger({ className, ...props }: ComponentProps<typeof TabsP
   )
 }
 
+/** Отступы задаёт вмещающая панель: у вкладок своих полей нет. */
 export function TabsContent({ className, ...props }: ComponentProps<typeof TabsPrimitive.Content>) {
-  return <TabsPrimitive.Content className={cn('p-4', className)} {...props} />
+  return <TabsPrimitive.Content className={cn('pt-4', className)} {...props} />
 }

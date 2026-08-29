@@ -12,6 +12,7 @@ import io.boardproxy.control.shared.agents.AgentStatusRepository
 import io.boardproxy.control.shared.persistence.toSqlTimestamp
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate
 import org.springframework.stereotype.Repository
+import org.springframework.transaction.annotation.Transactional
 import java.sql.ResultSet
 import java.time.Instant
 
@@ -56,12 +57,34 @@ class PostgresAgentStatusRepository(
     override fun list(): List<AgentStatus> =
         jdbc.query("$SELECT ORDER BY agent_id", emptyMap<String, Any>()) { rs, _ -> status(rs) }
 
-    /**
-     * Отчёт несёт состояние целиком, поэтому запись безусловна: устаревшего
-     * кэша, который мог бы перезаписать свежий, ни у кого нет — отсюда и
-     * отсутствие лиза с fencing-токеном.
-     */
-    override fun record(status: AgentStatus) {
+    @Transactional
+    override fun record(status: AgentStatus): Boolean {
+        // Стабильная строка агента существует до первого status и служит
+        // транзакционной блокировкой для смены boot.
+        val agentExists = jdbc.queryForList(
+            "SELECT id FROM agents WHERE id = :agentId FOR UPDATE",
+            mapOf("agentId" to status.agentId),
+            String::class.java,
+        ).isNotEmpty()
+        require(agentExists) { "agent ${status.agentId} does not exist" }
+
+        val current = find(status.agentId)
+        if (!isCurrent(status, current)) return false
+
+        status.bootId?.let { bootId ->
+            jdbc.update(
+                """
+                INSERT INTO agent_boots (agent_id, boot_id, first_seen_at)
+                VALUES (:agentId, :bootId, :at)
+                ON CONFLICT DO NOTHING
+                """.trimIndent(),
+                mapOf(
+                    "agentId" to status.agentId,
+                    "bootId" to bootId,
+                    "at" to requireNotNull(status.lastReportAt).toSqlTimestamp(),
+                ),
+            )
+        }
         jdbc.update(
             """
             INSERT INTO agent_status (
@@ -95,7 +118,37 @@ class PostgresAgentStatusRepository(
                 "details" to json.writeValueAsString(status.details),
             ),
         )
+        return true
     }
+
+    private fun isCurrent(incoming: AgentStatus, current: AgentStatus?): Boolean {
+        val bootId = incoming.bootId
+        if (current == null || bootId == null || current.bootId == null) return true
+        if (current.bootId == bootId) return incoming.seq >= current.seq
+        val seenBefore = requireNotNull(
+            jdbc.queryForObject(
+                """
+                SELECT EXISTS(
+                    SELECT 1 FROM agent_boots WHERE agent_id = :agentId AND boot_id = :bootId
+                )
+                """.trimIndent(),
+                mapOf("agentId" to incoming.agentId, "bootId" to bootId),
+                Boolean::class.java,
+            ),
+        )
+        if (seenBefore) return false
+
+        // boot_id случайный и сам по себе не упорядочивается. Начало boot
+        // выводится агентом из observedAt-uptime; для одной машины это
+        // позволяет отвергнуть старый процесс даже после миграции, когда его
+        // boot_id ещё отсутствует в новой history table.
+        val incomingStarted = incoming.details.instant("bootStartedAt")
+        val currentStarted = current.details.instant("bootStartedAt")
+        return incomingStarted == null || currentStarted == null || incomingStarted.isAfter(currentStarted)
+    }
+
+    private fun Map<String, Any?>.instant(key: String): Instant? =
+        this[key]?.toString()?.let { runCatching { Instant.parse(it) }.getOrNull() }
 
     @Suppress("UNCHECKED_CAST")
     private fun status(rs: ResultSet) = AgentStatus(

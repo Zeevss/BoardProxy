@@ -20,6 +20,22 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    flavorDimensions += "device"
+    productFlavors {
+        create("mobile") {
+            dimension = "device"
+        }
+        create("automotive") {
+            dimension = "device"
+            // Many GMS head units still run Android 8-10 and expose a regular
+            // Android launcher, rather than the Android Auto projection host.
+            // The bundled BoardProxy core has the same Android 8 floor.
+            minSdk = 26
+            targetSdk = 28
+            versionNameSuffix = "-automotive"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false

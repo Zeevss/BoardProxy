@@ -89,7 +89,8 @@ class ProvisioningConfiguration {
         publisher: DesiredConfigPublisher,
         transactions: TransactionRunner,
         clock: Clock,
-    ) = NodeService(nodes, publisher, transactions, clock)
+        audit: AuditRepository,
+    ) = NodeService(nodes, publisher, transactions, clock, audit)
 
     @Bean
     fun boardService(
@@ -98,7 +99,8 @@ class ProvisioningConfiguration {
         publisher: DesiredConfigPublisher,
         transactions: TransactionRunner,
         clock: Clock,
-    ) = BoardService(boards, nodes, publisher, transactions, clock)
+        audit: AuditRepository,
+    ) = BoardService(boards, nodes, publisher, transactions, clock, audit)
 
     @Bean
     fun userService(
@@ -108,5 +110,6 @@ class ProvisioningConfiguration {
         publisher: DesiredConfigPublisher,
         transactions: TransactionRunner,
         clock: Clock,
-    ) = UserService(users, boards, grants, publisher, transactions, clock)
+        audit: AuditRepository,
+    ) = UserService(users, boards, grants, publisher, transactions, clock, audit)
 }

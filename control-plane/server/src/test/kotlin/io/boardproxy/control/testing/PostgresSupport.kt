@@ -54,7 +54,8 @@ object PostgresSupport {
     fun truncate() {
         jdbc.update(
             """TRUNCATE agents, users, credentials, panel_administrators,
-                        traffic_hourly_rollups, audit_events, outbox_events
+                        traffic_hourly_rollups, user_traffic_lifetime_totals,
+                        quota_config_changes, audit_events, outbox_events
                RESTART IDENTITY CASCADE""",
         )
     }

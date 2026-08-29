@@ -8,7 +8,10 @@ import io.boardproxy.control.shared.errors.InvalidRequest
 import io.boardproxy.control.shared.errors.ResourceConflict
 import io.boardproxy.control.shared.errors.ResourceNotFound
 import io.boardproxy.control.shared.persistence.TransactionRunner
+import io.boardproxy.control.shared.audit.AuditEvent
+import io.boardproxy.control.shared.audit.AuditRepository
 import java.time.Clock
+import java.util.UUID
 
 /**
  * Настройки ядра приходят целиком; приватный ключ сервера в них не входит —
@@ -26,6 +29,8 @@ class NodeService(
     private val publisher: DesiredConfigPublisher,
     private val transactions: TransactionRunner,
     private val clock: Clock,
+    private val audit: AuditRepository = AuditRepository { },
+    private val nextId: () -> String = { UUID.randomUUID().toString() },
 ) {
     fun get(id: String): Node = nodes.find(id) ?: throw ResourceNotFound("node $id not found")
 
@@ -50,6 +55,7 @@ class NodeService(
         return transactions.required {
             if (nodes.find(id) != null) throw ResourceConflict("node $id already exists")
             nodes.create(node)
+            audit(node, "node.created", actor)
             publisher.publish(setOf(id), "node.created", actor)
             node
         }
@@ -70,6 +76,7 @@ class NodeService(
             updatedAt = clock.instant(),
         )
         if (!nodes.replace(updated, expectedVersion)) throw ResourceConflict("node $id version changed")
+        audit(updated, "node.updated", actor)
         publisher.publish(setOf(id), "node.updated", actor)
         updated
     }
@@ -82,6 +89,15 @@ class NodeService(
     fun delete(id: String, expectedVersion: Long, actor: String) = transactions.required {
         val current = get(id)
         if (current.version != expectedVersion) throw ResourceConflict("node $id version changed")
+        audit(current, "node.deleted", actor)
         if (!nodes.delete(id)) throw ResourceNotFound("node $id not found")
     }
+
+    private fun audit(node: Node, action: String, actor: String) = audit.append(
+        AuditEvent(
+            id = nextId(), nodeId = node.id, actor = actor, action = action,
+            resourceType = "node", resourceId = node.id, resourceVersion = node.version,
+            occurredAt = clock.instant(),
+        ),
+    )
 }

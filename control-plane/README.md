@@ -33,10 +33,11 @@ SHA-256 hash.
 
 The first-run screen guides the remaining bootstrap:
 
-1. Open **Nodes** and create the first node together with its first board.
-   The server private key is generated with Web Crypto and remains write-only.
-2. Copy the returned `BPROXY_NODE_SECRET` into `.env` without Base64
-   conversion.
+1. Open **Nodes** and create the first node, then create its board separately.
+   The server private key is generated and encrypted by control-plane; it is
+   never accepted from or returned to the browser.
+2. Issue a one-time enrollment secret for that node and copy the returned
+   `BPROXY_NODE_SECRET` into `.env` without Base64 conversion.
 3. Start the optional node profile:
 
 ```sh
@@ -44,48 +45,50 @@ docker compose --profile node up -d --build node
 docker compose --profile node logs -f node
 ```
 
-4. Create users in **Users**. The provisioning transaction generates the
-   private key server-side, assigns the selected boards and returns either
-   direct keylinks or one subscription URL. Plaintext credentials are shown
-   exactly once.
+4. Create users in **Users**, then replace their `/grants` subresource with the
+   target nodes and boards. Direct keylinks are derived from those grants.
+   A subscription is a separate resource bound to the user and follows future
+   grant changes automatically.
 
 API tokens remain available under **Access** for automation, node-independent
 integrations and the `SUBSCRIBER` service role. `CONTROL_BOOTSTRAP_ADMIN_TOKEN`
 is optional and should only be configured as a temporary emergency machine
 credential.
 
-Updating the catalog with its current `ETag` wakes the connected node stream
-immediately. Compatible user/board changes are hot-applied by core; listener or
-server changes may require node-agent to restart core.
+Updating a node, board, user or grants with the current numeric `ETag` rebuilds
+the affected desired configuration and wakes the connected node stream.
+Compatible changes are hot-applied by core; listener or server changes may
+require node-agent to restart core.
 
 The curl examples below assume `ADMIN_TOKEN` was issued under **Access** for
 automation. Interactive browser sessions do not expose their session token.
 
 ```sh
-curl -X PUT http://localhost:8080/api/v1/catalogs/node-1 \
+curl -X PUT http://localhost:8080/api/v1/users/alice \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
   -H 'If-Match: "1"' \
-  --data-binary @catalog.json
+  --data '{"name":"Alice","state":"enabled","maxSessions":2,"maxLanes":4}'
 ```
 
 Use `state: "disabled"` for reversible suspension and `state: "revoked"` for
 terminal revocation. Revoked resources and private credentials are omitted
-from compiled node configuration.
+from compiled node configuration. `maxSessions` is enforced independently by
+each node/core; it is not a fleet-wide concurrent-session semaphore.
 
-Granular example:
+Replace the user's placements as one operation:
 
 ```sh
-curl -X PUT http://localhost:8080/api/v1/nodes/node-1/users/alice \
-  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'If-Match: "1"' \
+curl -X PUT http://localhost:8080/api/v1/users/alice/grants \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  --data '{"name":"Alice","privateKey":"...","state":"enabled","maxSessions":2,"maxLanes":4}'
+  --data '[{"nodeId":"node-1","boardIds":["board-1"]}]'
 ```
 
 ## HTTP access
 
-- `VIEWER` reads catalogs, status, traffic and frontend events;
-- `OPERATOR` also mutates catalogs and creates enrollment secrets;
+- `VIEWER` reads nodes, boards, users, subscriptions, status, traffic and events;
+- `OPERATOR` also mutates these resources and creates enrollment secrets;
 - `ADMIN` also creates, lists and revokes API tokens and reads protected
   actuator endpoints.
 

@@ -18,6 +18,7 @@ import kotlin.test.Test
         "control.delivery.status-expiry-delay=PT1H",
         "control.telemetry.rollup-delay=PT1H",
         "control.telemetry.quota-delay=PT1H",
+        "control.telemetry.quota-reconcile-delay=PT1H",
     ],
 )
 @Testcontainers(disabledWithoutDocker = true)

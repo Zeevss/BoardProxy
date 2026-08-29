@@ -19,5 +19,7 @@ class ServiceTokenAdapter(private val tokens: ApiTokenCommands) : ServiceTokenIs
         return IssuedServiceToken(issued.token.id, issued.secret)
     }
 
-    override fun revoke(tokenId: String, actor: String) = tokens.revoke(tokenId, actor)
+    override fun revoke(tokenId: String, actor: String) {
+        tokens.revokeIfActive(tokenId, actor)
+    }
 }

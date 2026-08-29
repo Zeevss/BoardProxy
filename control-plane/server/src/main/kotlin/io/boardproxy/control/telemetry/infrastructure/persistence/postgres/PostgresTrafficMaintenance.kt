@@ -24,10 +24,48 @@ class PostgresTrafficMaintenance(private val jdbc: NamedParameterJdbcTemplate) :
         mapOf("cutoff" to cutoff.toSqlTimestamp()),
     )
 
-    override fun deleteRollupsBefore(cutoff: Instant): Int = jdbc.update(
-        "DELETE FROM traffic_hourly_rollups WHERE bucket_start < :cutoff",
-        mapOf("cutoff" to cutoff.toSqlTimestamp()),
-    )
+    @Transactional
+    override fun deleteRollupsBefore(cutoff: Instant): Int {
+        val parameters = mapOf("cutoff" to cutoff.toSqlTimestamp())
+        jdbc.update(
+            """
+            INSERT INTO user_traffic_lifetime_totals (
+                node_id, user_id, rx_bytes, tx_bytes, archived_at
+            )
+            SELECT node_id, subject, SUM(rx_bytes), SUM(tx_bytes), now()
+            FROM traffic_hourly_rollups
+            WHERE traffic_kind = 'user' AND bucket_start < :cutoff
+              AND NOT EXISTS (
+                  SELECT 1 FROM user_traffic_deltas raw
+                  WHERE raw.agent_id = traffic_hourly_rollups.node_id
+                    AND raw.user_id = traffic_hourly_rollups.subject
+                    AND date_trunc('hour', raw.observed_at) = traffic_hourly_rollups.bucket_start
+              )
+            GROUP BY node_id, subject
+            ON CONFLICT (node_id, user_id) DO UPDATE SET
+                rx_bytes = user_traffic_lifetime_totals.rx_bytes + EXCLUDED.rx_bytes,
+                tx_bytes = user_traffic_lifetime_totals.tx_bytes + EXCLUDED.tx_bytes,
+                archived_at = EXCLUDED.archived_at
+            """.trimIndent(),
+            parameters,
+        )
+        return jdbc.update(
+            """
+            DELETE FROM traffic_hourly_rollups rollup
+            WHERE bucket_start < :cutoff
+              AND (
+                  traffic_kind <> 'user'
+                  OR NOT EXISTS (
+                      SELECT 1 FROM user_traffic_deltas raw
+                      WHERE raw.agent_id = rollup.node_id
+                        AND raw.user_id = rollup.subject
+                        AND date_trunc('hour', raw.observed_at) = rollup.bucket_start
+                  )
+              )
+            """.trimIndent(),
+            parameters,
+        )
+    }
 
     private fun rebuild(
         kind: String,

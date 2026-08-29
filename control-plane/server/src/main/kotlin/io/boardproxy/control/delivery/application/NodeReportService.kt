@@ -106,15 +106,7 @@ class NodeReportService(
         val fresh = reports.claim(report.nodeId, report.batchId, now)
         telemetry.reportAccepted(fresh)
 
-        if (fresh) {
-            traffic.record(report.nodeId, report.batchId, report.interfaceTraffic, report.userTraffic)
-            report.runtime?.let { runtime.replaceSnapshot(report.nodeId, it) }
-            if (report.events.isNotEmpty()) runtime.appendEvents(report.nodeId, report.events)
-        }
-
-        // Состояние пишется даже для повтора: оно идемпотентно и отражает то,
-        // что нода думает о себе прямо сейчас.
-        statuses.record(
+        val current = statuses.record(
             AgentStatus(
                 agentId = report.nodeId,
                 bootId = report.bootId,
@@ -125,11 +117,20 @@ class NodeReportService(
                 agentVersion = report.agentVersion.ifBlank { null },
                 uptimeSeconds = report.uptimeSeconds.takeIf { it > 0 },
                 lastReportAt = now,
-                details = mapOf("coreVersion" to report.coreVersion.ifBlank { null }),
+                details = mapOf(
+                    "coreVersion" to report.coreVersion.ifBlank { null },
+                    "bootStartedAt" to report.observedAt.minusSeconds(report.uptimeSeconds).toString(),
+                ),
             ),
         )
 
-        val pending = commands.pending(report.nodeId)
+        if (fresh) {
+            traffic.record(report.nodeId, report.batchId, report.interfaceTraffic, report.userTraffic)
+            if (current) report.runtime?.let { runtime.replaceSnapshot(report.nodeId, it) }
+            if (report.events.isNotEmpty()) runtime.appendEvents(report.nodeId, report.events)
+        }
+
+        val pending = if (current) commands.pending(report.nodeId) else null
         if (pending != null) commands.markDelivered(report.nodeId, pending.nonce, now)
         listOfNotNull(pending)
     }

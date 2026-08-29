@@ -4,26 +4,16 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
 import { useControlEvents } from './api/events'
 import { AppShell } from './app/AppShell'
 import { AuthProvider, useAuth } from './app/auth'
-import { LanguageProvider, useT } from './app/language'
+import { LanguageProvider } from './app/language'
 import { createQueryClient } from './app/query'
 import { ToastProvider } from './components/ui/toast'
 import { AuthScreen } from './screens/AuthScreen'
+import { BoardsScreen } from './screens/BoardsScreen'
 import { NodesScreen } from './screens/NodesScreen'
+import { OverviewScreen } from './screens/OverviewScreen'
+import { SettingsScreen } from './screens/SettingsScreen'
+import { TrafficScreen } from './screens/TrafficScreen'
 import { UsersScreen } from './screens/UsersScreen'
-
-type TitleKey = 'overview' | 'boards' | 'traffic' | 'settings'
-type SubKey = 'overviewSub' | 'boardsSub' | 'trafficSub' | 'settingsSub'
-
-/** Заглушка экрана: маршруты ставятся раньше, чем сами экраны. */
-function Placeholder({ titleKey, subKey }: { titleKey: TitleKey; subKey: SubKey }) {
-  const t = useT()
-  return (
-    <section className="mx-auto flex max-w-6xl flex-col gap-1">
-      <h1 className="text-xl font-medium">{t[titleKey]}</h1>
-      <p className="text-sm text-dim">{t[subKey]}</p>
-    </section>
-  )
-}
 
 function Routed() {
   const { session } = useAuth()
@@ -37,12 +27,12 @@ function Routed() {
   return (
     <Routes>
       <Route element={<AppShell />}>
-        <Route index element={<Placeholder titleKey="overview" subKey="overviewSub" />} />
+        <Route index element={<OverviewScreen />} />
         <Route path="nodes" element={<NodesScreen />} />
         <Route path="users" element={<UsersScreen />} />
-        <Route path="boards" element={<Placeholder titleKey="boards" subKey="boardsSub" />} />
-        <Route path="traffic" element={<Placeholder titleKey="traffic" subKey="trafficSub" />} />
-        <Route path="settings" element={<Placeholder titleKey="settings" subKey="settingsSub" />} />
+        <Route path="boards" element={<BoardsScreen />} />
+        <Route path="traffic" element={<TrafficScreen />} />
+        <Route path="settings" element={<SettingsScreen />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

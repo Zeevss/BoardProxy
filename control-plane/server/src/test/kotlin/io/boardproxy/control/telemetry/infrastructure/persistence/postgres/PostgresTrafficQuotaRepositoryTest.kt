@@ -26,7 +26,10 @@ class PostgresTrafficQuotaRepositoryTest {
     private val boards = PostgresBoardRepository(PostgresSupport.named)
     private val users = PostgresUserRepository(PostgresSupport.named, PostgresSupport.cipher)
     private val quotas = PostgresTrafficQuotaRepository(PostgresSupport.named)
-    private val usage = PostgresUserUsageQueries(PostgresSupport.named)
+    private val usage = PostgresUserUsageQueries(
+        PostgresSupport.named,
+        java.time.Clock.fixed(TEST_TIME, java.time.ZoneOffset.UTC),
+    )
 
     @BeforeTest
     fun prepare() {
@@ -115,6 +118,29 @@ class PostgresTrafficQuotaRepositoryTest {
     }
 
     @Test
+    fun `подписка показывает расход текущего периода quota`() {
+        quotas.save(quota(limit = 1_000), expectedVersion = null)
+        recordTraffic("node-1", "batch-old", rx = 900, tx = 0, at = TEST_TIME.minusSeconds(40L * 24 * 3600))
+        recordTraffic("node-1", "batch-current", rx = 100, tx = 0, at = TEST_TIME)
+
+        val result = usage.usage("user-1")
+
+        assertEquals(100, result.usedBytes)
+    }
+
+    @Test
+    fun `lifetime quota переживает удаление почасовой истории`() {
+        val old = TEST_TIME.minusSeconds(800L * 24 * 3600)
+        recordTraffic("node-1", "batch-old", rx = 100, tx = 50, at = old)
+        val maintenance = PostgresTrafficMaintenance(PostgresSupport.named)
+        maintenance.rebuildHourly(old.minusSeconds(3600), old.plusSeconds(3600))
+        maintenance.deleteRawBefore(TEST_TIME)
+        maintenance.deleteRollupsBefore(TEST_TIME.minusSeconds(730L * 24 * 3600))
+
+        assertEquals(150, quotas.usedBytes("user-1", Instant.EPOCH, TEST_TIME.plusSeconds(1)))
+    }
+
+    @Test
     fun `удаление пользователя уносит квоту и её состояние`() {
         quotas.save(quota(), expectedVersion = null)
         quotas.saveState(state(used = 10, exceeded = false))
@@ -123,6 +149,20 @@ class PostgresTrafficQuotaRepositoryTest {
 
         assertEquals(null, quotas.find("user-1"))
         assertEquals(emptySet(), quotas.exceededUsers())
+    }
+
+    @Test
+    fun `новое поколение durable quota change нельзя подтвердить старым consumer`() {
+        val changes = PostgresQuotaConfigChangeRepository(PostgresSupport.named)
+        changes.mark("user-1", TEST_TIME)
+        val first = changes.find("user-1")!!
+        changes.mark("user-1", TEST_TIME.plusSeconds(1))
+        val second = changes.find("user-1")!!
+
+        assertFalse(changes.complete("user-1", first.generation))
+        assertTrue(second.generation > first.generation)
+        assertTrue(changes.complete("user-1", second.generation))
+        assertEquals(null, changes.find("user-1"))
     }
 
     private fun quota(limit: Long = 100) = TrafficQuota(
@@ -135,8 +175,8 @@ class PostgresTrafficQuotaRepositoryTest {
 
     private fun recordTraffic(nodeId: String, batchId: String, rx: Long, tx: Long, at: Instant = TEST_TIME) {
         PostgresSupport.jdbc.update(
-            "INSERT INTO agent_reports (agent_id, batch_id) VALUES (?, ?)",
-            nodeId, batchId,
+            "INSERT INTO agent_reports (agent_id, batch_id, received_at) VALUES (?, ?, ?)",
+            nodeId, batchId, at.toSqlTimestamp(),
         )
         PostgresSupport.jdbc.update(
             """

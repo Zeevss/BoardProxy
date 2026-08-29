@@ -23,6 +23,7 @@ class SubscriptionServiceTest {
     private val subscriptions = FakeSubscriptions()
     private val keylinks = FakeKeylinks()
     private val usage = FakeUsage()
+    private var deliveryEnabled = true
 
     private val service = SubscriptionService(
         subscriptions = subscriptions,
@@ -33,7 +34,7 @@ class SubscriptionServiceTest {
             override fun <T> required(block: () -> T): T = block()
         },
         links = object : SubscriptionLinkBuilder {
-            override val enabled = false
+            override val enabled get() = deliveryEnabled
             override fun build(issued: IssuedSubscription) = error("delivery disabled")
         },
         clock = Clock.fixed(now, ZoneOffset.UTC),
@@ -104,6 +105,14 @@ class SubscriptionServiceTest {
             SubscriptionReplacement("Алиса", SubscriptionState.REVOKED), "operator",
         )
         assertFailsWith<ResourceGone> { service.resolve(issued.token, null) }
+    }
+
+    @Test
+    fun `глобальное выключение сервиса прекращает resolve старых ссылок`() {
+        val issued = service.create(SubscriptionDraft("Алиса", "u1"), "operator")
+        deliveryEnabled = false
+
+        assertFailsWith<ResourceForbidden> { service.resolve(issued.token, null) }
     }
 
     private class FakeKeylinks : KeylinkQueries {

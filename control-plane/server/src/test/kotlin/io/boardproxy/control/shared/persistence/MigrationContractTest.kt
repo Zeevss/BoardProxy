@@ -32,7 +32,7 @@ class MigrationContractTest {
 
         val expected = sortedSetOf(
             // агенты
-            "agents", "agent_status", "agent_commands", "agent_reports",
+            "agents", "agent_status", "agent_boots", "agent_commands", "agent_reports",
             // владеемое состояние
             "nodes", "boards", "users", "grants",
             // производное
@@ -41,13 +41,14 @@ class MigrationContractTest {
             "node_runtime", "runtime_events",
             // трафик
             "interface_traffic_deltas", "user_traffic_deltas", "traffic_hourly_rollups",
-            "user_traffic_quotas", "user_traffic_quota_state",
+            "user_traffic_lifetime_totals", "user_traffic_quotas", "user_traffic_quota_state",
             // доступ
             "credentials", "panel_administrators",
             // подписки
             "subscriptions", "subscription_service_settings",
             // pki и журналы
             "enrollment_tokens", "node_certificates", "audit_events", "outbox_events",
+            "quota_config_changes",
         )
 
         assertEquals(expected, actual)

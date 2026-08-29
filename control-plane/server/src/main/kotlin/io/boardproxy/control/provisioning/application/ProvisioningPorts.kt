@@ -82,6 +82,12 @@ data class DesiredConfig(
 }
 
 interface DesiredConfigRepository {
+    /**
+     * Сериализует компиляцию конфигурации одной ноды внутри текущей транзакции.
+     * Блокируется строка владеемой сущности, существующая ещё до первой
+     * публикации desired config.
+     */
+    fun lock(nodeId: String)
     fun find(nodeId: String): DesiredConfig?
     fun save(config: DesiredConfig)
 }

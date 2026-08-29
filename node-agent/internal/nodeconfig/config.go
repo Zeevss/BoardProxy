@@ -24,6 +24,8 @@ type Config struct {
 	CollectInterval time.Duration
 	Heartbeat       time.Duration
 	MaxOutboxBytes  int64
+	// Разовое действие вместо запуска: стереть идентичность и выйти.
+	ResetIdentity bool
 }
 
 func Parse(args []string) (Config, error) {
@@ -37,6 +39,7 @@ func Parse(args []string) (Config, error) {
 	collectInterval := flags.Duration("collect-interval", defaultCollectInterval, "traffic collection interval")
 	heartbeat := flags.Duration("heartbeat-interval", defaultHeartbeatInterval, "hub heartbeat interval")
 	maxOutboxBytes := flags.Int64("max-outbox-bytes", envInt64("BPROXY_MAX_OUTBOX_BYTES", 256<<20), "maximum durable telemetry backlog")
+	resetIdentity := flags.Bool("reset-identity", false, "forget the stored node identity and exit")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -44,6 +47,7 @@ func Parse(args []string) (Config, error) {
 		DataDirectory: *data, BootstrapSecret: *secret, CoreBinary: *coreBinary, CoreControl: *coreControl,
 		Interfaces: split(*interfaces), SysClassNet: *sysClassNet,
 		CollectInterval: *collectInterval, Heartbeat: *heartbeat, MaxOutboxBytes: *maxOutboxBytes,
+		ResetIdentity: *resetIdentity,
 	}
 	if err := config.Validate(); err != nil {
 		return Config{}, err

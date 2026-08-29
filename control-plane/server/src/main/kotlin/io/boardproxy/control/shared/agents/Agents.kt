@@ -76,7 +76,8 @@ interface AgentRegistry {
 interface AgentStatusRepository {
     fun find(agentId: String): AgentStatus?
     fun list(): List<AgentStatus>
-    fun record(status: AgentStatus)
+    /** false — отчёт принадлежит устаревшему boot или имеет меньший seq. */
+    fun record(status: AgentStatus): Boolean
 }
 
 /**

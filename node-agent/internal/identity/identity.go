@@ -13,8 +13,11 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	nodev1 "bproxy-node-contracts/node/v1"
@@ -55,22 +58,38 @@ func Ensure(ctx context.Context, dataDir, encodedSecret, agentVersion string) (*
 		return nil, err
 	}
 	bundlePath := filepath.Join(dir, "identity.json")
-	bundle, err := loadBundle(bundlePath)
-	if errors.Is(err, os.ErrNotExist) {
-		bundle, err = enroll(ctx, secret, agentVersion)
-		if err == nil {
-			err = writeBundle(bundlePath, bundle)
-		}
-	}
+	bundle, stored, err := readOrEnroll(ctx, bundlePath, secret, agentVersion)
 	if err != nil {
 		return nil, err
 	}
 	tlsConfig, leaf, err := tlsFromBundle(bundle)
 	if err != nil {
+		// Испорченный бандл сам не починится: подсказываем сброс, но только
+		// здесь — при недоступном хабе этот совет увёл бы не туда.
+		if stored {
+			return nil, fmt.Errorf("%w%s", err, resetHint)
+		}
 		return nil, err
 	}
-	if leaf.Subject.CommonName != secret.NodeID {
-		return nil, fmt.Errorf("identity: stored certificate belongs to %q, not %q", leaf.Subject.CommonName, secret.NodeID)
+
+	// Секрет заменили — регистрируемся заново вместо отказа.
+	//
+	// Прежняя идентичность остаётся на диске до тех пор, пока новая не получена:
+	// enrollment-токен одноразовый, и стереть рабочий сертификат до успешной
+	// регистрации значило бы оставить ноду вообще без доступа, если новый секрет
+	// окажется просроченным или уже использованным.
+	if reason := supersededBy(leaf, secret); reason != "" {
+		fresh, enrollErr := enroll(ctx, secret, agentVersion)
+		if enrollErr != nil {
+			return nil, fmt.Errorf("identity: %s; повторная регистрация не удалась: %w", reason, enrollErr)
+		}
+		if err := writeBundle(bundlePath, fresh); err != nil {
+			return nil, err
+		}
+		bundle = fresh
+		if tlsConfig, leaf, err = tlsFromBundle(bundle); err != nil {
+			return nil, err
+		}
 	}
 	if time.Until(leaf.NotAfter) <= renewBefore {
 		if !time.Now().Before(leaf.NotAfter) {
@@ -95,6 +114,99 @@ func Ensure(ctx context.Context, dataDir, encodedSecret, agentVersion string) (*
 	return &Identity{NodeID: secret.NodeID, HubURL: secret.HubURL, TLS: tlsConfig, RenewAt: leaf.NotAfter.Add(-renewBefore)}, nil
 }
 
+const resetHint = " (сбросить сохранённую идентичность: bproxy-node -reset-identity)"
+
+// readOrEnroll возвращает бандл и признак того, что он прочитан с диска, а не
+// получен только что: от этого зависит, уместен ли совет про сброс.
+func readOrEnroll(
+	ctx context.Context,
+	bundlePath string,
+	secret BootstrapSecret,
+	agentVersion string,
+) (storedIdentity, bool, error) {
+	bundle, err := loadBundle(bundlePath)
+	switch {
+	case err == nil:
+		return bundle, true, nil
+	case !errors.Is(err, os.ErrNotExist):
+		// Файл есть, но не читается — сброс здесь единственный выход.
+		return storedIdentity{}, true, fmt.Errorf("%w%s", err, resetHint)
+	}
+	if bundle, err = enroll(ctx, secret, agentVersion); err != nil {
+		return storedIdentity{}, false, err
+	}
+	if err := writeBundle(bundlePath, bundle); err != nil {
+		return storedIdentity{}, false, err
+	}
+	return bundle, false, nil
+}
+
+// supersededBy сообщает, почему сохранённая идентичность не годится текущему
+// секрету, и пустую строку, когда годится.
+//
+// Признака «секрет заменили» на диске нет: бандл хранит только сертификат, ключ
+// и CA. Поэтому спрашиваем не «тот ли это секрет», а «пригодна ли эта
+// идентичность здесь»: имя ноды должно совпасть, а сертификат — провериться
+// против CA из секрета. Сменился адрес хаба при том же CA — это тот же хаб,
+// перерегистрация не нужна.
+func supersededBy(leaf *x509.Certificate, secret BootstrapSecret) string {
+	if leaf.Subject.CommonName != secret.NodeID {
+		return fmt.Sprintf("сертификат выдан ноде %q, а секрет — для %q", leaf.Subject.CommonName, secret.NodeID)
+	}
+	authorities, err := parseCertificates([]byte(secret.CACertificate))
+	if err != nil {
+		return "CA из секрета не разбирается"
+	}
+	// Проверяем подпись, а не срок действия.
+	//
+	// Полная verify привязана ко времени, и на истёкшем сертификате её пришлось
+	// бы звать «в прошлом» — где может не действовать уже сам CA. Тогда
+	// просрочка выглядела бы как смена хаба, и нода жгла бы одноразовый токен
+	// на каждом продлении. Срок продлевает отдельная ветка Ensure.
+	for _, authority := range authorities {
+		if leaf.CheckSignatureFrom(authority) == nil {
+			return ""
+		}
+	}
+	return "сертификат выдан другим удостоверяющим центром — секрет ведёт на другой хаб"
+}
+
+// parseCertificates разбирает PEM-цепочку CA. Их может быть несколько: хаб
+// отдаёт то, что лежит в его хранилище, и после ротации там две записи.
+func parseCertificates(raw []byte) ([]*x509.Certificate, error) {
+	var certificates []*x509.Certificate
+	for block, rest := pem.Decode(raw); block != nil; block, rest = pem.Decode(rest) {
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		certificate, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		certificates = append(certificates, certificate)
+	}
+	if len(certificates) == 0 {
+		return nil, errors.New("identity: CA certificate is invalid")
+	}
+	return certificates, nil
+}
+
+// Reset удаляет сохранённую идентичность, чтобы нода зарегистрировалась заново.
+//
+// Нужен там, где перерегистрация по смене секрета не срабатывает: бандл
+// повреждён или его нечем прочитать. Отдельная команда вместо удаления тома:
+// в том же каталоге лежат конфигурация ядра и недоставленная телеметрия.
+func Reset(dataDir string) (bool, error) {
+	path := filepath.Join(dataDir, "identity", "identity.json")
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 func parseSecret(encoded string) (BootstrapSecret, error) {
 	if encoded == "" {
 		return BootstrapSecret{}, errors.New("identity: BPROXY_NODE_SECRET is required")
@@ -115,7 +227,31 @@ func parseSecret(encoded string) (BootstrapSecret, error) {
 	if secret.NodeID == "" || secret.HubURL == "" || secret.CACertificate == "" {
 		return BootstrapSecret{}, errors.New("identity: incomplete bootstrap secret")
 	}
+	if err := validateHubAddress(secret.HubURL); err != nil {
+		return BootstrapSecret{}, err
+	}
 	return secret, nil
+}
+
+// validateHubAddress проверяет, что в секрете лежит цель для gRPC, а не URL.
+//
+// hub_url уходит прямо в grpc.NewClient, который ждёт "host:port". На
+// "http://host:8080" он дописывает собственный ":443" и падает с "too many
+// colons in address" — по такой ошибке невозможно догадаться, что в секрет
+// попал адрес панели вместо gRPC-листенера. Проверка чисто синтаксическая:
+// достучаться до хаба всё равно можно только самой регистрацией.
+func validateHubAddress(address string) error {
+	if strings.Contains(address, "://") {
+		return fmt.Errorf("identity: hub_url must be host:port without a scheme, got %q", address)
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host == "" {
+		return fmt.Errorf("identity: hub_url must be host:port, got %q", address)
+	}
+	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+		return fmt.Errorf("identity: hub_url needs a numeric port, got %q", address)
+	}
+	return nil
 }
 
 func loadBundle(path string) (storedIdentity, error) {

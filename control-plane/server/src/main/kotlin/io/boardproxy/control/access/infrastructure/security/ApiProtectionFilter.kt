@@ -8,7 +8,6 @@ import jakarta.servlet.http.HttpServletRequestWrapper
 import jakarta.servlet.http.HttpServletResponse
 import org.springframework.http.MediaType
 import org.springframework.web.filter.OncePerRequestFilter
-import java.security.MessageDigest
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.IOException
@@ -19,6 +18,7 @@ class ApiProtectionFilter(
     private val requestsPerMinute: Int,
     private val maximumBodyBytes: Long,
     private val clock: Clock,
+    private val maximumKeys: Int = MAX_KEYS,
 ) : OncePerRequestFilter() {
     private val windows = ConcurrentHashMap<String, Window>()
 
@@ -35,7 +35,15 @@ class ApiProtectionFilter(
             return
         }
         val minute = clock.instant().epochSecond / 60
-        val key = request.getHeader("Authorization")?.sha256() ?: "ip:${request.remoteAddr}"
+        // Фильтр стоит до authentication: мусорный bearer не должен создавать
+        // отдельный bucket или обходить ограничение. remoteAddr берётся у
+        // контейнера, а не из подделываемого X-Forwarded-For.
+        val key = "ip:${request.remoteAddr}"
+        if (!reserveKey(key, minute)) {
+            response.setHeader("Retry-After", "60")
+            problem(response, 429, "Too Many Requests")
+            return
+        }
         val window = windows.compute(key) { _, current ->
             if (current == null || current.minute != minute) Window(minute, 1) else current.copy(count = current.count + 1)
         }
@@ -44,7 +52,6 @@ class ApiProtectionFilter(
             problem(response, 429, "Too Many Requests")
             return
         }
-        if (windows.size > MAX_KEYS) windows.entries.removeIf { it.value.minute < minute - 1 }
         try {
             filterChain.doFilter(LimitedRequest(request, maximumBodyBytes), response)
         } catch (_: PayloadTooLarge) {
@@ -61,8 +68,16 @@ class ApiProtectionFilter(
         response.writer.write("""{"status":$status,"title":"$title"}""")
     }
 
-    private fun String.sha256() = MessageDigest.getInstance("SHA-256")
-        .digest(toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    private fun reserveKey(key: String, minute: Long): Boolean {
+        if (windows.containsKey(key)) return true
+        synchronized(windows) {
+            if (windows.containsKey(key)) return true
+            windows.entries.removeIf { it.value.minute < minute }
+            if (windows.size >= maximumKeys) return false
+            windows[key] = Window(minute, 0)
+            return true
+        }
+    }
 
     private data class Window(val minute: Long, val count: Int)
 

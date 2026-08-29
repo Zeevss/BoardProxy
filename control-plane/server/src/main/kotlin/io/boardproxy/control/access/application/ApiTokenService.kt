@@ -57,10 +57,14 @@ class ApiTokenService(
     }
 
     override fun revoke(id: String, actor: String) {
+        if (!revokeIfActive(id, actor)) throw ResourceNotFound("api token $id not found or already revoked")
+    }
+
+    override fun revokeIfActive(id: String, actor: String): Boolean {
         if (actor.isBlank()) throw InvalidRequest("actor is required")
         val now = clock.instant()
-        transactions.required {
-            if (!tokens.revoke(id, now)) throw ResourceNotFound("api token $id not found or already revoked")
+        return transactions.required {
+            if (!tokens.revoke(id, now)) return@required false
             audit.append(
                 AuditEvent(
                     id = nextId(), nodeId = null, actor = actor, action = "api-token.revoked",
@@ -68,6 +72,7 @@ class ApiTokenService(
                     occurredAt = now,
                 ),
             )
+            true
         }
     }
 

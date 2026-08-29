@@ -45,9 +45,14 @@ class DesiredConfigPublisher(
     fun publish(nodeIds: Set<String>, cause: String, actor: String): List<PublishResult> {
         if (nodeIds.isEmpty()) return emptyList()
         val now = clock.instant()
+        val orderedNodeIds = nodeIds.sorted()
+        // Сначала занимаем весь набор в стабильном порядке. Так multi-node
+        // правка не собирает первую ноду до того, как дождалась конкурентной
+        // транзакции на второй, а quota input читается уже под теми же locks.
+        orderedNodeIds.forEach(configs::lock)
         val exceeded = quotas.exceededUsers()
 
-        return nodeIds.sorted().map { nodeId ->
+        return orderedNodeIds.map { nodeId ->
             val state = states.load(nodeId)
             val toml = compiler.compile(state.withQuotas(exceeded))
             val sha256 = toml.sha256Hex()

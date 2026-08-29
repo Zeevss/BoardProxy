@@ -6,14 +6,14 @@
 - node-agent хранит только сертификат, checkpoints и ограниченный telemetry outbox в SQLite;
 - Kotlin control-plane — единственный владелец desired state и истории;
 - browser HTTP/SSE и node mTLS gRPC — разные контракты;
-- каждое изменение каталога создаёт immutable config revision;
+- изменение создаёт config revision только когда поменялись байты TOML;
 - interface traffic и per-user payload никогда не смешиваются.
 
 ## 1. Granular management и история — выполнено
 
 - отдельные commands для node, board, user и assignment;
 - `ETag`/`If-Match`, pagination/filtering fleet списка;
-- encrypted catalog snapshots, history, safe diff без private keys;
+- encrypted source snapshots, history, safe diff без private keys;
 - rollback создаёт новую монотонную версию, не переписывает прошлое;
 - изменение создаёт revision, audit и outbox в одной транзакции.
 
@@ -38,30 +38,29 @@
 
 ## 4. HA и reliable delivery — выполнено
 
-- PostgreSQL node leases разрешают одну активную сессию на node;
-- fencing token блокирует late writes старой server replica;
-- lease renewal/release привязаны к owner, session и fence;
+- PostgreSQL row lock сериализует компиляцию desired config одной node;
+- persistent `boot_id` history и `seq` блокируют late agent writes;
 - outbox использует row lock и backoff, после 10 ошибок — dead letter;
 - admin API показывает dead letters и явно возвращает их в retry;
 - stale online status автоматически истекает;
 - replicas получают desired/runtime/status через PostgreSQL `LISTEN/NOTIFY`.
 
-## 5. Production frontend — выполнено
+## 5. Production frontend — в работе
 
 - React/TypeScript dashboard внутри production Spring Boot image;
 - overview, node drift, runtime sessions/boards, activity и оба traffic вида;
 - users/boards add, enable/disable/remove и node enable/disable;
 - authenticated fetch SSE без polling;
 - bearer token хранится только в `sessionStorage`;
-- desktop/mobile layout, accessible navigation, tests, ESLint и browser QA.
+- desktop/mobile layout и оставшиеся live API сценарии проходят текущую разработку.
 
 ## 6. Verification и recovery — выполнено
 
 - unit/application/architecture/migration suites;
-- Testcontainers contract на PostgreSQL 18 для Flyway V1–V7 и lease fencing;
+- Testcontainers contract на PostgreSQL 18 для Flyway V1–V5, config locking и boot fencing;
 - runtime rebuild из authoritative snapshot и следующих decoded facts;
 - Go test suites core и node-agent;
-- frontend test/lint/build и headless Chromium interaction test;
+- frontend test/lint/build по мере завершения текущей реализации;
 - multi-stage production image build;
 - GitHub Actions для Go, Kotlin/PostgreSQL, frontend и Docker image.
 
@@ -80,8 +79,7 @@
 - пользователь стал сущностью control-plane: `GET /api/v1/users` отдаёт размещения
   по нодам, лимиты устройств/страниц и агрегированный трафик;
 - `GET /api/v1/boards` отдаёт борды всего флота; селектор ноды из панели убран;
-- лимит трафика принимается прямо в `POST /api/v1/users` и ставится в одной
-  транзакции с пользователем;
+- лимит трафика управляется отдельным `/api/v1/users/{id}/quota` с собственным ETag;
 - квоты расширены недельным периодом, режимом «без сброса» и политикой `reset`
   со счётчиком `counter_start`;
 - подписка получила постоянную ссылку: токен и recovery-ключ хранятся

@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
+import java.security.Principal
 
 /**
  * Квота принадлежит пользователю, а не паре «нода + тег», поэтому и адресуется
@@ -37,6 +38,7 @@ class TrafficQuotaController(private val service: TrafficQuotaService) {
         @PathVariable userId: String,
         @RequestHeader("If-Match", required = false) ifMatch: String?,
         @RequestBody request: TrafficQuotaRequest,
+        principal: Principal,
     ): ResponseEntity<TrafficQuota> {
         val expected = ifMatch?.removeSurrounding("\"")?.toLongOrNull()
         if (ifMatch != null && expected == null) throw InvalidRequest("If-Match must contain the numeric quota version")
@@ -47,6 +49,7 @@ class TrafficQuotaController(private val service: TrafficQuotaService) {
             enum(request.action, "action", QuotaAction::valueOf),
             request.enabled,
             expected,
+            principal.name,
         )
         return ResponseEntity.ok().eTag(quota.version.toString()).body(quota)
     }
@@ -56,10 +59,11 @@ class TrafficQuotaController(private val service: TrafficQuotaService) {
     fun delete(
         @PathVariable userId: String,
         @RequestHeader("If-Match") ifMatch: String,
+        principal: Principal,
     ): ResponseEntity<Void> {
         val expected = ifMatch.removeSurrounding("\"").toLongOrNull()
             ?: throw InvalidRequest("If-Match must contain the numeric quota version")
-        service.delete(userId, expected)
+        service.delete(userId, expected, principal.name)
         return ResponseEntity.noContent().build()
     }
 

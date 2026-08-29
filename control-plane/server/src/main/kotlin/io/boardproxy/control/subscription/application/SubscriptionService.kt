@@ -133,6 +133,7 @@ class SubscriptionService(
      * выданный доступ и содержимое подписки не могут разойтись.
      */
     override fun resolve(token: String?, recoveryPublicKey: String?): SubscriptionSnapshot {
+        if (!links.enabled) throw ResourceForbidden("subscription service is disabled")
         if (token.isNullOrBlank() == recoveryPublicKey.isNullOrBlank()) {
             throw InvalidRequest("provide exactly one of token or recoveryPublicKey")
         }

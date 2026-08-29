@@ -55,6 +55,14 @@ export function relativeTime(iso: string | null | undefined, language: Language)
   return formatter.format(Math.round(clamped / divisor), unit)
 }
 
+/** Только дата: для сроков, где час и секунды ничего не добавляют. */
+export function shortDate(iso: string | null | undefined, language: Language): string | null {
+  if (!iso) return null
+  const timestamp = Date.parse(iso)
+  if (Number.isNaN(timestamp)) return null
+  return new Intl.DateTimeFormat(language, { day: '2-digit', month: '2-digit' }).format(timestamp)
+}
+
 /** Абсолютное время для подсказок и таблиц журнала. */
 export function absoluteTime(iso: string | null | undefined, language: Language): string | null {
   if (!iso) return null
@@ -68,4 +76,22 @@ export function absoluteTime(iso: string | null | undefined, language: Language)
 export function percent(part: number, whole: number): number {
   if (!whole) return 0
   return Math.min(100, Math.round((part / whole) * 100))
+}
+
+/**
+ * Форма существительного при числе.
+ *
+ * Дизайн склеивал число с одной формой и выдавал «1 досок». В английском хватает
+ * двух форм, в русском их три, поэтому выбор делает `Intl.PluralRules`, а не
+ * набор условий на остатки от деления.
+ */
+export function plural(
+  count: number,
+  forms: { one: string; few?: string; many: string },
+  language: Language,
+): string {
+  const rule = new Intl.PluralRules(language).select(count)
+  if (rule === 'one') return forms.one
+  if (rule === 'few') return forms.few ?? forms.many
+  return forms.many
 }

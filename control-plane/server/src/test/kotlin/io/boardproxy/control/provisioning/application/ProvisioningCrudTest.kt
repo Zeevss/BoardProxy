@@ -13,6 +13,8 @@ import io.boardproxy.control.shared.errors.InvalidRequest
 import io.boardproxy.control.shared.errors.ResourceConflict
 import io.boardproxy.control.shared.errors.ResourceNotFound
 import io.boardproxy.control.shared.persistence.TransactionRunner
+import io.boardproxy.control.shared.audit.AuditEvent
+import io.boardproxy.control.shared.audit.AuditRepository
 import io.boardproxy.control.testing.PostgresSupport
 import io.boardproxy.control.testing.TEST_TIME
 import io.boardproxy.control.testing.testKey
@@ -36,6 +38,8 @@ class ProvisioningCrudTest {
         PostgresNodeSnapshotRepository(PostgresSupport.named, PostgresSupport.json, PostgresSupport.cipher)
 
     private val clock = Clock.fixed(TEST_TIME, ZoneOffset.UTC)
+    private val auditEvents = mutableListOf<AuditEvent>()
+    private val audit = AuditRepository { auditEvents += it }
     private val transactions = object : TransactionRunner {
         override fun <T> required(block: () -> T): T = block()
     }
@@ -49,14 +53,15 @@ class ProvisioningCrudTest {
         outbox = { },
         clock = clock,
     )
-    private val nodes = NodeService(nodesRepo, publisher, transactions, clock)
-    private val boards = BoardService(boardsRepo, nodesRepo, publisher, transactions, clock)
-    private val users = UserService(usersRepo, boardsRepo, grantsRepo, publisher, transactions, clock)
+    private val nodes = NodeService(nodesRepo, publisher, transactions, clock, audit)
+    private val boards = BoardService(boardsRepo, nodesRepo, publisher, transactions, clock, audit)
+    private val users = UserService(usersRepo, boardsRepo, grantsRepo, publisher, transactions, clock, audit)
 
     @BeforeTest
     fun prepare() {
         assertTrue(PostgresSupport.dockerAvailable, "тесты CRUD требуют Docker")
         PostgresSupport.truncate()
+        auditEvents.clear()
     }
 
     // --- ноды ---
@@ -68,6 +73,19 @@ class ProvisioningCrudTest {
         assertEquals(1, node.version)
         assertTrue(node.core.server.privateKey.startsWith("base64:"))
         assertNotNull(configs.find("node-1"), "конфигурация должна появиться вместе с нодой")
+    }
+
+    @Test
+    fun `операторские мутации пишут аудит независимо от config event`() {
+        nodes.create(NodeInput(id = "node-1", name = "Первая"), "operator")
+        users.create(UserInput(id = "user-1", name = "Алиса"), "operator")
+        nodes.delete("node-1", 1, "admin")
+
+        assertEquals(
+            listOf("node.created", "user.created", "node.deleted"),
+            auditEvents.map(AuditEvent::action),
+        )
+        assertEquals(listOf("operator", "operator", "admin"), auditEvents.map(AuditEvent::actor))
     }
 
     /** Смена ключа обесценила бы все выданные keylink'и, поэтому правка его не трогает. */

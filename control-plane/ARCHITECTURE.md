@@ -14,13 +14,13 @@ The active control plane is the Spring Boot application in `server`. It is one
 deployable process and one database, split by bounded context rather than by
 technical layer:
 
-- `provisioning` owns the normalized per-node catalog, TOML compiler and
-  immutable desired revisions;
+- `provisioning` owns normalized nodes, boards, users and grants, the TOML
+  compiler, current desired config and encrypted source snapshots;
 - `fleet` owns one-time enrollment tokens, the control-plane CA and node
   certificates;
 - `delivery` owns connected node sessions, desired/applied drift and node
   status;
-- `runtime` stores decoded core facts and projects users, boards and sessions;
+- `delivery` also stores authoritative runtime snapshots and the activity log;
 - `telemetry` stores and queries interface and per-user traffic separately;
 - `audit` stores append-only operator actions;
 - `access` owns bearer API tokens, authentication and role authorization;
@@ -32,16 +32,13 @@ Inside a bounded context the dependency direction is
 Spring, SQL, protobuf, HTTP or gRPC. The more detailed package rules are in
 [`server/ARCHITECTURE.md`](server/ARCHITECTURE.md).
 
-`Catalog` is the desired-state consistency boundary. Every accepted mutation
-validates the complete aggregate, compiles deterministic core TOML, encrypts it
-and appends an immutable SHA-256 revision. Catalog, revision, audit event and
-outbox message are committed in one PostgreSQL transaction. `NodeStatus` is a
-projection, never desired state.
-
-Encrypted catalog snapshots form append-only history. Granular node, board,
-user and assignment commands rebuild the complete validated aggregate.
-Rollback reads an old snapshot but writes a new catalog/config revision;
-versions never move backwards and private keys never appear in history diff.
+Owned entities have independent optimistic versions. A mutation locks each
+affected node in stable order, reloads the complete owned state, compiles
+deterministic TOML and advances the node revision only when its SHA-256 changes.
+The row lock prevents concurrent entity edits from publishing the same revision
+with different bytes. Config, encrypted source snapshot, audit and outbox event
+commit in one transaction. Rollback restores a snapshot as new owned-state
+writes; versions never move backwards and private keys never appear in diff.
 
 The old Go control-plane has been removed. The canonical node protobuf source
 lives under `contracts`; generated Go files form a small standalone module used
@@ -49,7 +46,7 @@ by node-agent and Kotlin classes are generated during the server build.
 
 ## Reactive desired-state delivery
 
-After a successful catalog transaction an outbox worker publishes the event
+After a successful desired-state transaction an outbox worker publishes the event
 with PostgreSQL `NOTIFY`. Every server replica owns a `LISTEN` connection and
 wakes its matching connected node stream. The node validates and applies the
 new TOML and reports `ApplyResult`; the control plane updates desired/applied
@@ -59,24 +56,14 @@ Node-status changes use best-effort PostgreSQL notifications and are forwarded
 to authenticated frontend clients through SSE. Failure to notify the UI never
 breaks the node gRPC session.
 
-## Reactive runtime facts
+## Runtime facts
 
-Core publishes resource, board-lifecycle and client-session events through a
-bounded server-streaming gRPC journal. Node-agent checkpoints
-`(core_boot_id, sequence)` and appends each event to its SQLite outbox in one
-transaction, then wakes its hub stream immediately. Its periodic scan is only
-delivery recovery and ACK-timeout protection.
-
-On restart, cursor mismatch or journal overflow, core sends an explicit reset
-and node-agent captures an authoritative snapshot. The Kotlin server commits
-the batch claim, decoded facts and the locked per-node projection in one
-transaction before ACK, so retransmission is idempotent. Sequence gaps freeze
-incremental projection until a snapshot replaces it. Projection changes reach
-the frontend SSE stream through PostgreSQL `NOTIFY` on every server replica.
-
-The snapshot contains exact per-user active-session counters but no individual
-bundle identities. The runtime REST model therefore exposes
-`sessionDetailsComplete`; it never presents a partial session list as complete.
+Node-agent reports an authoritative runtime snapshot, additive traffic deltas
+and activity events in an idempotent batch. The hub claims `(agent_id,
+batch_id)` before recording it. Status and snapshot replacement are fenced by
+`boot_id` and monotonic `seq`; a boot seen before can never replace its
+successor. An older unique batch may still contribute traffic and historical
+events, but cannot regress status, runtime or receive a pending command.
 
 ## Security boundary
 
@@ -100,17 +87,17 @@ and rotation boundaries.
 
 ## High availability
 
-Each connected node owns a short PostgreSQL lease. Takeover is allowed only
-after expiry and increments a fencing token. Status updates carry that token,
-so a paused old replica cannot overwrite its successor. Outbox delivery uses
-row locks, exponential retry and an admin-visible dead-letter queue.
+Desired compilation is serialized per node with PostgreSQL row locks. Agent
+reports use persistent boot history plus sequence fencing, so a delayed old
+process cannot overwrite its successor. Outbox delivery uses row locks,
+exponential retry and an admin-visible dead-letter queue.
 
 ## Traffic and recovery
 
-Raw interface and per-user deltas have independent queries and hourly rollups.
-Retention deletes raw batches after the rollup window. Quotas are UTC
-daily/monthly policies; `alert` is non-mutating and `disable` is explicit.
-
-Decoded authoritative runtime snapshots are stored alongside raw protobuf
-batches. Admin rebuild starts at the newest snapshot and replays later events
-of the same core boot. It refuses to fabricate state without a snapshot.
+Raw interface and per-user deltas have independent queries and immediate hourly
+rollups. Reads combine complete rollup hours with raw boundary/missing hours
+without double counting. Before rollup retention removes per-user history it is
+folded into lifetime totals. Quotas support UTC daily, weekly, monthly and
+lifetime windows; `alert`, `reset` and `disable` keep threshold and blocking
+state separate. A durable generation queue guarantees quota-driven desired
+config reconciliation even if PostgreSQL NOTIFY is missed.

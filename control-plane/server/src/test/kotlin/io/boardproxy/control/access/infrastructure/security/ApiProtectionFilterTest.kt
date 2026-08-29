@@ -26,7 +26,7 @@ class ApiProtectionFilterTest {
     }
 
     @Test
-    fun `rate limit is isolated by bearer identity`() {
+    fun `непроверенный bearer не обходит лимит по ip`() {
         val filter = ApiProtectionFilter(1, 10, clock)
         fun request(token: String): Int {
             val value = MockHttpServletRequest("GET", "/api/v1/nodes").apply { addHeader("Authorization", "Bearer $token") }
@@ -37,6 +37,20 @@ class ApiProtectionFilterTest {
 
         assertEquals(204, request("one"))
         assertEquals(429, request("one"))
-        assertEquals(204, request("two"))
+        assertEquals(429, request("two"))
+    }
+
+    @Test
+    fun `число rate limit buckets имеет жёсткую границу`() {
+        val filter = ApiProtectionFilter(10, 10, clock, maximumKeys = 1)
+        fun request(ip: String): Int {
+            val value = MockHttpServletRequest("GET", "/api/v1/nodes").apply { remoteAddr = ip }
+            val response = MockHttpServletResponse()
+            filter.doFilter(value, response, FilterChain { _, output -> (output as MockHttpServletResponse).status = 204 })
+            return response.status
+        }
+
+        assertEquals(204, request("192.0.2.1"))
+        assertEquals(429, request("192.0.2.2"))
     }
 }

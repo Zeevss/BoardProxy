@@ -15,7 +15,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge, StatusDot } from '@/components/ui/status'
-import { bytes, percent, relativeTime } from '@/lib/format'
+import { bytes, percent, plural, relativeTime } from '@/lib/format'
 import { userStatus, type UserStatusKey } from '@/lib/health'
 import { cn } from '@/lib/utils'
 import { CreateUserDialog } from './CreateUserDialog'
@@ -89,7 +89,8 @@ export function UsersScreen() {
           ]}
         />
         <FilterMeta>
-          {t.metaUsers} {total} · {t.metaPending} {buckets.pending}
+          {total} {plural(total, { one: t.userOne, few: t.userFew, many: t.userMany }, language)} ·{' '}
+          {t.metaPending} {buckets.pending}
         </FilterMeta>
       </FilterRow>
 

@@ -21,6 +21,8 @@ fun interface AccessAuthenticator {
 interface ApiTokenCommands {
     fun issue(name: String, role: AccessRole, ttl: Duration?, actor: String): IssuedApiToken
     fun revoke(id: String, actor: String)
+    /** Внутренние владельцы токена могут безопасно ротировать уже отозванный secret. */
+    fun revokeIfActive(id: String, actor: String): Boolean
 }
 
 fun interface ApiTokenQueries {

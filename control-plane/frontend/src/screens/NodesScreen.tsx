@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Plus } from 'lucide-react'
 import { useAgents, useBoards, useNodes } from '@/api/nodes'
 import type { Agent, Node } from '@/api/types'
 import {
@@ -10,6 +11,7 @@ import {
   RowList,
   ScreenHeader,
 } from '@/components/ScreenHeader'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { StatusDot } from '@/components/ui/status'
 import { useLanguage } from '@/app/language'
@@ -17,6 +19,7 @@ import { nodeHealth, type HealthBucket } from '@/lib/health'
 import { relativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { NodeSheet } from './NodeSheet'
+import { NodeWizard } from './NodeWizard'
 
 type Filter = 'all' | HealthBucket
 
@@ -25,6 +28,7 @@ export function NodesScreen() {
   const [filter, setFilter] = useState<Filter>('all')
   const [search, setSearch] = useState('')
   const [openNode, setOpenNode] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
 
   const nodes = useNodes()
   const agents = useAgents()
@@ -66,19 +70,29 @@ export function NodesScreen() {
   const total = nodes.data?.items.length ?? 0
   const selected = nodes.data?.items.find((node) => node.id === openNode) ?? null
 
+  const create = (
+    <Button variant="primary" onClick={() => setCreating(true)}>
+      <Plus />
+      {t.newNode}
+    </Button>
+  )
+
   return (
     <section className="mx-auto flex max-w-6xl flex-col gap-4.5">
       <ScreenHeader
         title={t.nodes}
         subtitle={t.nodesSub}
         actions={
-          <Input
-            type="search"
-            placeholder={t.search}
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="w-40 sm:w-55"
-          />
+          <>
+            <Input
+              type="search"
+              placeholder={t.search}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              className="w-40 sm:w-55"
+            />
+            {create}
+          </>
         }
       />
 
@@ -101,7 +115,7 @@ export function NodesScreen() {
       {nodes.isLoading ? (
         <EmptyState>{t.loading}</EmptyState>
       ) : rows.length === 0 ? (
-        <EmptyState>{total === 0 ? t.emptyFleet : t.nothingFound}</EmptyState>
+        <EmptyState action={create}>{total === 0 ? t.emptyFleet : t.nothingFound}</EmptyState>
       ) : (
         <RowList>
           {rows.map(({ node, health }) => (
@@ -119,6 +133,7 @@ export function NodesScreen() {
       )}
 
       <NodeSheet node={selected} onClose={() => setOpenNode(null)} />
+      <NodeWizard open={creating} onClose={() => setCreating(false)} />
     </section>
   )
 }

@@ -6,6 +6,7 @@ import io.boardproxy.control.fleet.domain.IssuedCertificate
 import io.boardproxy.control.fleet.domain.NodeCertificate
 import io.boardproxy.control.shared.audit.AuditRepository
 import io.boardproxy.control.shared.audit.AuditEvent
+import io.boardproxy.control.shared.errors.InvalidRequest
 import io.boardproxy.control.shared.persistence.TransactionRunner
 import java.time.Clock
 import java.time.Duration
@@ -14,6 +15,7 @@ import java.time.ZoneOffset
 import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -41,6 +43,37 @@ class EnrollmentServiceTest {
         assertEquals("enrollment-token.created", audit.single().action)
         assertEquals("operator", audit.single().actor)
     }
+
+    /**
+     * Адрес хаба уходит ноде как цель gRPC. Панель какое-то время подставляла
+     * туда свой origin, и нода падала с «too many colons in address» — ошибка,
+     * по которой причину не найти. Отсекаем такое значение на выдаче.
+     */
+    @Test
+    fun `bootstrap secret rejects a panel origin in place of the gRPC target`() {
+        val service = service()
+
+        for (address in listOf("http://127.0.0.1:8080", "https://hub.example.net", "hub.example.net", "hub:", "hub:0")) {
+            assertFailsWith<InvalidRequest>(address) {
+                service.issueBootstrap("node-1", address, Duration.ofMinutes(15), "operator")
+            }
+        }
+    }
+
+    @Test
+    fun `bootstrap secret accepts host and port forms`() {
+        val service = service()
+
+        for (address in listOf("hub:8443", "hub.example.net:8443", "127.0.0.1:8443", "[::1]:8443")) {
+            service.issueBootstrap("node-1", address, Duration.ofMinutes(15), "operator")
+        }
+    }
+
+    private fun service() = EnrollmentService(
+        Tokens(EnrollmentToken("one-time", Instant.parse("2026-03-01T10:15:00Z"))),
+        Authority, Certificates, jacksonObjectMapper(), AuditRepository { }, DirectTransaction,
+        Clock.fixed(Instant.parse("2026-03-01T10:00:00Z"), ZoneOffset.UTC),
+    )
 
     private class Tokens(private val issued: EnrollmentToken) : EnrollmentTokenRepository {
         override fun create(nodeId: String, ttl: Duration): EnrollmentToken = issued

@@ -57,21 +57,8 @@ class FleetConfiguration {
     ) = NodeConnectionPolicy { nodeId, certificate ->
         if (!certificates.nodeEnabled(nodeId)) return@NodeConnectionPolicy false
         val serial = certificate.serialNumber.toString(16)
-        val issued = io.boardproxy.control.fleet.domain.IssuedCertificate(
-            serial,
-            pem(certificate).toByteArray(Charsets.UTF_8),
-            byteArrayOf(),
-            certificate.notBefore.toInstant(),
-            certificate.notAfter.toInstant(),
-        )
-        certificates.record(nodeId, issued)
         certificates.active(nodeId, serial, clock.instant()).also { allowed ->
             if (allowed) certificates.touch(nodeId, serial, clock.instant())
         }
     }
-
-    private fun pem(certificate: java.security.cert.X509Certificate): String =
-        "-----BEGIN CERTIFICATE-----\n" +
-            java.util.Base64.getMimeEncoder(64, "\n".toByteArray()).encodeToString(certificate.encoded) +
-            "\n-----END CERTIFICATE-----\n"
 }

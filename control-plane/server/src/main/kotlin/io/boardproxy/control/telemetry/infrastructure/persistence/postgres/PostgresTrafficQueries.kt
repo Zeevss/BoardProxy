@@ -11,40 +11,18 @@ import java.time.Instant
 
 @Repository
 class PostgresTrafficQueries(private val jdbc: NamedParameterJdbcTemplate) : TrafficQueries {
-    override fun interfaceTotals(nodeId: String?, from: Instant, to: Instant): List<TrafficTotal> = jdbc.query(
-        """
-        SELECT delta.interface_name AS subject,
-               COALESCE(SUM(delta.rx_bytes), 0) AS rx_bytes,
-               COALESCE(SUM(delta.tx_bytes), 0) AS tx_bytes
-        FROM interface_traffic_deltas delta
-        WHERE ${scope(nodeId)} AND delta.observed_at > :from AND delta.observed_at <= :to
-        GROUP BY delta.interface_name ORDER BY delta.interface_name
-        """.trimIndent(),
-        parameters(nodeId, from, to),
-    ) { rs, _ -> rs.toTotal() }
+    override fun interfaceTotals(nodeId: String?, from: Instant, to: Instant): List<TrafficTotal> =
+        totals(nodeId, TrafficKind.INTERFACE, from, to)
 
-    override fun userTotals(nodeId: String?, from: Instant, to: Instant): List<TrafficTotal> = jdbc.query(
-        """
-        SELECT delta.user_id AS subject,
-               COALESCE(SUM(delta.rx_bytes), 0) AS rx_bytes,
-               COALESCE(SUM(delta.tx_bytes), 0) AS tx_bytes
-        FROM user_traffic_deltas delta
-        WHERE ${scope(nodeId)} AND delta.observed_at > :from AND delta.observed_at <= :to
-        GROUP BY delta.user_id ORDER BY delta.user_id
-        """.trimIndent(),
-        parameters(nodeId, from, to),
-    ) { rs, _ -> rs.toTotal() }
+    override fun userTotals(nodeId: String?, from: Instant, to: Instant): List<TrafficTotal> =
+        totals(nodeId, TrafficKind.USER, from, to)
 
     override fun nodeTotals(kind: TrafficKind, from: Instant, to: Instant): List<TrafficTotal> = jdbc.query(
-        """
-        SELECT delta.agent_id AS subject,
-               COALESCE(SUM(delta.rx_bytes), 0) AS rx_bytes,
-               COALESCE(SUM(delta.tx_bytes), 0) AS tx_bytes
-        FROM ${deltas(kind)} delta
-        WHERE delta.observed_at > :from AND delta.observed_at <= :to
-        GROUP BY delta.agent_id ORDER BY delta.agent_id
+        PostgresTrafficSources.cte(kind, null) + """
+            SELECT node_id AS subject, SUM(rx_bytes) AS rx_bytes, SUM(tx_bytes) AS tx_bytes
+            FROM combined_traffic GROUP BY node_id ORDER BY node_id
         """.trimIndent(),
-        parameters(null, from, to),
+        parameters(null, from, to, useRollups = true),
     ) { rs, _ -> rs.toTotal() }
 
     override fun series(
@@ -54,17 +32,17 @@ class PostgresTrafficQueries(private val jdbc: NamedParameterJdbcTemplate) : Tra
         to: Instant,
         bucketSeconds: Long,
     ): List<TrafficPoint> {
-        val subject = if (kind == TrafficKind.INTERFACE) "delta.interface_name" else "delta.user_id"
-        val sql = """
-            SELECT date_bin(make_interval(secs => :bucketSeconds), delta.observed_at, TIMESTAMPTZ '1970-01-01') AS bucket,
-                   $subject AS subject,
-                   SUM(delta.rx_bytes) AS rx_bytes,
-                   SUM(delta.tx_bytes) AS tx_bytes
-            FROM ${deltas(kind)} delta
-                WHERE ${scope(nodeId)} AND delta.observed_at > :from AND delta.observed_at <= :to
+        val useRollups = bucketSeconds >= 3_600 && bucketSeconds % 3_600 == 0L
+        val sql = PostgresTrafficSources.cte(kind, nodeId) + """
+            SELECT date_bin(make_interval(secs => :bucketSeconds), observed_at, TIMESTAMPTZ '1970-01-01') AS bucket,
+                   subject, SUM(rx_bytes) AS rx_bytes, SUM(tx_bytes) AS tx_bytes
+            FROM combined_traffic
             GROUP BY bucket, subject ORDER BY bucket, subject
         """.trimIndent()
-        return jdbc.query(sql, parameters(nodeId, from, to) + ("bucketSeconds" to bucketSeconds)) { rs, _ ->
+        return jdbc.query(
+            sql,
+            parameters(nodeId, from, to, useRollups) + ("bucketSeconds" to bucketSeconds),
+        ) { rs, _ ->
             TrafficPoint(
                 rs.getTimestamp("bucket").toInstant(), rs.getString("subject"),
                 rs.getLong("rx_bytes"), rs.getLong("tx_bytes"),
@@ -75,12 +53,19 @@ class PostgresTrafficQueries(private val jdbc: NamedParameterJdbcTemplate) : Tra
     private fun java.sql.ResultSet.toTotal() =
         TrafficTotal(getString("subject"), getLong("rx_bytes"), getLong("tx_bytes"))
 
-    private fun deltas(kind: TrafficKind) =
-        if (kind == TrafficKind.INTERFACE) "interface_traffic_deltas" else "user_traffic_deltas"
+    private fun totals(nodeId: String?, kind: TrafficKind, from: Instant, to: Instant): List<TrafficTotal> = jdbc.query(
+        PostgresTrafficSources.cte(kind, nodeId) + """
+            SELECT subject, SUM(rx_bytes) AS rx_bytes, SUM(tx_bytes) AS tx_bytes
+            FROM combined_traffic GROUP BY subject ORDER BY subject
+        """.trimIndent(),
+        parameters(nodeId, from, to, useRollups = true),
+    ) { rs, _ -> rs.toTotal() }
 
-    /** Масштаб флота — это отсутствие фильтра, а не перебор нод по одной. */
-    private fun scope(nodeId: String?) = if (nodeId == null) "TRUE" else "delta.agent_id = :nodeId"
-
-    private fun parameters(nodeId: String?, from: Instant, to: Instant) =
-        mapOf("nodeId" to nodeId, "from" to from.toSqlTimestamp(), "to" to to.toSqlTimestamp())
+    private fun parameters(nodeId: String?, from: Instant, to: Instant, useRollups: Boolean) =
+        mapOf(
+            "nodeId" to nodeId,
+            "from" to from.toSqlTimestamp(),
+            "to" to to.toSqlTimestamp(),
+            "useRollups" to useRollups,
+        )
 }

@@ -26,7 +26,7 @@ import { Sheet } from '@/components/ui/sheet'
 import { Badge, StatusDot } from '@/components/ui/status'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
-import { absoluteTime, bytes, percent, relativeTime } from '@/lib/format'
+import { bytes, percent, relativeTime, shortDate } from '@/lib/format'
 import { userStatus } from '@/lib/health'
 import { cn } from '@/lib/utils'
 
@@ -224,7 +224,7 @@ export function UserSheet({ user, onClose }: { user: User | null; onClose: () =>
             onChange={(change) => setQuotaDraft({ limitGb, period, action, ...change })}
             hint={
               existingQuota && quota.data
-                ? `${t.periodEnds} ${absoluteTime(quota.data.periodEnd, language) ?? ''}`
+                ? `${t.periodEnds} ${shortDate(quota.data.periodEnd, language) ?? ''}`
                 : t.trafficOff
             }
           />

@@ -2,13 +2,16 @@ import * as Dialog from '@radix-ui/react-dialog'
 import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
+const DESCRIPTION_ID = 'sheet-description'
+
 interface SheetProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   title: ReactNode
   /** Читалке нужен текстовый заголовок, даже когда видимый собран из вёрстки. */
   label: string
-  description?: ReactNode
+  /** Пояснение для читалки. Без него панель описывает себя одним заголовком. */
+  description?: string
   actions?: ReactNode
   /** Закреплённая полоса действий над нижним краем: «Отмена» и «Сохранить». */
   footer?: ReactNode
@@ -37,6 +40,10 @@ export function Sheet({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/60 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:fade-in data-[state=closed]:fade-out" />
         <Dialog.Content
+          // Без описания связь снимается явно: иначе Radix ищет его и пишет
+          // предупреждение, а подставлять туда заголовок нельзя — читалка
+          // назвала бы панель дважды подряд.
+          aria-describedby={description === undefined ? undefined : DESCRIPTION_ID}
           className={cn(
             'fixed inset-y-0 right-0 z-50 flex w-full max-w-[660px] flex-col',
             'border-l border-line bg-sheet shadow-[-24px_0_60px_rgba(0,0,0,0.5)]',
@@ -45,7 +52,11 @@ export function Sheet({
           )}
         >
           <Dialog.Title className="sr-only">{label}</Dialog.Title>
-          {description ? null : <Dialog.Description className="sr-only">{label}</Dialog.Description>}
+          {description === undefined ? null : (
+            <Dialog.Description id={DESCRIPTION_ID} className="sr-only">
+              {description}
+            </Dialog.Description>
+          )}
 
           <header className="flex flex-col gap-3.5 border-b border-line-soft px-5.5 pt-5 pb-4">
             <div className="flex items-start justify-between gap-3">

@@ -21,6 +21,15 @@ class PostgresDesiredConfigRepository(
     private val secrets: SecretCipher,
 ) : DesiredConfigRepository {
 
+    override fun lock(nodeId: String) {
+        val locked = jdbc.queryForList(
+            "SELECT id FROM nodes WHERE id = :nodeId FOR UPDATE",
+            mapOf("nodeId" to nodeId),
+            String::class.java,
+        )
+        require(locked.size == 1) { "node $nodeId does not exist" }
+    }
+
     override fun find(nodeId: String): DesiredConfig? = jdbc.query(
         """
         SELECT node_id, revision, config_sha256, config_ciphertext, config_nonce,

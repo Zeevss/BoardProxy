@@ -85,6 +85,7 @@ class HttpSecurityConfiguration {
                 it.accessDeniedHandler { _, response, _ -> problem(response, 403, "Forbidden") }
             }
             .addFilterBefore(bearer, UsernamePasswordAuthenticationFilter::class.java)
+            // До bearer-а: невалидные токены тоже ограничиваются по IP.
             .addFilterBefore(protection, BearerTokenAuthenticationFilter::class.java)
         return http.build()
     }

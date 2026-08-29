@@ -157,6 +157,7 @@ class DesiredConfigPublisherTest {
 
     private class FakeConfigs : DesiredConfigRepository {
         private val stored = mutableMapOf<String, DesiredConfig>()
+        override fun lock(nodeId: String) = Unit
         override fun find(nodeId: String) = stored[nodeId]
         override fun save(config: DesiredConfig) { stored[config.nodeId] = config }
     }

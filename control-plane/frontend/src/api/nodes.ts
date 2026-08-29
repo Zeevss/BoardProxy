@@ -137,22 +137,74 @@ export function useIssueEnrollmentToken() {
   })
 }
 
-export function useToggleBoard() {
+export interface BoardDraft {
+  nodeId: string
+  name: string
+  hash: string
+  /** id генерирует хаб, когда его не прислали. */
+  id?: string
+  maxLanes?: number
+}
+
+export function useCreateBoard() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (draft: BoardDraft) =>
+      api.post<Board>('/boards', {
+        id: draft.id,
+        nodeId: draft.nodeId,
+        name: draft.name,
+        hash: draft.hash,
+        state: 'enabled',
+        maxLanes: draft.maxLanes ?? 4,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: keys.boards.all })
+      // Новая доска попадает в конфигурацию ноды следующей ревизией.
+      void queryClient.invalidateQueries({ queryKey: keys.nodes.all })
+      void queryClient.invalidateQueries({ queryKey: keys.agents })
+    },
+  })
+}
+
+export function useDeleteBoard() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (board: Board) =>
+      api.delete(`/boards/${board.nodeId}/${board.id}`, { ifMatch: board.version }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: keys.boards.all })
+      void queryClient.invalidateQueries({ queryKey: keys.nodes.all })
+      void queryClient.invalidateQueries({ queryKey: keys.agents })
+    },
+  })
+}
+
+type BoardPatch = Partial<Pick<Board, 'name' | 'hash' | 'state' | 'maxLanes' | 'apiBase'>>
+
+/**
+ * Правка доски.
+ *
+ * `PUT` заменяет запись целиком, поэтому неизменённые поля пересылаются как
+ * есть. Ноду сменить нельзя: хаб берёт `nodeId` из пути и то, что пришло в
+ * теле, молча игнорирует — перенос выглядел бы удавшимся, ничего не изменив.
+ */
+export function useUpdateBoard() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ board, patch }: { board: Board; patch: BoardPatch }) =>
       api.put<Board>(
         `/boards/${board.nodeId}/${board.id}`,
         {
           id: board.id,
           nodeId: board.nodeId,
-          name: board.name,
-          hash: board.hash,
+          name: patch.name ?? board.name,
+          hash: patch.hash ?? board.hash,
           hubSlide: board.hubSlide,
-          apiBase: board.apiBase,
+          apiBase: patch.apiBase === undefined ? board.apiBase : patch.apiBase,
           guestName: board.guestName,
-          state: board.state === 'enabled' ? 'disabled' : 'enabled',
-          maxLanes: board.maxLanes,
+          state: patch.state ?? board.state,
+          maxLanes: patch.maxLanes ?? board.maxLanes,
         },
         { ifMatch: board.version },
       ),

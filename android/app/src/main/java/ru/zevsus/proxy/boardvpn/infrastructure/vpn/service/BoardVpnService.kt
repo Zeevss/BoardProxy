@@ -101,7 +101,9 @@ class BoardVpnService : VpnService() {
 
     private fun startInForeground(phase: VpnSessionPhase) {
         val notification = notifications.build(phase)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            applicationInfo.targetSdkVersion >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+        ) {
             startForeground(
                 VpnNotificationManager.NOTIFICATION_ID,
                 notification,

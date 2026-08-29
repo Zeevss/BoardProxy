@@ -27,6 +27,7 @@ class EnrollmentService(
         if (hubUrl.isBlank() || actor.isBlank() || ttl.isZero || ttl.isNegative || ttl > Duration.ofHours(24)) {
             throw InvalidRequest("hubUrl and ttl between 1 second and 24 hours are required")
         }
+        validateHubAddress(hubUrl)
         val now = clock.instant()
         val token = transactions.required {
             tokens.create(nodeId, ttl).also {
@@ -67,6 +68,35 @@ class EnrollmentService(
 
     private fun validateNodeId(nodeId: String) {
         if (!NODE_ID.matches(nodeId)) throw InvalidRequest("invalid node id")
+    }
+
+    /**
+     * Адрес хаба уезжает в секрет и попадает ноде прямо в gRPC-клиент, а тот
+     * ждёт `host:port`. Со схемой он дописывает собственный `:443` и падает с
+     * «too many colons in address» — по этой ошибке оператор не поймёт, что в
+     * поле оказался адрес панели вместо gRPC-листенера.
+     *
+     * Проверка только синтаксическая. Дозваниваться отсюда до адреса нельзя:
+     * хаб не обязан видеть себя по тому же имени, по которому его видит нода,
+     * и удачная проверка связи ничего бы не доказала, а неудачная — запрещала
+     * бы верную конфигурацию.
+     */
+    private fun validateHubAddress(hubUrl: String) {
+        val address = hubUrl.trim()
+        if (address.contains("://")) {
+            throw InvalidRequest("hubUrl must be host:port of the node gRPC listener, without a scheme")
+        }
+        val port = when {
+            // IPv6 в квадратных скобках: двоеточий внутри много, порт — после «]».
+            address.startsWith("[") -> address.substringAfterLast("]:", missingDelimiterValue = "")
+            address.count { it == ':' } == 1 -> address.substringAfterLast(':')
+            else -> ""
+        }
+        val host = address.removeSuffix(":$port")
+        val number = port.toIntOrNull()
+        if (host.isBlank() || number == null || number !in 1..65_535) {
+            throw InvalidRequest("hubUrl must be host:port with a port between 1 and 65535")
+        }
     }
 
     private companion object {

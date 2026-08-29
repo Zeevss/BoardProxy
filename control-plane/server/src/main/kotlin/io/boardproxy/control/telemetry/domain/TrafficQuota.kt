@@ -37,6 +37,8 @@ data class TrafficQuotaState(
     val usedBytes: Long,
     val exceeded: Boolean,
     val changedAt: Instant,
+    /** Превышение самого порога, независимо от политики ALERT/RESET/DISABLE. */
+    val thresholdExceeded: Boolean = exceeded,
 )
 
 data class TrafficQuotaUsage(

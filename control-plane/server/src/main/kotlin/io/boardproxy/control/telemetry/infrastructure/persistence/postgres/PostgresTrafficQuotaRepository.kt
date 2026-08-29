@@ -72,17 +72,33 @@ class PostgresTrafficQuotaRepository(
      * Прежде сумма считалась в пределах ноды, а панель складывала результаты.
      */
     override fun usedBytes(userId: String, from: Instant, to: Instant): Long = jdbc.queryForObject(
-        """
-        SELECT COALESCE(SUM(rx_bytes + tx_bytes), 0)
-        FROM user_traffic_deltas
-        WHERE user_id = :userId AND observed_at >= :from AND observed_at < :to
+        PostgresTrafficSources.cte(io.boardproxy.control.telemetry.application.TrafficKind.USER, null) + """
+            SELECT
+                COALESCE((
+                    SELECT SUM(rx_bytes + tx_bytes)
+                    FROM combined_traffic WHERE subject = :userId
+                ), 0) +
+                CASE WHEN CAST(:includeLifetime AS boolean) THEN COALESCE((
+                    SELECT SUM(rx_bytes + tx_bytes)
+                    FROM user_traffic_lifetime_totals WHERE user_id = :userId
+                ), 0) ELSE 0 END
         """.trimIndent(),
-        mapOf("userId" to userId, "from" to from.toSqlTimestamp(), "to" to to.toSqlTimestamp()),
+        mapOf(
+            "nodeId" to null,
+            "userId" to userId,
+            "from" to from.toSqlTimestamp(),
+            "to" to to.toSqlTimestamp(),
+            "useRollups" to true,
+            "includeLifetime" to (from == Instant.EPOCH),
+        ),
         Long::class.java,
     ) ?: 0
 
     override fun state(userId: String): TrafficQuotaState? = jdbc.query(
-        "SELECT user_id, period_start, used_bytes, exceeded, changed_at FROM user_traffic_quota_state WHERE user_id = :userId",
+        """
+        SELECT user_id, period_start, used_bytes, exceeded, changed_at, threshold_exceeded
+        FROM user_traffic_quota_state WHERE user_id = :userId
+        """.trimIndent(),
         mapOf("userId" to userId),
     ) { rs, _ ->
         TrafficQuotaState(
@@ -91,6 +107,7 @@ class PostgresTrafficQuotaRepository(
             usedBytes = rs.getLong("used_bytes"),
             exceeded = rs.getBoolean("exceeded"),
             changedAt = rs.getTimestamp("changed_at").toInstant(),
+            thresholdExceeded = rs.getBoolean("threshold_exceeded"),
         )
     }.firstOrNull()
 
@@ -103,13 +120,16 @@ class PostgresTrafficQuotaRepository(
         val previous = state(state.userId)
         jdbc.update(
             """
-            INSERT INTO user_traffic_quota_state (user_id, period_start, used_bytes, exceeded, changed_at)
-            VALUES (:userId, :periodStart, :usedBytes, :exceeded, :changedAt)
+            INSERT INTO user_traffic_quota_state (
+                user_id, period_start, used_bytes, exceeded, changed_at, threshold_exceeded
+            )
+            VALUES (:userId, :periodStart, :usedBytes, :exceeded, :changedAt, :thresholdExceeded)
             ON CONFLICT (user_id) DO UPDATE SET
                 period_start = EXCLUDED.period_start,
                 used_bytes = EXCLUDED.used_bytes,
                 exceeded = EXCLUDED.exceeded,
-                changed_at = EXCLUDED.changed_at
+                changed_at = EXCLUDED.changed_at,
+                threshold_exceeded = EXCLUDED.threshold_exceeded
             """.trimIndent(),
             mapOf(
                 "userId" to state.userId,
@@ -117,9 +137,14 @@ class PostgresTrafficQuotaRepository(
                 "usedBytes" to state.usedBytes,
                 "exceeded" to state.exceeded,
                 "changedAt" to state.changedAt.toSqlTimestamp(),
+                "thresholdExceeded" to state.thresholdExceeded,
             ),
         )
         return previous == null || previous.exceeded != state.exceeded
+    }
+
+    override fun clearState(userId: String) {
+        jdbc.update("DELETE FROM user_traffic_quota_state WHERE user_id = :userId", mapOf("userId" to userId))
     }
 
     override fun exceededUsers(): Set<String> = jdbc.queryForList(

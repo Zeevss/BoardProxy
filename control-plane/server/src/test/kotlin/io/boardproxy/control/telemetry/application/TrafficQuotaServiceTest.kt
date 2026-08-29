@@ -2,6 +2,9 @@ package io.boardproxy.control.telemetry.application
 
 import io.boardproxy.control.shared.events.OutboxEvent
 import io.boardproxy.control.shared.events.OutboxRepository
+import io.boardproxy.control.shared.contracts.PendingQuotaConfigChange
+import io.boardproxy.control.shared.contracts.QuotaConfigChangeRepository
+import io.boardproxy.control.shared.persistence.TransactionRunner
 import io.boardproxy.control.telemetry.domain.QuotaAction
 import io.boardproxy.control.telemetry.domain.QuotaPeriod
 import io.boardproxy.control.telemetry.domain.TrafficQuota
@@ -30,6 +33,11 @@ class TrafficQuotaServiceTest {
         quotas = quotas,
         notifier = { notifications += it },
         outbox = outbox,
+        changes = FakeChanges(),
+        transactions = object : TransactionRunner {
+            override fun <T> required(block: () -> T): T = block()
+        },
+        audit = { },
         clock = Clock.fixed(now, ZoneOffset.UTC),
         nextId = { "event-${outbox.events.size + 1}" },
     )
@@ -79,6 +87,34 @@ class TrafficQuotaServiceTest {
     }
 
     @Test
+    fun `политика alert уведомляет один раз до выхода из превышения`() {
+        quotas.put(quota(QuotaAction.ALERT, limit = 100))
+        quotas.used = 150
+
+        service.evaluate()
+        service.evaluate()
+
+        assertEquals(1, notifications.size)
+        assertTrue(quotas.state("u1")!!.thresholdExceeded)
+    }
+
+    @Test
+    fun `выключение quota немедленно снимает blocking state`() {
+        quotas.put(quota(QuotaAction.DISABLE, limit = 100))
+        quotas.used = 150
+        service.evaluate()
+        assertTrue(quotas.state("u1")!!.exceeded)
+
+        service.put(
+            "u1", QuotaPeriod.MONTHLY, 100, QuotaAction.DISABLE, false,
+            expectedVersion = 1, actor = "operator",
+        )
+
+        assertEquals(null, quotas.state("u1"))
+        assertEquals(emptySet(), service.exceededUsers())
+    }
+
+    @Test
     fun `неизменное состояние не порождает событий`() {
         quotas.put(quota(QuotaAction.DISABLE, limit = 100))
         quotas.used = 150
@@ -116,6 +152,7 @@ class TrafficQuotaServiceTest {
             val previous = states.put(state.userId, state)
             return previous == null || previous.exceeded != state.exceeded
         }
+        override fun clearState(userId: String) { states.remove(userId) }
         override fun exceededUsers() = states.filterValues(TrafficQuotaState::exceeded).keys
         override fun startNewCounter(userId: String, at: Instant) {
             stored[userId] = stored.getValue(userId).copy(counterStart = at)
@@ -125,5 +162,12 @@ class TrafficQuotaServiceTest {
     private class FakeOutbox : OutboxRepository {
         val events = mutableListOf<OutboxEvent>()
         override fun append(event: OutboxEvent) { events += event }
+    }
+
+    private class FakeChanges : QuotaConfigChangeRepository {
+        override fun mark(userId: String, at: Instant) = Unit
+        override fun find(userId: String): PendingQuotaConfigChange? = null
+        override fun pending(limit: Int) = emptyList<PendingQuotaConfigChange>()
+        override fun complete(userId: String, generation: Long) = true
     }
 }

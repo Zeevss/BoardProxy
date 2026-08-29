@@ -80,6 +80,31 @@ class PostgresTrafficQueriesTest {
         )
     }
 
+    @Test
+    fun `готовый роллап не считается второй раз вместе с raw`() {
+        record("batch-1", TEST_TIME.minusSeconds(7200), iface = "eth0", user = "user-1", rx = 100, tx = 50)
+        maintenance.rebuildHourly(TEST_TIME.minusSeconds(10800), TEST_TIME.minusSeconds(3600))
+
+        val total = queries.userTotals(
+            "node-1", TEST_TIME.minusSeconds(10800), TEST_TIME.minusSeconds(3600),
+        ).single()
+
+        assertEquals(100, total.rxBytes)
+        assertEquals(50, total.txBytes)
+    }
+
+    @Test
+    fun `история читается из роллапа после удаления raw`() {
+        val old = TEST_TIME.minus(Duration.ofDays(40))
+        record("batch-old", old, iface = "eth0", user = "user-1", rx = 100, tx = 50)
+        maintenance.rebuildHourly(old.minusSeconds(3600), old.plusSeconds(3600))
+        maintenance.deleteRawBefore(TEST_TIME.minus(Duration.ofDays(31)))
+
+        val total = queries.userTotals("node-1", old.minusSeconds(3600), old.plusSeconds(3600)).single()
+
+        assertEquals(150, total.rxBytes + total.txBytes)
+    }
+
     /** Retention чистит отчёты; дельты уходят каскадом вместе с ними. */
     @Test
     fun `удаление старых отчётов уносит дельты`() {

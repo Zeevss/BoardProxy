@@ -17,10 +17,12 @@ import (
 )
 
 const (
-	coreEventRetryMin  = time.Second
-	coreEventRetryMax  = 30 * time.Second
-	runtimeSnapshotGap = 30 * time.Second
+	coreEventRetryMin = time.Second
+	coreEventRetryMax = 30 * time.Second
 )
+
+// Переменная, а не константа: тесты укорачивают интервал, чтобы не ждать полминуты.
+var runtimeSnapshotGap = 30 * time.Second
 
 // Runtime state travels as a whole snapshot, not as a replayable event log. The
 // node already knows its state, so there is nothing for the hub to reconstruct —
@@ -50,53 +52,115 @@ func collectCoreRuntimeEvents(ctx context.Context, core *coremgr.Manager, store 
 	}
 }
 
+// snapshotSource — то, у чего спрашивают снимок состояния ядра.
+// Интерфейс ради тестов: живая реализация — *coremgr.Manager.
+type snapshotSource interface {
+	RuntimeSnapshot(ctx context.Context) (*corev1.RuntimeSnapshot, error)
+}
+
+// consumeCoreRuntimeEvents ведёт две независимые линии: пересылку событий ядра
+// и периодический снимок состояния.
+//
+// Раньше снимок брался внутри цикла приёма событий — то есть только тогда,
+// когда ядру было что сказать. На простое (ни одной запущенной доски, ни одной
+// сессии) поток событий молчит, и хаб переставал получать снимки вовсе: панель
+// показывала «ядро не отвечает» у совершенно здоровой ноды. Поэтому приём
+// событий уехал в отдельную горутину, а снимок теперь идёт по тикеру.
 func consumeCoreRuntimeEvents(
 	ctx context.Context,
-	core *coremgr.Manager,
+	core snapshotSource,
 	stream coremgr.RuntimeEventStream,
 	store *localstore.Store,
 	log *slog.Logger,
 ) error {
-	lastSnapshot := time.Time{}
-	for ctx.Err() == nil {
-		event, err := stream.Recv()
-		if err != nil {
-			return err
-		}
-		reports := make([]localstore.OutboxEvent, 0, 2)
+	// Своя отмена: любой выход отсюда должен разбудить горутину приёма,
+	// иначе она останется висеть на отправке в канал.
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	events, failures := receiveCoreRuntimeEvents(streamCtx, stream)
 
-		if mapped := mapCoreRuntimeEvent(event); mapped != nil {
+	ticker := time.NewTicker(runtimeSnapshotGap)
+	defer ticker.Stop()
+
+	// Первый снимок сразу: ждать полминуты после подключения незачем.
+	if err := storeRuntimeSnapshot(ctx, core, store, log); err != nil {
+		return err
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-failures:
+			return err
+		case <-ticker.C:
+			if err := storeRuntimeSnapshot(ctx, core, store, log); err != nil {
+				return err
+			}
+		case event := <-events:
+			mapped := mapCoreRuntimeEvent(event)
+			if mapped == nil {
+				continue
+			}
 			batchID := randomID()
-			reports = append(reports, localstore.OutboxEvent{
+			report := localstore.OutboxEvent{
 				BatchID: batchID,
 				Event:   &nodev1.ReportRequest{BatchId: batchID, Events: []*nodev1.RuntimeEvent{mapped}},
-			})
-		}
-
-		// A snapshot is cheap and self-correcting, so it is taken on a timer
-		// rather than in reaction to a detected gap: there are no gaps to detect.
-		if time.Since(lastSnapshot) >= runtimeSnapshotGap {
-			snapshot, err := core.RuntimeSnapshot(ctx)
-			if err != nil {
-				log.Debug("capture core runtime snapshot", "err", err)
-			} else {
-				batchID := randomID()
-				reports = append(reports, localstore.OutboxEvent{
-					BatchID: batchID,
-					Event:   &nodev1.ReportRequest{BatchId: batchID, Runtime: mapRuntimeSnapshot(snapshot)},
-				})
-				lastSnapshot = time.Now()
+			}
+			if err := store.CommitOrderedCollection(nil, []localstore.OutboxEvent{report}); err != nil {
+				return err
 			}
 		}
-
-		if len(reports) == 0 {
-			continue
-		}
-		if err := store.CommitOrderedCollection(nil, reports); err != nil {
-			return err
-		}
 	}
-	return ctx.Err()
+}
+
+// receiveCoreRuntimeEvents переносит блокирующий Recv в горутину.
+//
+// Канал ошибок буферизован, а сам канал событий не закрывается: закрытие
+// гонялось бы с ошибкой приёма, и потребителю пришлось бы различать два
+// одинаковых с виду завершения.
+func receiveCoreRuntimeEvents(
+	ctx context.Context,
+	stream coremgr.RuntimeEventStream,
+) (<-chan *corev1.CoreRuntimeEvent, <-chan error) {
+	events := make(chan *corev1.CoreRuntimeEvent)
+	failures := make(chan error, 1)
+	go func() {
+		for {
+			event, err := stream.Recv()
+			if err != nil {
+				failures <- err
+				return
+			}
+			select {
+			case events <- event:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return events, failures
+}
+
+// storeRuntimeSnapshot кладёт снимок в outbox. Недоступное ядро — не повод
+// прекращать сбор: сокет мог ещё не подняться, следующий тик попробует снова.
+func storeRuntimeSnapshot(
+	ctx context.Context,
+	core snapshotSource,
+	store *localstore.Store,
+	log *slog.Logger,
+) error {
+	snapshot, err := core.RuntimeSnapshot(ctx)
+	if err != nil {
+		log.Debug("capture core runtime snapshot", "err", err)
+		return nil
+	}
+	batchID := randomID()
+	report := localstore.OutboxEvent{
+		BatchID: batchID,
+		Event:   &nodev1.ReportRequest{BatchId: batchID, Runtime: mapRuntimeSnapshot(snapshot)},
+	}
+	return store.CommitOrderedCollection(nil, []localstore.OutboxEvent{report})
 }
 
 func mapRuntimeSnapshot(snapshot *corev1.RuntimeSnapshot) *nodev1.RuntimeSnapshot {
