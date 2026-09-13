@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "ru.zevsus.proxy.boardvpn"
     compileSdk {
-        version = release(37)
+        version = release(36)
     }
 
     defaultConfig {

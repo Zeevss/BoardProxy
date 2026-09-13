@@ -364,11 +364,14 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+      # Лицензии принимает это действие, а недостающую платформу и build-tools
+      # AGP докачает сам под то, что объявлено в build.gradle.kts.
+      #
+      # Здесь раньше стоял `sdkmanager --install "platforms;android-37"`, и
+      # именно он ронял сборку: у SDK 37 идентификатор пакета — `android-37.0`,
+      # с минорной версией. Прописывать версию в двух местах всё равно нельзя:
+      # она разъедется с build.gradle.kts при первом же её изменении.
       - uses: android-actions/setup-android@v3
-
-      # compileSdk 37 свежее того, что предустановлено на раннере.
-      - name: Компоненты Android SDK
-        run: sdkmanager --install "platforms;android-37" "build-tools;36.0.0"
 
       # NDK нужен и gomobile init, и самому bind. Путь к нему приходит от
       # раннера обычной переменной окружения, а не через контекст env, поэтому
