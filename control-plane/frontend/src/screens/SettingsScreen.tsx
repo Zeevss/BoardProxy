@@ -24,6 +24,7 @@ import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/toast'
 import { absoluteTime, relativeTime } from '@/lib/format'
 import { SecretDialog } from './SecretDialog'
+import { SubscribeDeployDialog } from './SubscribeDeployDialog'
 
 /**
  * Ровно те платформы, которые принимает хаб (`PLATFORMS` в
@@ -284,12 +285,7 @@ function ServiceSection({ service }: { service: SubscriptionService }) {
         </footer>
       </div>
 
-      <SecretDialog
-        title={t.serviceTokenIssued}
-        label={t.serviceToken}
-        secret={secret}
-        onClose={() => setSecret(null)}
-      />
+      <SubscribeDeployDialog token={secret} onClose={() => setSecret(null)} />
     </>
   )
 }

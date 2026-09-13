@@ -1,0 +1,27 @@
+# Нода BoardProxy — отдельно от control-plane.
+#
+# Здесь нет ни адреса хаба, ни идентификатора ноды: и то и другое зашито в
+# enrollment-секрете, который панель выдаёт при создании ноды. Положите секрет
+# в .env рядом с этим файлом и поднимите: docker compose up -d
+#
+# Собирать нечего — образ забирается из GHCR.
+
+services:
+  node:
+    image: ghcr.io/zeevss/boardproxy-node-agent:${BPROXY_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      BPROXY_NODE_SECRET: ${BPROXY_NODE_SECRET:?положите enrollment-секрет в .env}
+      # Интерфейс, с которого снимается статистика трафика. На большинстве
+      # облачных машин это eth0; посмотреть свой — `ip -br link`.
+      BPROXY_STATS_INTERFACES: ${BPROXY_STATS_INTERFACES:-eth0}
+      # Ядро живёт в этом же контейнере, агент общается с ним через сокет.
+      BPROXY_CORE_CONTROL: unix:///run/bproxy/control.sock
+      BPROXY_MAX_OUTBOX_BYTES: ${BPROXY_MAX_OUTBOX_BYTES:-268435456}
+    volumes:
+      # Идентичность ноды: сертификат mTLS и неотправленные отчёты. Потеряв
+      # том, нода потребует нового enrollment-секрета.
+      - node-data:/var/lib/bproxy-node
+
+volumes:
+  node-data:

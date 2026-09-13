@@ -5,7 +5,6 @@ import type { Agent } from '@/api/types'
 import { ApiError } from '@/api/errors'
 import { useLanguage } from '@/app/language'
 import { Button } from '@/components/ui/button'
-import { CopyButton } from '@/components/ui/copy'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Modal } from '@/components/ui/modal'
@@ -13,6 +12,7 @@ import { useToast } from '@/components/ui/toast'
 import { boardHash, boardId } from '@/lib/board-link'
 import { GRPC_PORT, hubAddressProblem, suggestHubAddress } from '@/lib/hub-address'
 import { slugify } from '@/lib/slug'
+import { NodeDeploy } from './NodeDeploy'
 import { cn } from '@/lib/utils'
 
 type Step = 1 | 2 | 3
@@ -328,7 +328,6 @@ function StepCheck({ nodeId, secret }: { nodeId: string; secret: string }) {
   const [settled, setSettled] = useState(false)
   const agents = useAgents(!settled)
   const agent: Agent | undefined = (agents.data ?? []).find((item) => item.id === nodeId)
-  const compose = `BPROXY_NODE_SECRET=${secret} \\\n  docker compose --profile node up -d --build node`
 
   const observed = [
     { label: t.check1, done: agent !== undefined && agent.lastReportAt !== null, meta: '' },
@@ -348,34 +347,7 @@ function StepCheck({ nodeId, secret }: { nodeId: string; secret: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[13px] font-medium text-bright">BPROXY_NODE_SECRET</span>
-          <span className="text-[11.5px] text-warn">{t.onceOnly}</span>
-        </div>
-        <div className="flex gap-2">
-          <p className="min-w-0 flex-1 rounded-lg border border-line bg-raised px-3 py-2.5 font-mono text-xs break-all text-bright">
-            {secret}
-          </p>
-          <CopyButton variant="raised" className="shrink-0" value={secret} label="BPROXY_NODE_SECRET">
-            {t.copy}
-          </CopyButton>
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <span className="text-[13px] font-medium text-bright">{t.composeLabel}</span>
-        <div className="overflow-hidden rounded-[10px] border border-line bg-sheet">
-          <pre className="overflow-x-auto px-3.5 py-3 font-mono text-[11.5px] leading-relaxed text-soft">
-            {compose}
-          </pre>
-          <div className="flex justify-end border-t border-line-soft px-3 py-2">
-            <CopyButton size="xs" variant="raised" value={compose} label="docker compose">
-              {t.copyCompose}
-            </CopyButton>
-          </div>
-        </div>
-      </div>
+      <NodeDeploy secret={secret} />
 
       <div className="flex items-center gap-3">
         {ready ? (

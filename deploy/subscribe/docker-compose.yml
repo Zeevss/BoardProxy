@@ -1,0 +1,29 @@
+# Сервис подписок BoardProxy — отдельно от control-plane.
+#
+# Сервис ходит в хаб по HTTP и сам ничего не хранит: состояние он забирает
+# опросом. Наружу его принято ставить за реверс-прокси, которая держит
+# сертификат, — сам он слушает открытый порт.
+#
+# Положите токен и адрес хаба в .env рядом и поднимите: docker compose up -d
+
+services:
+  subscribe:
+    image: ghcr.io/zeevss/boardproxy-subscribe:${BPROXY_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      SUBSCRIBE_LISTEN: ":8090"
+      SUBSCRIBE_CONTROL_PLANE_URL: ${SUBSCRIBE_CONTROL_PLANE_URL:?адрес хаба, например https://panel.example.net}
+      SUBSCRIBE_CONTROL_PLANE_TOKEN: ${SUBSCRIBE_CONTROL_PLANE_TOKEN:?сервисный токен из настроек панели}
+      SUBSCRIBE_CONTROL_PLANE_TIMEOUT: ${SUBSCRIBE_CONTROL_PLANE_TIMEOUT:-10s}
+    ports:
+      # По умолчанию только на loopback: наружу пусть смотрит реверс-прокси.
+      - "${SUBSCRIBE_BIND:-127.0.0.1}:${SUBSCRIBE_PORT:-8090}:8090"
+    # Сервис не хранит состояния, поэтому файловая система ему не нужна вовсе.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
