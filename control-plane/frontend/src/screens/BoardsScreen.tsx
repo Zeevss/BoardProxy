@@ -55,7 +55,6 @@ export function BoardsScreen() {
     <section className="mx-auto flex max-w-6xl flex-col gap-4.5">
       <ScreenHeader
         title={t.boards}
-        subtitle={t.boardsSub}
         actions={
           <Input
             type="search"

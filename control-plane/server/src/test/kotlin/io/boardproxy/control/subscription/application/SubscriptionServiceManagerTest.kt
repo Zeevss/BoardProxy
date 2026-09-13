@@ -43,12 +43,42 @@ class SubscriptionServiceManagerTest {
         assertEquals(first, fixture.repository.publicKey)
     }
 
+    /**
+     * Наружу сервис смотрит через реверс-прокси, которая и держит сертификат,
+     * а сам слушает открытый порт — на стенде на localhost. Требовать здесь
+     * https значило проверять схему, которой сервис никогда не увидит.
+     */
     @Test
-    fun `enabled delivery refuses a non-HTTPS public URL`() {
+    fun `enabled delivery accepts a plain HTTP public URL behind a proxy`() {
+        val fixture = Fixture()
+
+        val settings = fixture.manager.update(
+            valid().copy(publicUrl = "http://127.0.0.1:8090"), 1, "operator",
+        )
+
+        assertEquals("http://127.0.0.1:8090", settings.publicUrl)
+    }
+
+    @Test
+    fun `enabled delivery refuses a public URL without a scheme`() {
         val fixture = Fixture()
 
         assertFailsWith<InvalidRequest> {
-            fixture.manager.update(valid().copy(publicUrl = "http://subscribe.example.com"), 1, "operator")
+            fixture.manager.update(valid().copy(publicUrl = "subscribe.example.com"), 1, "operator")
+        }
+    }
+
+    /** Ссылку на приложение открывает клиент в интернете — там https обязателен. */
+    @Test
+    fun `enabled delivery still refuses a non-HTTPS client link`() {
+        val fixture = Fixture()
+
+        assertFailsWith<InvalidRequest> {
+            fixture.manager.update(
+                valid().copy(apps = listOf(SubscriptionApp("android", "http://example.com/apk"))),
+                1,
+                "operator",
+            )
         }
     }
 

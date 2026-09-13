@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ru.zevsus.proxy.boardvpn.R
+import ru.zevsus.proxy.boardvpn.domain.repository.SubscriptionFailureReason
 import ru.zevsus.proxy.boardvpn.ui.scanner.QrScannerDialog
 import ru.zevsus.proxy.boardvpn.ui.scanner.QrShareDialog
 
@@ -68,7 +69,15 @@ fun ProfilesRoute(
 private fun ProfilesMessage.text(): String = when (this) {
     ProfilesMessage.ClipboardEmpty -> stringResource(R.string.profiles_error_clipboard_empty)
     ProfilesMessage.InvalidLink -> stringResource(R.string.profiles_error_invalid_link)
-    ProfilesMessage.SubscriptionFailed -> stringResource(R.string.profiles_error_subscription)
+    is ProfilesMessage.SubscriptionFailed -> stringResource(
+        when (reason) {
+            SubscriptionFailureReason.LINK -> R.string.profiles_error_subscription_link
+            SubscriptionFailureReason.REJECTED -> R.string.profiles_error_subscription_rejected
+            SubscriptionFailureReason.EMPTY -> R.string.profiles_error_subscription_empty
+            SubscriptionFailureReason.UNREACHABLE -> R.string.profiles_error_subscription_unreachable
+            SubscriptionFailureReason.UNKNOWN -> R.string.profiles_error_subscription
+        }
+    )
     ProfilesMessage.ProfileImported -> stringResource(R.string.profiles_imported)
     ProfilesMessage.ProfileDeleted -> stringResource(R.string.profiles_deleted)
     ProfilesMessage.SubscriptionsUpdated -> stringResource(R.string.profiles_updated)

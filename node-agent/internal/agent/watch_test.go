@@ -7,11 +7,14 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"bproxy-node-agent/internal/identity"
 	"bproxy-node-agent/internal/localstore"
 	nodev1 "bproxy-node-contracts/node/v1"
+
+	"google.golang.org/grpc"
 )
 
 func TestApplyConfigStoresRevisionAndCheckpoint(t *testing.T) {
@@ -64,26 +67,48 @@ func TestApplyConfigIsIdempotentForTheSameRevision(t *testing.T) {
 	}
 }
 
-func TestApplyConfigRefusesSameRevisionWithDifferentHash(t *testing.T) {
-	service, _, _ := newTestService()
+// Тот же номер с другим содержимым — признак пересозданной базы хаба, а не
+// его внутренней порчи: FetchConfig отдаёт то, что лежит в Postgres сейчас.
+func TestApplyConfigTakesTheHubVersionOfTheSameRevision(t *testing.T) {
+	service, _, core := newTestService()
 	if err := service.applyConfig(context.Background(), document(3, "version = 1\n")); err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
 
-	conflicting := &nodev1.ConfigDocument{Revision: 3, ConfigSha256: "0", ConfigToml: []byte("other")}
-	if err := service.applyConfig(context.Background(), conflicting); err == nil {
-		t.Fatal("the same revision must not carry two different configurations")
+	if err := service.applyConfig(context.Background(), document(3, "other\n")); err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	if len(core.applied) != 2 {
+		t.Fatalf("core applies=%d, want 2", len(core.applied))
+	}
+	if got := string(core.applied[1]); got != "other\n" {
+		t.Fatalf("core applied %q, want the hub version", got)
 	}
 }
 
-func TestApplyConfigRefusesStaleRevision(t *testing.T) {
-	service, _, _ := newTestService()
+// Базу хаба пересоздали, нумерация пошла заново, а том ноды это пережил.
+// Прежде здесь был отказ без выхода, и нода застревала навсегда.
+func TestApplyConfigResynchronisesAfterHubRevisionReset(t *testing.T) {
+	service, store, core := newTestService()
 	if err := service.applyConfig(context.Background(), document(5, "version = 1\n")); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 
-	if err := service.applyConfig(context.Background(), document(4, "older\n")); err == nil {
-		t.Fatal("a revision going backwards must be refused")
+	if err := service.applyConfig(context.Background(), document(2, "fresh hub\n")); err != nil {
+		t.Fatalf("apply after the hub reset: %v", err)
+	}
+	if service.state.Revision != 2 {
+		t.Fatalf("revision=%d, want 2", service.state.Revision)
+	}
+	if got := string(core.applied[len(core.applied)-1]); got != "fresh hub\n" {
+		t.Fatalf("core applied %q, want the fresh configuration", got)
+	}
+
+	// Отметка обязана переехать на новую последовательность, иначе следующий
+	// цикл снова посчитает документ хаба младшим.
+	raw := store.checkpoints[agentStateKey]
+	if !strings.Contains(string(raw), `"applied_revision":2`) {
+		t.Fatalf("checkpoint = %s, want revision 2", raw)
 	}
 }
 
@@ -99,6 +124,66 @@ func TestFailedApplyKeepsPreviousState(t *testing.T) {
 	if service.state.Revision != 0 {
 		t.Fatalf("revision=%d, want 0", service.state.Revision)
 	}
+}
+
+// syncConfig обязан сказать, изменилось ли наблюдаемое хабом состояние.
+//
+// По этому признаку цикл решает, отчитываться ли немедленно. Раньше он ничего
+// не возвращал, и о применённой ревизии хаб узнавал только со следующим тиком
+// отчётов — до пятнадцати секунд, в течение которых панель показывала
+// расхождение desired / applied, которого на ноде уже не было.
+func TestSyncConfigReportsWhetherStateMoved(t *testing.T) {
+	service, _, core := newTestService()
+	client := &fakeControlClient{config: document(4, "version = 1\n")}
+
+	if !service.syncConfig(context.Background(), client) {
+		t.Fatal("первое применение обязано считаться изменением")
+	}
+	if service.syncConfig(context.Background(), client) {
+		t.Fatal("повтор той же ревизии изменением не является: отчёт слать не о чем")
+	}
+
+	// Отказ применения — тоже новость для хаба: он показывает её как ошибку.
+	core.err = errors.New("core rejected the config")
+	client.config = document(5, "version = 2\n")
+	if !service.syncConfig(context.Background(), client) {
+		t.Fatal("появившаяся ошибка применения обязана считаться изменением")
+	}
+	if service.syncConfig(context.Background(), client) {
+		t.Fatal("та же ошибка второй раз изменением не является")
+	}
+
+	// Ушедшая ошибка — тоже: иначе хаб продолжит показывать её после починки.
+	core.err = nil
+	if !service.syncConfig(context.Background(), client) {
+		t.Fatal("исчезнувшая ошибка применения обязана считаться изменением")
+	}
+}
+
+// Недоступный хаб изменением не является: отчёт всё равно не уйдёт.
+func TestSyncConfigReportsNoChangeWhenFetchFails(t *testing.T) {
+	service, _, _ := newTestService()
+
+	if service.syncConfig(context.Background(), &fakeControlClient{err: errors.New("hub is down")}) {
+		t.Fatal("несостоявшаяся выборка конфигурации изменением не является")
+	}
+}
+
+// fakeControlClient отвечает на FetchConfig и ничего больше не умеет: остальные
+// вызовы в этих тестах не звучат.
+type fakeControlClient struct {
+	nodev1.NodeControlServiceClient
+	config *nodev1.ConfigDocument
+	err    error
+}
+
+func (c *fakeControlClient) FetchConfig(
+	context.Context, *nodev1.FetchConfigRequest, ...grpc.CallOption,
+) (*nodev1.ConfigDocument, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.config, nil
 }
 
 func document(revision uint64, body string) *nodev1.ConfigDocument {

@@ -37,7 +37,6 @@ export function BoardDialog({
   const [link, setLink] = useState('')
   const [nodeId, setNodeId] = useState('')
   const [lanes, setLanes] = useState('4')
-  const [apiBase, setApiBase] = useState('')
   const [advanced, setAdvanced] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -56,7 +55,6 @@ export function BoardDialog({
     setLink(board?.hash ?? '')
     setNodeId(target.mode === 'edit' ? target.board.nodeId : target.nodeId)
     setLanes(String(board?.maxLanes ?? 4))
-    setApiBase(board?.apiBase ?? '')
     setAdvanced(false)
     setConfirmDelete(false)
     setError(null)
@@ -86,7 +84,6 @@ export function BoardDialog({
             name: name.trim() || hash,
             hash,
             maxLanes: clampLanes(lanes),
-            apiBase: apiBase.trim() || null,
           },
         })
       } else {
@@ -111,7 +108,7 @@ export function BoardDialog({
       open={target !== null}
       onOpenChange={(value) => !value && onClose()}
       title={board ? t.editBoard : t.newBoard}
-      subtitle={board ? `${board.id} · ${board.nodeId}` : t.boardModalHint}
+      subtitle={board ? `${board.id} · ${board.nodeId}` : undefined}
       className="max-w-[620px]"
       footer={
         <div className="flex w-full items-center gap-2">
@@ -201,20 +198,12 @@ export function BoardDialog({
         </button>
         {advanced ? (
           <div className="grid gap-3 px-4 pb-4 sm:grid-cols-2">
-            <Field label="maxLanes" hint="1…32">
+            <Field label={t.lanes} hint="1…32">
               <Input
                 inputMode="numeric"
                 className="bg-canvas font-mono"
                 value={lanes}
                 onChange={(event) => setLanes(event.target.value.replace(/\D/g, ''))}
-              />
-            </Field>
-            <Field label="apiBase" hint={t.apiBaseHint}>
-              <Input
-                placeholder="https://api.example.net"
-                className="bg-canvas font-mono"
-                value={apiBase}
-                onChange={(event) => setApiBase(event.target.value)}
               />
             </Field>
           </div>

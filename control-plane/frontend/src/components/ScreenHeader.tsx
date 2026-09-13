@@ -4,18 +4,14 @@ import { cn } from '@/lib/utils'
 
 interface ScreenHeaderProps {
   title: string
-  subtitle: string
   /** Поиск и основное действие экрана: в дизайне они стоят рядом справа. */
   actions?: ReactNode
 }
 
-export function ScreenHeader({ title, subtitle, actions }: ScreenHeaderProps) {
+export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
   return (
-    <header className="flex flex-wrap items-end justify-between gap-4">
-      <div className="flex min-w-0 flex-col gap-1.5">
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-        <p className="max-w-2xl text-[13.5px] text-soft">{subtitle}</p>
-      </div>
+    <header className="flex flex-wrap items-center justify-between gap-4">
+      <h1 className="min-w-0 truncate text-2xl font-semibold tracking-tight">{title}</h1>
       {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
     </header>
   )

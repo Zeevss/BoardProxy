@@ -15,7 +15,6 @@ import { ApiError, ConflictError } from '@/api/errors'
 import { useLanguage } from '@/app/language'
 import { ScreenHeader } from '@/components/ScreenHeader'
 import { Button } from '@/components/ui/button'
-import { CopyButton } from '@/components/ui/copy'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Modal } from '@/components/ui/modal'
@@ -26,7 +25,12 @@ import { useToast } from '@/components/ui/toast'
 import { absoluteTime, relativeTime } from '@/lib/format'
 import { SecretDialog } from './SecretDialog'
 
-const PLATFORMS = ['android', 'ios', 'macos', 'windows', 'linux', 'web'] as const
+/**
+ * Ровно те платформы, которые принимает хаб (`PLATFORMS` в
+ * SubscriptionServiceService). В макете был ещё `web`, и я его перенёс не
+ * сверившись: сохранение с ним падало на «unknown client platform web».
+ */
+const PLATFORMS = ['android', 'ios', 'macos', 'windows', 'linux'] as const
 
 export function SettingsScreen() {
   const { t } = useLanguage()
@@ -34,7 +38,7 @@ export function SettingsScreen() {
 
   return (
     <section className="mx-auto flex max-w-[920px] flex-col gap-4.5">
-      <ScreenHeader title={t.settings} subtitle={t.settingsSub} />
+      <ScreenHeader title={t.settings} />
 
       {service.isLoading ? (
         <p className="text-sm text-dim">{t.loading}</p>
@@ -85,30 +89,37 @@ function ServiceSection({ service }: { service: SubscriptionService }) {
 
   /**
    * Включённая доставка обязана быть работоспособной, поэтому хаб требует четыре
-   * поля из пяти и проверяет, что адреса — абсолютные HTTPS. Помечаем их здесь,
-   * иначе узнать об этом можно только по отказу после «Сохранить».
+   * поля из пяти и проверяет, что адреса разбираются. Помечаем их здесь, иначе
+   * узнать об этом можно только по отказу после «Сохранить».
+   *
+   * Подписи человеческие, а имя поля стоит рядом моноширинным: без него
+   * невозможно соотнести отказ хаба («subscription public URL must be…») с тем,
+   * что именно на экране надо править.
    */
   const fields: Array<{
     key: keyof ServiceDraft
     label: string
     placeholder: string
     hint?: string
+    wide?: boolean
   }> = [
-    { key: 'serviceName', label: 'serviceName', placeholder: 'BoardProxy Subscribe', hint: t.required },
-    { key: 'icon', label: 'icon', placeholder: 'https://…' },
+    { key: 'serviceName', label: t.fieldServiceName, placeholder: 'BoardProxy', hint: t.required },
+    { key: 'recoveryKeyId', label: t.fieldRecoveryKeyId, placeholder: 'rk-2026-01', hint: t.required },
     {
       key: 'publicUrl',
-      label: 'publicUrl',
+      label: t.fieldPublicUrl,
       placeholder: 'https://sub.example.net',
-      hint: `${t.required} · HTTPS`,
+      hint: `${t.required} · ${t.urlHint}`,
+      wide: true,
     },
     {
       key: 'yandexEditorUrl',
-      label: 'yandexEditorUrl',
+      label: t.fieldYandexUrl,
       placeholder: 'https://disk.yandex.ru/edit/…',
       hint: t.yandexHostHint,
+      wide: true,
     },
-    { key: 'recoveryKeyId', label: 'recoveryKeyId', placeholder: 'rk-2026-01', hint: t.required },
+    { key: 'icon', label: t.fieldIcon, placeholder: 'https://…', wide: true },
   ]
 
   function addApp() {
@@ -140,74 +151,16 @@ function ServiceSection({ service }: { service: SubscriptionService }) {
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-line bg-canvas p-4.5">
-        <div className="flex items-center gap-3">
-          <StatusDot tone={status.connected ? 'ok' : 'muted'} live={status.connected} className="size-2.5" />
-          <div>
-            <p className="text-sm font-semibold">
-              {status.connected ? t.serviceConnected : t.serviceOffline}
-            </p>
-            <p className="font-mono text-xs text-dim">
-              v{status.serviceVersion ?? '—'} · revision {status.appliedRevision ?? '—'} · lastSeen{' '}
-              {seen ?? t.never} · watcher {status.recoveryWatcherReady ? 'ready' : '—'}
-            </p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={issue.isPending}
-            onClick={() =>
-              issue.mutate(undefined, {
-                onSuccess: (issued) => setSecret(issued.secret),
-                onError: () => toast(t.errorOffline, 'danger'),
-              })
-            }
-          >
-            {t.serviceToken}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={restart.isPending}
-            onClick={() =>
-              restart.mutate(undefined, {
-                onSuccess: () => toast(t.restartRequested),
-                onError: () => toast(t.errorOffline, 'danger'),
-              })
-            }
-          >
-            {t.restart}
-          </Button>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap items-end gap-3.5 rounded-xl border border-line bg-inset px-4.5 py-4">
-        <div className="min-w-60 flex-1">
-          <div className="flex items-center gap-2.25">
-            <StatusDot tone={settings.enabled ? 'ok' : 'muted'} className="size-2" />
-            <h2 className="text-sm font-semibold tracking-tight">{t.subServiceLink}</h2>
-          </div>
-          <p className="mt-1.25 text-[12.5px] leading-relaxed text-dim">
-            {settings.enabled ? t.subLinkHintOn : t.subLinkOff}
-          </p>
-          <p className="mt-2.75 rounded-[9px] border border-line bg-surface px-3.25 py-2.75 font-mono text-[13px] break-all">
-            {settings.publicUrl || '—'}
-          </p>
-        </div>
-        <CopyButton variant="raised" value={settings.publicUrl} label={t.subServiceLink}>
-          {t.copy}
-        </CopyButton>
-      </div>
-
       <div className="rounded-xl border border-line bg-canvas">
-        <header className="flex items-center justify-between gap-4 border-b border-line-soft px-4.5 py-4">
-          <div>
-            <h2 className="text-[14.5px] font-semibold">{t.subService}</h2>
-            <p className="mt-0.75 text-[12.5px] text-dim">
-              {draft.enabled ? t.subServiceOn : t.subServiceHint}
-            </p>
+        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-line-soft px-5 py-4">
+          <div className="flex items-center gap-3">
+            <StatusDot tone={draft.enabled ? 'ok' : 'muted'} className="size-2.5" />
+            <div>
+              <h2 className="text-[14.5px] font-semibold">{t.subService}</h2>
+              {draft.enabled ? null : (
+                <p className="mt-0.75 text-[12.5px] text-dim">{t.subServiceHint}</p>
+              )}
+            </div>
           </div>
           <Switch
             label={t.subService}
@@ -216,7 +169,54 @@ function ServiceSection({ service }: { service: SubscriptionService }) {
           />
         </header>
 
-        <div className="grid gap-4 p-4.5 sm:grid-cols-2">
+        {/* Наблюдаемое состояние и две кнопки над формой: они про живой сервис,
+            а не про его настройки, и правки в них ничего не отменяют. */}
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-line-soft bg-inset px-5 py-3.5">
+          <div className="flex items-center gap-2.5">
+            <StatusDot
+              tone={status.connected ? 'ok' : 'muted'}
+              live={status.connected}
+              className="size-2"
+            />
+            <span className="text-[13px] font-medium">
+              {status.connected ? t.serviceConnected : t.serviceOffline}
+            </span>
+            <span className="font-mono text-[11.5px] text-dim">
+              v{status.serviceVersion ?? '—'} · rev {status.appliedRevision ?? '—'} ·{' '}
+              {seen ?? t.never}
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={issue.isPending}
+              onClick={() =>
+                issue.mutate(undefined, {
+                  onSuccess: (issued) => setSecret(issued.secret),
+                  onError: () => toast(t.errorOffline, 'danger'),
+                })
+              }
+            >
+              {t.serviceToken}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={restart.isPending}
+              onClick={() =>
+                restart.mutate(undefined, {
+                  onSuccess: () => toast(t.restartRequested),
+                  onError: () => toast(t.errorOffline, 'danger'),
+                })
+              }
+            >
+              {t.restart}
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid gap-4 px-5 py-4.5 sm:grid-cols-2">
           {fields.map((field) => (
             <Field
               key={field.key}
@@ -224,9 +224,11 @@ function ServiceSection({ service }: { service: SubscriptionService }) {
               // Обязательность имеет смысл только при включённой доставке:
               // выключенный сервис хаб сохраняет с любыми полями.
               hint={draft.enabled ? field.hint : undefined}
+              className={field.wide ? 'sm:col-span-2' : undefined}
             >
               <Input
                 placeholder={field.placeholder}
+                className={field.key === 'serviceName' ? undefined : 'font-mono'}
                 value={draft[field.key] as string}
                 onChange={(event) => patch({ [field.key]: event.target.value })}
               />
@@ -234,7 +236,7 @@ function ServiceSection({ service }: { service: SubscriptionService }) {
           ))}
         </div>
 
-        <div className="px-4.5 pb-4.5">
+        <div className="px-5 pb-4.5">
           <p className="mb-2 text-[13px] font-medium text-bright">{t.apps}</p>
           <div className="overflow-hidden rounded-[10px] border border-line">
             {draft.apps.map((app, index) => (
@@ -245,7 +247,7 @@ function ServiceSection({ service }: { service: SubscriptionService }) {
               />
             ))}
             <div className="flex gap-2 px-3.5 py-2.5">
-              <div className="w-37">
+              <div className="w-37 shrink-0">
                 <Select
                   label={t.platform}
                   value={platform}
@@ -255,6 +257,7 @@ function ServiceSection({ service }: { service: SubscriptionService }) {
               </div>
               <Input
                 placeholder="https://…"
+                className="font-mono"
                 value={appUrl}
                 onChange={(event) => setAppUrl(event.target.value)}
                 onKeyDown={(event) => event.key === 'Enter' && addApp()}
@@ -268,15 +271,13 @@ function ServiceSection({ service }: { service: SubscriptionService }) {
         </div>
 
         {error ? (
-          <p role="alert" className="mx-4.5 mb-3 rounded-lg border border-danger-line bg-danger-bg px-3 py-2 text-xs text-danger">
+          <p role="alert" className="mx-5 mb-3.5 rounded-lg border border-danger-line bg-danger-bg px-3 py-2 text-xs text-danger">
             {error}
           </p>
         ) : null}
 
-        <footer className="flex items-center justify-between gap-3 border-t border-line-soft px-4.5 py-3.5">
-          <p className="font-mono text-xs text-dim">
-            revision {settings.revision} · If-Match &quot;{settings.revision}&quot;
-          </p>
+        <footer className="flex items-center justify-between gap-3 border-t border-line-soft px-5 py-3.5">
+          <p className="font-mono text-xs text-dim">revision {settings.revision}</p>
           <Button variant="primary" disabled={update.isPending} onClick={save}>
             {t.save}
           </Button>
@@ -325,7 +326,7 @@ function TokensSection() {
   return (
     <>
       <div className="rounded-xl border border-line bg-canvas">
-        <header className="flex items-center justify-between gap-4 border-b border-line-soft px-4.5 py-4">
+        <header className="flex items-center justify-between gap-4 border-b border-line-soft px-5 py-4">
           <div>
             <h2 className="text-[14.5px] font-semibold">{t.access}</h2>
             <p className="mt-0.75 text-[12.5px] text-soft">{t.accessSub}</p>
@@ -336,9 +337,9 @@ function TokensSection() {
         </header>
 
         {tokens.isLoading ? (
-          <p className="px-4.5 py-4 text-[12.5px] text-muted">{t.loading}</p>
+          <p className="px-5 py-4 text-[12.5px] text-muted">{t.loading}</p>
         ) : rows.length === 0 ? (
-          <p className="px-4.5 py-4 text-[12.5px] text-muted">{t.noTokens}</p>
+          <p className="px-5 py-4 text-[12.5px] text-muted">{t.noTokens}</p>
         ) : (
           rows.map((token) => (
             <TokenRow
@@ -378,7 +379,7 @@ function TokenRow({
   const expires = token.expiresAt ? absoluteTime(token.expiresAt, language) : '—'
 
   return (
-    <div className="grid grid-cols-[minmax(0,1.2fr)_110px_minmax(0,1fr)_96px] items-center gap-3 border-b border-line-soft px-4.5 py-3.25 last:border-b-0 sm:grid-cols-[minmax(0,1.2fr)_110px_repeat(3,minmax(0,1fr))_96px]">
+    <div className="grid grid-cols-[minmax(0,1.2fr)_110px_minmax(0,1fr)_96px] items-center gap-3 border-b border-line-soft px-5 py-3.25 last:border-b-0 sm:grid-cols-[minmax(0,1.2fr)_110px_repeat(3,minmax(0,1fr))_96px]">
       <div className="min-w-0">
         <p className="truncate text-[13.5px] font-medium">{token.name}</p>
         <p className="truncate font-mono text-[11.5px] text-muted">{token.id}</p>
@@ -441,7 +442,6 @@ function IssueTokenDialog({ open, onClose }: { open: boolean; onClose: () => voi
           }
         }}
         title={t.issueToken}
-        subtitle={t.accessSub}
         footer={
           <>
             <Button variant="outline" disabled={issue.isPending} onClick={onClose}>
@@ -516,7 +516,6 @@ function IssueTokenDialog({ open, onClose }: { open: boolean; onClose: () => voi
       <SecretDialog
         title={t.tokenIssued}
         label="Authorization: Bearer"
-        hint={t.accessSub}
         secret={secret}
         onClose={() => setSecret(null)}
       />

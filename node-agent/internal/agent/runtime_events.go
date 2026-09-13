@@ -21,8 +21,13 @@ const (
 	coreEventRetryMax = 30 * time.Second
 )
 
-// Переменная, а не константа: тесты укорачивают интервал, чтобы не ждать полминуты.
-var runtimeSnapshotGap = 30 * time.Second
+// Переменные, а не константы: тесты укорачивают интервалы, чтобы не ждать полминуты.
+var (
+	runtimeSnapshotGap = 30 * time.Second
+	// Пока ни одного снимка не вышло, повторяем часто: сокет ядра поднимается
+	// не мгновенно, и на свежей ноде первая же попытка обычно не проходит.
+	runtimeSnapshotRetry = 2 * time.Second
+)
 
 // Runtime state travels as a whole snapshot, not as a replayable event log. The
 // node already knows its state, so there is nothing for the hub to reconstruct —
@@ -79,13 +84,16 @@ func consumeCoreRuntimeEvents(
 	defer cancel()
 	events, failures := receiveCoreRuntimeEvents(streamCtx, stream)
 
-	ticker := time.NewTicker(runtimeSnapshotGap)
-	defer ticker.Stop()
-
-	// Первый снимок сразу: ждать полминуты после подключения незачем.
-	if err := storeRuntimeSnapshot(ctx, core, store, log); err != nil {
+	// Первый снимок сразу: ждать полминуты после подключения незачем. Если ядро
+	// ещё не слушает, снимка не выйдет — тогда пробуем часто, пока не выйдет.
+	// Раньше промах стоил полные полминуты «ядро не отвечает» на ноде, которая
+	// к этому моменту уже поднялась.
+	captured, err := storeRuntimeSnapshot(ctx, core, store, log)
+	if err != nil {
 		return err
 	}
+	timer := time.NewTimer(snapshotDelay(captured))
+	defer timer.Stop()
 
 	for {
 		select {
@@ -93,10 +101,12 @@ func consumeCoreRuntimeEvents(
 			return ctx.Err()
 		case err := <-failures:
 			return err
-		case <-ticker.C:
-			if err := storeRuntimeSnapshot(ctx, core, store, log); err != nil {
+		case <-timer.C:
+			captured, err = storeRuntimeSnapshot(ctx, core, store, log)
+			if err != nil {
 				return err
 			}
+			timer.Reset(snapshotDelay(captured))
 		case event := <-events:
 			mapped := mapCoreRuntimeEvent(event)
 			if mapped == nil {
@@ -142,25 +152,35 @@ func receiveCoreRuntimeEvents(
 	return events, failures
 }
 
+func snapshotDelay(captured bool) time.Duration {
+	if captured {
+		return runtimeSnapshotGap
+	}
+	return runtimeSnapshotRetry
+}
+
 // storeRuntimeSnapshot кладёт снимок в outbox. Недоступное ядро — не повод
-// прекращать сбор: сокет мог ещё не подняться, следующий тик попробует снова.
+// прекращать сбор: сокет мог ещё не подняться, следующая попытка возьмёт своё.
+//
+// Первый результат — удалось ли снять состояние; ошибка возвращается только
+// когда сломалось само хранилище.
 func storeRuntimeSnapshot(
 	ctx context.Context,
 	core snapshotSource,
 	store *localstore.Store,
 	log *slog.Logger,
-) error {
+) (bool, error) {
 	snapshot, err := core.RuntimeSnapshot(ctx)
 	if err != nil {
 		log.Debug("capture core runtime snapshot", "err", err)
-		return nil
+		return false, nil
 	}
 	batchID := randomID()
 	report := localstore.OutboxEvent{
 		BatchID: batchID,
 		Event:   &nodev1.ReportRequest{BatchId: batchID, Runtime: mapRuntimeSnapshot(snapshot)},
 	}
-	return store.CommitOrderedCollection(nil, []localstore.OutboxEvent{report})
+	return true, store.CommitOrderedCollection(nil, []localstore.OutboxEvent{report})
 }
 
 func mapRuntimeSnapshot(snapshot *corev1.RuntimeSnapshot) *nodev1.RuntimeSnapshot {

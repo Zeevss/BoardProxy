@@ -1,4 +1,11 @@
-FROM golang:1.26-alpine AS build
+# Сборка идёт нативно на платформе сборщика, а под целевую архитектуру Go
+# кросс-компилирует сам — CGO здесь выключен, так что это бесплатно. QEMU
+# остаётся только на рантайм-стадии, где есть `apk add`.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+ARG TARGETARCH
+# Версию агент шлёт хабу как AgentVersion при каждом вызове gRPC, и в панели
+# видно именно её. Без этого аргумента там навсегда остаётся «dev».
+ARG VERSION=dev
 WORKDIR /src
 
 COPY control-plane/contracts/gen/go/go.mod control-plane/contracts/gen/go/go.sum ./control-plane/contracts/gen/go/
@@ -12,8 +19,10 @@ COPY control-plane/contracts/gen/go/ ./control-plane/contracts/gen/go/
 COPY subscribe/ ./subscribe/
 COPY core/ ./core/
 COPY node-agent/ ./node-agent/
-RUN cd core && CGO_ENABLED=0 GOWORK=off go build -trimpath -ldflags "-s -w" -o /out/bproxy ./cmd/bproxy
-RUN cd node-agent && CGO_ENABLED=0 GOWORK=off go build -trimpath -ldflags "-s -w" -o /out/bproxy-node ./cmd/bproxy-node
+RUN cd core && CGO_ENABLED=0 GOWORK=off GOOS=linux GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/bproxy ./cmd/bproxy
+RUN cd node-agent && CGO_ENABLED=0 GOWORK=off GOOS=linux GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/bproxy-node ./cmd/bproxy-node
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates && adduser -D -u 10001 bproxy

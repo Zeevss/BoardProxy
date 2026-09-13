@@ -55,12 +55,7 @@ export function AuthScreen() {
         </div>
 
         <form onSubmit={onSubmit} className="flex flex-col gap-4 rounded-xl border border-line bg-canvas p-5">
-          <div className="flex flex-col gap-1">
-            <h1 className="text-base font-medium">{isSetup ? t.authTitleSetup : t.authTitleLogin}</h1>
-            <p className="text-xs leading-relaxed text-dim">
-              {isSetup ? t.authHintSetup : t.authHintLogin}
-            </p>
-          </div>
+          <h1 className="text-base font-medium">{isSetup ? t.authTitleSetup : t.authTitleLogin}</h1>
 
           <Field label={t.username} htmlFor="username">
             <Input

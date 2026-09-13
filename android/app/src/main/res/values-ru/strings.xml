@@ -57,6 +57,10 @@
     <string name="profiles_error_clipboard_empty">В буфере обмена нет текста</string>
     <string name="profiles_error_invalid_link">Некорректный URL подписки или ключ BoardProxy</string>
     <string name="profiles_error_subscription">Не удалось загрузить подписку</string>
+    <string name="profiles_error_subscription_link">Ссылка неполная — скопируйте её целиком, вместе с хвостом после «#»</string>
+    <string name="profiles_error_subscription_rejected">Подписка отозвана или больше не существует</string>
+    <string name="profiles_error_subscription_empty">В подписке нет ни одного активного ключа</string>
+    <string name="profiles_error_subscription_unreachable">Сервис подписок не отвечает, резервный канал тоже. Попробуйте позже</string>
     <string name="profiles_imported">Профиль добавлен</string>
     <string name="profiles_deleted">Профиль удалён</string>
     <string name="profiles_refresh">Обновить</string>

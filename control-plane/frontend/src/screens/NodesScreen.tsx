@@ -81,7 +81,6 @@ export function NodesScreen() {
     <section className="mx-auto flex max-w-6xl flex-col gap-4.5">
       <ScreenHeader
         title={t.nodes}
-        subtitle={t.nodesSub}
         actions={
           <>
             <Input

@@ -115,7 +115,7 @@ class SubscriptionServiceManager(
     private fun validateForDelivery(update: SubscriptionServiceUpdate) {
         if (update.serviceName.isBlank()) throw InvalidRequest("service name is required")
         if (update.recoveryKeyId.isBlank()) throw InvalidRequest("recovery key id is required")
-        requireHttps(update.publicUrl, "subscription public URL")
+        requireHttpUrl(update.publicUrl, "subscription public URL")
         val yandex = requireHttps(update.yandexEditorUrl, "Yandex editor URL")
         if (yandex.host !in TRUSTED_YANDEX_HOSTS) {
             throw InvalidRequest("Yandex editor URL must use disk.yandex or docs.yandex")
@@ -124,6 +124,25 @@ class SubscriptionServiceManager(
             if (app.platform !in PLATFORMS) throw InvalidRequest("unknown client platform ${app.platform}")
             requireHttps(app.url, "client link for ${app.platform}")
         }
+    }
+
+    /**
+     * Публичный адрес принимается и по http.
+     *
+     * До TLS сервис не доходит: наружу он стоит за реверс-прокси, которая и
+     * держит сертификат, а сам слушает открытый порт — на стенде вовсе на
+     * localhost. Требование https здесь проверяло не защищённость канала, а
+     * лишь то, что оператор написал схему, которой сервис всё равно не увидит.
+     *
+     * У ссылок на приложения и на документ Яндекса смысл другой: их открывает
+     * клиент в интернете, и там https остаётся обязательным.
+     */
+    private fun requireHttpUrl(raw: String, label: String): URI {
+        val uri = runCatching { URI(raw) }.getOrNull()
+        if (uri == null || uri.scheme !in HTTP_SCHEMES || uri.host == null) {
+            throw InvalidRequest("$label must be an absolute http or https URL")
+        }
+        return uri
     }
 
     private fun requireHttps(raw: String, label: String): URI {
@@ -143,5 +162,6 @@ class SubscriptionServiceManager(
     private companion object {
         val TRUSTED_YANDEX_HOSTS = setOf("disk.yandex.ru", "docs.yandex.ru", "disk.yandex.com", "docs.yandex.com")
         val PLATFORMS = setOf("ios", "android", "windows", "macos", "linux")
+        val HTTP_SCHEMES = setOf("http", "https")
     }
 }

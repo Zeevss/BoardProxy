@@ -1,7 +1,12 @@
 import { useState } from 'react'
 import { KeyRound } from 'lucide-react'
 import { useBoards, useNodes } from '@/api/nodes'
-import { useSubscriptionLink, useUserSubscriptions } from '@/api/subscriptions'
+import {
+  useCreateSubscription,
+  useSubscriptionLink,
+  useUserSubscriptions,
+} from '@/api/subscriptions'
+import { useSubscriptionService } from '@/api/settings'
 import {
   useDeleteQuota,
   useDeleteUser,
@@ -20,7 +25,7 @@ import { Button } from '@/components/ui/button'
 import { CopyButton } from '@/components/ui/copy'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { QrCode } from '@/components/ui/qr'
+import { QrDialog } from '@/components/ui/qr'
 import { Select, type SelectOption } from '@/components/ui/select'
 import { Sheet } from '@/components/ui/sheet'
 import { Badge, StatusDot } from '@/components/ui/status'
@@ -415,7 +420,7 @@ function BasicsCard({
         />
       </Field>
 
-      <SubscriptionBlock userId={user.id} />
+      <SubscriptionBlock user={user} />
     </Card>
   )
 }
@@ -427,34 +432,72 @@ function BasicsCard({
  * выключенном сервисе хаб отдаёт `url: null`, и показывать пустую рамку не за чем
  * — доступ в этом случае выдаётся прямыми keylink'ами ниже.
  */
-function SubscriptionBlock({ userId }: { userId: string }) {
+function SubscriptionBlock({ user }: { user: User }) {
   const { t } = useLanguage()
-  const subscriptions = useUserSubscriptions(userId)
+  const { toast } = useToast()
+  const explain = useExplain()
+  const service = useSubscriptionService()
+  const subscriptions = useUserSubscriptions(user.id)
+  const issue = useCreateSubscription()
+  const [qr, setQr] = useState(false)
+
   const first = subscriptions.data?.items[0] ?? null
   const link = useSubscriptionLink(first?.id ?? null)
   const url = link.data?.url ?? null
 
-  if (!url) return null
+  // Пока сервис выключен, ссылку собрать не из чего — доступ выдаётся
+  // прямыми keylink'ами ниже. Молчать об этом нельзя: иначе пустое место
+  // читается как поломка.
+  if (service.data && !service.data.settings.enabled) {
+    return <p className="text-[11.5px] text-muted">{t.subLinkOff}</p>
+  }
+
+  // Сервис включён, но подписки у пользователя ещё нет: включение сервиса
+  // само по себе никому ничего не выдаёт.
+  if (!url) {
+    if (subscriptions.isLoading || !service.data) return null
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-raised px-3.5 py-3">
+        <p className="text-[12.5px] font-semibold">{t.subLink}</p>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={issue.isPending}
+          onClick={() =>
+            issue.mutate(
+              { userId: user.id, name: user.name },
+              {
+                onSuccess: () => toast(t.subLinkIssued),
+                onError: (cause) => toast(explain(cause), 'danger'),
+              },
+            )
+          }
+        >
+          {t.subLinkIssue}
+        </Button>
+      </div>
+    )
+  }
 
   return (
-    <div className="flex flex-wrap items-center gap-3.5 rounded-xl border border-line bg-raised p-3.5">
-      <div className="shrink-0 rounded-[10px] bg-fg p-2">
-        <QrCode value={url} size={92} />
+    <div className="flex flex-col gap-2.5 rounded-xl border border-line bg-raised p-3.5">
+      <div className="flex items-center gap-2">
+        <StatusDot tone="ok" className="size-1.75" />
+        <span className="text-[12.5px] font-semibold">{t.subLink}</span>
       </div>
-      <div className="flex min-w-[200px] flex-1 flex-col gap-2.5">
-        <div className="flex items-center gap-2">
-          <StatusDot tone="ok" className="size-1.75" />
-          <span className="text-[12.5px] font-semibold">{t.subLink}</span>
-        </div>
-        <p className="rounded-lg border border-line bg-surface px-3 py-2.5 font-mono text-[11.5px] break-all text-bright">
-          {url}
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <CopyButton size="xs" variant="secondary" value={url} label={t.subLink}>
-            {t.copy}
-          </CopyButton>
-        </div>
+      <p className="rounded-lg border border-line bg-surface px-3 py-2.5 font-mono text-[11.5px] break-all text-bright">
+        {url}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <CopyButton size="xs" variant="secondary" value={url} label={t.subLink}>
+          {t.copy}
+        </CopyButton>
+        <Button size="xs" variant="raised" onClick={() => setQr(true)}>
+          {t.showQr}
+        </Button>
       </div>
+
+      <QrDialog open={qr} title={t.subLink} value={url} onClose={() => setQr(false)} />
     </div>
   )
 }
@@ -475,7 +518,7 @@ function AccessCard({
   const { t } = useLanguage()
 
   return (
-    <Card title={t.secAccess} hint={t.accessHint}>
+    <Card title={t.secAccess}>
       {loading ? (
         <p className="text-xs text-dim">{t.loading}</p>
       ) : (
@@ -643,7 +686,9 @@ function AdvancedCard({
 function KeysCard({ user }: { user: User }) {
   const { t } = useLanguage()
   const keylinks = useKeylinks(user.id, user.hubIssuedKey)
-  const [qr, setQr] = useState<string | null>(null)
+  // Показанный QR держим целиком: ссылка нужна диалогу и после того, как
+  // строку списка перерисовал пришедший по SSE ответ.
+  const [qr, setQr] = useState<{ title: string; value: string } | null>(null)
 
   const links = (keylinks.data ?? []).filter((item) => item.keylink)
 
@@ -651,7 +696,6 @@ function KeysCard({ user }: { user: User }) {
     <section className="overflow-hidden rounded-xl border border-line bg-canvas">
       <div className="flex items-center justify-between gap-3 border-b border-line-soft px-4 py-3.5">
         <h3 className="text-[13px] font-semibold">{t.secKeys}</h3>
-        <p className="text-[11.5px] text-dim">{t.keylinksHint}</p>
       </div>
 
       {!user.hubIssuedKey ? (
@@ -662,32 +706,34 @@ function KeysCard({ user }: { user: User }) {
         <p className="px-4 py-4.5 text-[12.5px] text-muted">{t.noKeylinks}</p>
       ) : (
         links.map((item) => (
-          <div key={item.nodeId} className="border-b border-line-soft px-4 py-3.5 last:border-b-0">
-            <div className="flex items-center gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[12.5px] font-medium">{item.nodeName}</p>
-                <p className="mt-0.5 truncate font-mono text-[11.5px] text-dim">{item.keylink}</p>
-              </div>
-              <CopyButton size="xs" variant="raised" value={item.keylink!} label={item.nodeName}>
-                {t.copy}
-              </CopyButton>
-              <Button
-                size="xs"
-                variant="raised"
-                aria-expanded={qr === item.nodeId}
-                onClick={() => setQr(qr === item.nodeId ? null : item.nodeId)}
-              >
-                {t.showQr}
-              </Button>
+          <div
+            key={item.nodeId}
+            className="flex items-center gap-3 border-b border-line-soft px-4 py-3.5 last:border-b-0"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[12.5px] font-medium">{item.nodeName}</p>
+              <p className="mt-0.5 truncate font-mono text-[11.5px] text-dim">{item.keylink}</p>
             </div>
-            {qr === item.nodeId ? (
-              <div className="mt-3 flex justify-center rounded-lg bg-fg p-3">
-                <QrCode value={item.keylink!} size={180} />
-              </div>
-            ) : null}
+            <CopyButton size="xs" variant="raised" value={item.keylink!} label={item.nodeName}>
+              {t.copy}
+            </CopyButton>
+            <Button
+              size="xs"
+              variant="raised"
+              onClick={() => setQr({ title: item.nodeName, value: item.keylink! })}
+            >
+              {t.showQr}
+            </Button>
           </div>
         ))
       )}
+
+      <QrDialog
+        open={qr !== null}
+        title={qr?.title ?? t.secKeys}
+        value={qr?.value ?? null}
+        onClose={() => setQr(null)}
+      />
     </section>
   )
 }

@@ -15,6 +15,7 @@ services:
       - control-db:/var/lib/postgresql
 
   hub:
+    image: ghcr.io/zeevss/boardproxy-hub:${BPROXY_IMAGE_TAG:-edge}
     build:
       context: .
       dockerfile: control-plane/server/Dockerfile
@@ -51,6 +52,7 @@ services:
 
   node:
     profiles: ["node"]
+    image: ghcr.io/zeevss/boardproxy-node-agent:${BPROXY_IMAGE_TAG:-edge}
     build:
       context: .
       dockerfile: node-agent/Dockerfile
@@ -68,6 +70,7 @@ services:
 
   subscribe:
     profiles: ["subscribe"]
+    image: ghcr.io/zeevss/boardproxy-subscribe:${BPROXY_IMAGE_TAG:-edge}
     build:
       context: ./subscribe
     restart: unless-stopped

@@ -62,7 +62,6 @@ export function UsersScreen() {
     <section className="mx-auto flex max-w-6xl flex-col gap-4.5">
       <ScreenHeader
         title={t.users}
-        subtitle={t.usersSub}
         actions={
           <>
             <Input

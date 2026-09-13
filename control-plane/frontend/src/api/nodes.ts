@@ -25,13 +25,18 @@ export function useNodes(query?: string) {
 /**
  * Наблюдаемое состояние флота. Обновляется чаще списка нод: сам список меняется
  * только правкой оператора, а вот отчёты агентов приходят постоянно.
+ *
+ * `live` включается там, где на глазах ждут изменения — в мастере, пока нода
+ * дозванивается. Пятнадцать секунд фонового опроса складывались с пятнадцатью
+ * секундами между отчётами агента, и шкала доходила до конца почти через
+ * полминуты после того, как нода на самом деле подключилась.
  */
-export function useAgents() {
+export function useAgents(live = false) {
   return useQuery({
     queryKey: keys.agents,
     queryFn: () => api.get<Agent[]>('/agents'),
-    refetchInterval: 15_000,
-    staleTime: 10_000,
+    refetchInterval: live ? 2_000 : 15_000,
+    staleTime: live ? 0 : 10_000,
   })
 }
 
@@ -180,7 +185,7 @@ export function useDeleteBoard() {
   })
 }
 
-type BoardPatch = Partial<Pick<Board, 'name' | 'hash' | 'state' | 'maxLanes' | 'apiBase'>>
+type BoardPatch = Partial<Pick<Board, 'name' | 'hash' | 'state' | 'maxLanes'>>
 
 /**
  * Правка доски.
@@ -201,7 +206,8 @@ export function useUpdateBoard() {
           name: patch.name ?? board.name,
           hash: patch.hash ?? board.hash,
           hubSlide: board.hubSlide,
-          apiBase: patch.apiBase === undefined ? board.apiBase : patch.apiBase,
+          // Панель это поле не правит, но PUT заменяет запись целиком.
+          apiBase: board.apiBase,
           guestName: board.guestName,
           state: patch.state ?? board.state,
           maxLanes: patch.maxLanes ?? board.maxLanes,

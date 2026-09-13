@@ -81,7 +81,6 @@ export function TrafficScreen() {
     <section className="mx-auto flex max-w-6xl flex-col gap-4">
       <ScreenHeader
         title={t.traffic}
-        subtitle={t.trafficSub}
         actions={
           <div className="flex h-8.5 gap-[3px] rounded-[9px] border border-line bg-canvas p-[3px]">
             {(Object.keys(RANGES) as Range[]).map((key) => (
@@ -263,7 +262,7 @@ export function TrafficScreen() {
       </div>
 
       {!loading && total === 0 && nodeRows.length === 0 ? (
-        <EmptyState>{t.noTrafficHint}</EmptyState>
+        <EmptyState>{t.noTraffic}</EmptyState>
       ) : null}
 
       <UserSheet user={selected} onClose={() => setOpenUser(null)} />

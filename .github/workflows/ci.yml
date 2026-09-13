@@ -1,0 +1,443 @@
+name: CI
+
+# Теги собираются наравне с main: релиз — это тот же прогон, только с другими
+# именами образов. Отдельный release-workflow пришлось бы дублировать целиком,
+# потому что тег может указывать на произвольный коммит и тесты всё равно
+# обязаны пройти заново.
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # На main и тегах прогон доводится до конца: он публикует образы.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  meta:
+    name: Параметры сборки
+    runs-on: ubuntu-latest
+    outputs:
+      owner: ${{ steps.compute.outputs.owner }}
+      version: ${{ steps.compute.outputs.version }}
+      push: ${{ steps.compute.outputs.push }}
+    steps:
+      - id: compute
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # В выражениях Actions нет toLower(), а GHCR принимает только нижний
+          # регистр. Владелец здесь «Zeevss», поэтому приводим явно: полагаться
+          # на скрытую нормализацию внутри metadata-action нельзя — тот же
+          # owner нужен и в других местах.
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+          short="${GITHUB_SHA::7}"
+          case "$GITHUB_REF" in
+            refs/tags/v*)    version="${GITHUB_REF#refs/tags/v}" ;;
+            refs/heads/main) version="edge-$short" ;;
+            *)               version="pr-$short" ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # Пулл-реквесты собираются, но ничего не публикуют. Токен у форков
+          # всё равно только на чтение.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "push=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  go:
+    name: Go — core, node-agent, subscribe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          # go.work.sum обязателен: без него изменение графа workspace
+          # не инвалидирует кэш модулей.
+          cache-dependency-path: |
+            go.work.sum
+            core/go.sum
+            node-agent/go.sum
+            subscribe/go.sum
+            control-plane/contracts/gen/go/go.sum
+
+      - name: core
+        working-directory: core
+        run: go vet ./... && go test ./...
+      - name: node-agent
+        working-directory: node-agent
+        run: go vet ./... && go test ./...
+      - name: subscribe
+        working-directory: subscribe
+        run: go vet ./... && go test ./...
+
+      # Тесты идут в режиме workspace, а образы собираются с GOWORK=off по
+      # относительным replace-директивам. Эти два режима расходятся молча:
+      # CI зелёный, сборка образа красная.
+      - name: Сборка в module-режиме, как в Dockerfile
+        run: |
+          set -euo pipefail
+          (cd core && GOWORK=off go build ./...)
+          (cd node-agent && GOWORK=off go build ./...)
+          (cd subscribe && go build ./...)
+
+      # Ловит поломку мультиарха до того, как до неё дойдёт сборка образов.
+      - name: Кросс-компиляция под arm64
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: arm64
+        run: |
+          set -euo pipefail
+          (cd core && GOWORK=off go build -o /dev/null ./cmd/bproxy)
+          (cd node-agent && GOWORK=off go build -o /dev/null ./cmd/bproxy-node)
+          (cd subscribe && go build -o /dev/null ./cmd/subscribe)
+
+  hub:
+    name: Хаб — Kotlin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # В build.gradle.kts нет блока toolchain — только jvmTarget = 21,
+      # поэтому версию JDK обязан задавать раннер.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Тесты репозиториев поднимают testcontainer с postgres и при отсутствии
+      # демона Docker падают, а не пропускаются. На ubuntu-latest он есть —
+      # переносить job на раннер без Docker нельзя.
+      - name: test + bootJar
+        working-directory: control-plane/server
+        run: ./gradlew test bootJar --no-daemon
+
+  frontend:
+    name: Панель
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: control-plane/frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: control-plane/frontend/package-lock.json
+      # vite и tsc лежат в devDependencies.
+      - run: npm ci --include=dev
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+
+  images:
+    name: Образ ${{ matrix.name }}
+    needs: [meta, go, hub, frontend]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: hub
+            context: .
+            dockerfile: control-plane/server/Dockerfile
+          - name: node-agent
+            context: .
+            dockerfile: node-agent/Dockerfile
+          - name: subscribe
+            context: ./subscribe
+            dockerfile: ./subscribe/Dockerfile
+    steps:
+      - uses: actions/checkout@v5
+
+      # Стадии сборки прибиты к платформе сборщика и идут нативно, но в
+      # рантайм-стадиях hub и node-agent есть RUN (apt-get / apk), а он
+      # выполняется уже в целевой архитектуре.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        if: needs.meta.outputs.push == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: tags
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ needs.meta.outputs.owner }}/boardproxy-${{ matrix.name }}
+          tags: |
+            type=raw,value=edge,enable={{is_default_branch}}
+            type=sha,prefix=main-,format=short,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=pr
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ needs.meta.outputs.push == 'true' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: ${{ steps.tags.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.meta.outputs.version }}
+          # scope обязателен: три ветки матрицы с общим кэшем затирали бы
+          # друг друга на каждом прогоне.
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  # --- Артефакты -----------------------------------------------------------
+  #
+  # Тяжёлые сборки (macOS, Windows, Android) идут только на main и тегах:
+  # пулл-реквесту они ничего не добавляют, а раннеры под macOS и Windows
+  # тарифицируются с коэффициентом 10x и 2x, если репозиторий приватный.
+
+  core-binaries:
+    name: Бинарники core
+    needs: [meta, go]
+    if: needs.meta.outputs.push == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            go.work.sum
+            core/go.sum
+            subscribe/go.sum
+
+      # CGO выключен, поэтому все пять целей кросс-компилируются здесь же за
+      # секунды — отдельные раннеры под macOS и Windows ради этого не нужны.
+      - name: Сборка под пять целей
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cd core
+          while read -r os arch; do
+            case "$os" in
+              windows) ext=".exe" ;;
+              *)       ext="" ;;
+            esac
+            out="../artifacts/bproxy-${os}-${arch}${ext}"
+            echo "→ $out"
+            CGO_ENABLED=0 GOWORK=off GOOS="$os" GOARCH="$arch" \
+              go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
+              -o "$out" ./cmd/bproxy
+          done <<'TARGETS'
+          linux amd64
+          linux arm64
+          darwin amd64
+          darwin arm64
+          windows amd64
+          TARGETS
+          ls -la ../artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-binaries
+          path: artifacts/*
+          if-no-files-found: error
+
+  desktop:
+    name: Десктоп — ${{ matrix.label }}
+    needs: [meta, go]
+    if: needs.meta.outputs.push == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS
+            runner: macos-latest
+            platform: darwin/universal
+            artifact: boardproxy-macos-universal
+          - label: Windows
+            runner: windows-latest
+            platform: windows/amd64
+            artifact: boardproxy-windows-amd64
+          - label: Linux
+            runner: ubuntu-latest
+            platform: linux/amd64
+            artifact: boardproxy-linux-amd64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            go.work.sum
+            desktop-app/go.sum
+
+      # Wails собирает фронтенд через pnpm — см. frontend:install в wails.json.
+      - uses: pnpm/action-setup@v4
+        with:
+          # Совпадает с версией разработчика, которой поддерживается
+          # pnpm-lock.yaml (формат 9.0).
+          version: 11
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      # WebKit нужен только сборке под Linux; на macOS и Windows движок свой.
+      - name: Системные зависимости WebKit
+        if: matrix.runner == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      # Версия CLI берётся из go.mod десктопа: разъезд между ними ломает сборку.
+      - name: Установка wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+
+      - name: Сборка
+        working-directory: desktop-app
+        run: wails build -platform ${{ matrix.platform }} -clean -nocolour
+
+      # .app — это каталог, поэтому упаковываем его сами: ditto сохраняет
+      # права и симлинки внутри бандла, без которых он не запустится.
+      - name: Упаковка
+        working-directory: desktop-app
+        run: |
+          set -euo pipefail
+          mkdir -p ../artifacts
+          case "${{ matrix.platform }}" in
+            darwin/*)
+              ditto -c -k --keepParent build/bin/boardproxy.app \
+                "../artifacts/${{ matrix.artifact }}.zip"
+              ;;
+            windows/*)
+              cp build/bin/boardproxy.exe "../artifacts/${{ matrix.artifact }}.exe"
+              ;;
+            *)
+              cp build/bin/boardproxy "../artifacts/${{ matrix.artifact }}"
+              ;;
+          esac
+          ls -la ../artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: artifacts/*
+          if-no-files-found: error
+
+  android:
+    name: Android APK
+    needs: [meta, go]
+    if: needs.meta.outputs.push == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            go.work.sum
+            core/go.sum
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v3
+
+      # compileSdk 37 свежее того, что предустановлено на раннере.
+      - name: Компоненты Android SDK
+        run: sdkmanager --install "platforms;android-37" "build-tools;36.0.0"
+
+      # NDK нужен и gomobile init, и самому bind. Путь к нему приходит от
+      # раннера обычной переменной окружения, а не через контекст env, поэтому
+      # прокидываем его явно — в выражениях ${{ env.* }} её не видно.
+      - name: Путь к NDK
+        run: echo "ANDROID_NDK_HOME=${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_ROOT}" >> "$GITHUB_ENV"
+
+      # Версия gomobile прибита к той, что стоит в core/go.mod рядом с
+      # директивой `tool ... gobind`: расхождение между ними даёт битый bind.
+      - name: Установка gomobile
+        run: |
+          set -euo pipefail
+          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260709172247-6129f5bee9d5
+          gomobile init
+
+      # AAR намеренно не лежит в репозитории: он собирается из core и иначе
+      # молча отстаёт от него.
+      - name: Сборка AAR из core
+        working-directory: core
+        run: make mobile-aar MOBILE_OUTPUT=../android/app/libs/boardproxy.aar
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Debug-вариант, а не release: подписи у проекта нет, а неподписанный
+      # release-APK невозможно установить. Debug-ключ хотя бы ставится.
+      - name: Сборка APK
+        working-directory: android
+        run: ./gradlew assembleMobileDebug --no-daemon
+
+      - name: Подготовка артефакта
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cp android/app/build/outputs/apk/mobile/debug/app-mobile-debug.apk \
+            "artifacts/boardproxy-android-mobile-${VERSION}.apk"
+          ls -la artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boardproxy-android
+          path: artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: Релиз
+    needs: [meta, images, core-binaries, desktop, android]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - run: ls -laR dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            Образы: `ghcr.io/${{ needs.meta.outputs.owner }}/boardproxy-hub:${{ needs.meta.outputs.version }}`,
+            `…-node-agent`, `…-subscribe` (linux/amd64 и linux/arm64).
+
+            Приложения ничем не подписаны. macOS: снять карантин —
+            `xattr -dr com.apple.quarantine BoardProxy.app`.
+            Android: APK собран debug-ключом.

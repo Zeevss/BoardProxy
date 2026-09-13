@@ -42,6 +42,14 @@ func (s *Service) connect(ctx context.Context) error {
 	// The initial sync covers the case where the configuration changed while the
 	// agent was down: no notice will arrive for a change that already happened.
 	s.syncConfig(ctx, client)
+	// Сразу отчитываемся о том, что подключились и что применили.
+	//
+	// Раньше первый отчёт уходил только по тику через пятнадцать секунд, и всё
+	// это время хаб честно считал ноду не выходившей на связь. В мастере
+	// добавления это выглядело как «нода не отвечает» у ноды, которая уже
+	// работает. Отчёт после подключения стоит один вызов и снимает задержку
+	// целиком.
+	s.sendReports(ctx, client)
 
 	notices := receiveNotices(stream)
 	reports := time.NewTicker(reportInterval)
@@ -62,12 +70,20 @@ func (s *Service) connect(ctx context.Context) error {
 				return received.err
 			}
 			if received.notice.GetRevision() != s.state.Revision {
-				s.syncConfig(ctx, client)
+				// Отчёт сразу после применения: иначе хаб узнаёт о новой
+				// ревизии на ноде только со следующим тиком, и панель до
+				// полуминуты показывает расхождение desired / applied,
+				// которого уже нет.
+				if s.syncConfig(ctx, client) {
+					s.sendReports(ctx, client)
+				}
 			}
 		case <-reconcile.C:
 			// Guards against a lost notice: without it a dropped signal would
 			// leave the node on a stale configuration until someone else edits.
-			s.syncConfig(ctx, client)
+			if s.syncConfig(ctx, client) {
+				s.sendReports(ctx, client)
+			}
 		case <-reports.C:
 			s.sendReports(ctx, client)
 		case <-s.store.Changes():
@@ -101,29 +117,44 @@ func receiveNotices(stream grpc.ServerStreamingClient[nodev1.ConfigNotice]) <-ch
 
 // syncConfig fetches and applies the current configuration. Failures are logged
 // and left for the next reconcile: retrying is the node's responsibility.
-func (s *Service) syncConfig(ctx context.Context, client nodev1.NodeControlServiceClient) {
+//
+// Возвращает true, если наблюдаемое хабом состояние изменилось — применилась
+// новая ревизия или изменилась ошибка применения. Вызывающий по этому признаку
+// решает, отчитываться ли немедленно, а не ждать очередного тика.
+func (s *Service) syncConfig(ctx context.Context, client nodev1.NodeControlServiceClient) bool {
 	document, err := client.FetchConfig(ctx, &nodev1.FetchConfigRequest{NodeId: s.identity.NodeID})
 	if err != nil {
 		s.log.Warn("fetch config", "err", err)
-		return
+		return false
 	}
+	previous, failure := s.state, s.applyError
 	if err := s.applyConfig(ctx, document); err != nil {
 		s.applyError = err.Error()
 		s.log.Warn("apply config", "revision", document.GetRevision(), "err", err)
-		return
+		return s.applyError != failure
 	}
 	s.applyError = ""
+	return s.state != previous || failure != ""
 }
 
+// applyConfig принимает конфигурацию, которую хаб отдаёт прямо сейчас.
+//
+// Сохранённая отметка — только оптимизация, чтобы не применять то же самое
+// заново. Источник истины здесь хаб: FetchConfig читает Postgres напрямую,
+// кэша и реплик на этом пути нет, и отдать устаревший документ ему неоткуда.
+//
+// Поэтому ревизия младше сохранённой означает не «документ протух», а «база
+// хаба пересоздана и нумерация началась заново». Раньше на этом стоял отказ
+// без выхода: том ноды переживал сброс базы, и она навсегда застревала на
+// «hub offered a stale revision». Теперь такое расхождение — повод
+// пересинхронизироваться, а не повод сдаться.
 func (s *Service) applyConfig(ctx context.Context, document *nodev1.ConfigDocument) error {
-	if document.GetRevision() < s.state.Revision {
-		return errors.New("hub offered a stale revision")
-	}
-	if document.GetRevision() == s.state.Revision {
-		if document.GetConfigSha256() != s.state.SHA256 {
-			return errors.New("same revision carries a different config hash")
-		}
+	if document.GetRevision() == s.state.Revision && document.GetConfigSha256() == s.state.SHA256 {
 		return nil
+	}
+	if document.GetRevision() <= s.state.Revision {
+		s.log.Warn("hub revision sequence changed; resynchronising",
+			"applied", s.state.Revision, "offered", document.GetRevision())
 	}
 	digest := sha256.Sum256(document.GetConfigToml())
 	if hex.EncodeToString(digest[:]) != document.GetConfigSha256() {

@@ -9,7 +9,15 @@ plugins {
 }
 
 group = "io.boardproxy"
-version = "0.1.0-SNAPSHOT"
+
+/**
+ * Версия приходит из CI как `-PappVersion=…`, иначе остаётся снапшотной.
+ *
+ * Имя свойства намеренно не `version`: `-Pversion` затеняет `project.version`,
+ * а присваивание в скрипте выполняется после инъекции свойств и молча его
+ * перетирает — выглядело бы как «флаг не работает».
+ */
+version = providers.gradleProperty("appVersion").getOrElse("0.1.0-SNAPSHOT")
 
 val grpcVersion = "1.76.0"
 val protobufVersion = "4.32.1"

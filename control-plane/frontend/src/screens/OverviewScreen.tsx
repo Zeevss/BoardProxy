@@ -87,7 +87,6 @@ export function OverviewScreen() {
     <section className="mx-auto flex max-w-6xl flex-col gap-5">
       <ScreenHeader
         title={t.overview}
-        subtitle={t.overviewSub}
         actions={
           <>
             <Button variant="outline" onClick={() => setCreatingNode(true)}>

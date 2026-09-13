@@ -13,6 +13,8 @@ import ru.zevsus.proxy.boardvpn.domain.model.BoardProxySubscriptionUrl
 import ru.zevsus.proxy.boardvpn.domain.model.VpnProfile
 import ru.zevsus.proxy.boardvpn.domain.model.VpnProfileId
 import ru.zevsus.proxy.boardvpn.domain.repository.VpnProfileRepository
+import ru.zevsus.proxy.boardvpn.domain.repository.SubscriptionFailure
+import ru.zevsus.proxy.boardvpn.domain.repository.SubscriptionFailureReason
 import ru.zevsus.proxy.boardvpn.domain.repository.SubscriptionRepository
 import ru.zevsus.proxy.boardvpn.domain.subscription.SubscriptionSyncManager
 
@@ -93,9 +95,9 @@ class ProfilesViewModel(
                     profileRepository.selectProfile(profile.id)
                     message.value = ProfilesMessage.ProfileImported
                 }
-                .onFailure {
+                .onFailure { cause ->
                     message.value = if (isSubscriptionUrl(rawValue)) {
-                        ProfilesMessage.SubscriptionFailed
+                        ProfilesMessage.SubscriptionFailed(cause.subscriptionReason())
                     } else {
                         ProfilesMessage.InvalidLink
                     }
@@ -136,8 +138,10 @@ class ProfilesViewModel(
                     }
                     editorState.value = null
                 }
-                .onFailure {
+                .onFailure { cause ->
                     editorState.value = editor.copy(keylinkError = true, resolving = false)
+                    // Одной красной рамки мало: по ней не понять, что чинить.
+                    message.value = ProfilesMessage.SubscriptionFailed(cause.subscriptionReason())
                 }
         }
     }
@@ -203,4 +207,17 @@ class ProfilesViewModel(
 
     private fun isSubscriptionUrl(raw: String): Boolean =
         runCatching { BoardProxySubscriptionUrl.fromRaw(raw.trim()) }.isSuccess
+}
+
+/**
+ * Причина отказа для показа человеку.
+ *
+ * `BoardProxySubscriptionUrl.fromRaw` отвергает ссылку без хвоста `#bp1=…` ещё
+ * до всякой сети, поэтому её [IllegalArgumentException] — это тоже LINK, а не
+ * неизвестная ошибка.
+ */
+private fun Throwable.subscriptionReason(): SubscriptionFailureReason = when (this) {
+    is SubscriptionFailure -> reason
+    is IllegalArgumentException -> SubscriptionFailureReason.LINK
+    else -> SubscriptionFailureReason.UNKNOWN
 }

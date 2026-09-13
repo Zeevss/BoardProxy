@@ -12,6 +12,7 @@ import org.springframework.security.config.http.SessionCreationPolicy
 import org.springframework.security.web.SecurityFilterChain
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter
 import org.springframework.security.web.util.matcher.RequestMatcher
+import jakarta.servlet.DispatcherType
 import jakarta.servlet.http.HttpServletRequest
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.web.cors.CorsConfiguration
@@ -61,7 +62,16 @@ class HttpSecurityConfiguration {
             .formLogin { it.disable() }
             .httpBasic { it.disable() }
             .authorizeHttpRequests {
-                it.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                // ASYNC и ERROR — продолжение уже разрешённого запроса, а не
+                // новый запрос. Авторизация с шестой версии Spring Security
+                // отрабатывает на всех типах диспатча, а наши фильтры —
+                // OncePerRequestFilter — на них не повторяются, поэтому
+                // аутентификации в контексте нет. Единственный асинхронный
+                // эндпоинт здесь — SSE-поток панели: при его завершении
+                // авторизация отказывала в уже отданный ответ, и в логе
+                // копились «Access Denied» с «response is already committed».
+                it.dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
+                    .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                     .requestMatchers("/", "/index.html", "/assets/**", "/favicon.ico", "/favicon.svg").permitAll()
                     .requestMatchers(
                         HttpMethod.GET,

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -58,7 +59,7 @@ func (a *App) ParseLink(raw string) (LinkInfo, error) {
 
 	snapshot, err := a.fetchSubscription(raw)
 	if err != nil {
-		return LinkInfo{}, fmt.Errorf("не удалось получить подписку: %w", err)
+		return LinkInfo{}, explainSubscriptionFailure(err)
 	}
 	if _, err := selectSubscriptionKey(snapshot); err != nil {
 		return LinkInfo{}, err
@@ -95,7 +96,7 @@ func (a *App) resolveConnectionLink(raw string) (string, protocol.Key, error) {
 	}
 	snapshot, err := a.fetchSubscription(raw)
 	if err != nil {
-		return "", protocol.Key{}, fmt.Errorf("не удалось обновить подписку: %w", err)
+		return "", protocol.Key{}, explainSubscriptionFailure(err)
 	}
 	key, err := selectSubscriptionKey(snapshot)
 	if err != nil {
@@ -112,6 +113,37 @@ func (a *App) fetchSubscription(raw string) (protocol.Subscription, error) {
 	ctx, cancel := context.WithTimeout(base, subscriptionResolveTimeout)
 	defer cancel()
 	return a.subscriptions.Fetch(ctx, raw)
+}
+
+// explainSubscriptionFailure переводит код отказа SDK в то, что человек может
+// сделать руками.
+//
+// Раньше сюда прилетал голый текст ошибки Go: человек видел «subscription
+// endpoint returned HTTP 502» или «recovery fragment is missing» и не мог
+// отличить обрезанную ссылку от лежащего сервиса. Первое лечится повторным
+// копированием, второе — ожиданием, и это разные советы.
+func explainSubscriptionFailure(err error) error {
+	var failure *subscribesdk.FetchError
+	if !errors.As(err, &failure) {
+		return fmt.Errorf("не удалось получить подписку: %w", err)
+	}
+	switch failure.Reason {
+	case subscribesdk.ReasonLink:
+		return errors.New(
+			"ссылка неполная: скопируйте её целиком, вместе с хвостом после «#». " +
+				"Мессенджеры и почта часто его обрезают",
+		)
+	case subscribesdk.ReasonRejected:
+		return errors.New("подписка отозвана или больше не существует — запросите новую ссылку")
+	case subscribesdk.ReasonEmpty:
+		return errors.New("в подписке нет ни одного активного ключа — обратитесь к тому, кто её выдал")
+	case subscribesdk.ReasonUnreachable:
+		return errors.New(
+			"сервис подписок не отвечает, резервный канал тоже. Проверьте интернет и попробуйте позже",
+		)
+	default:
+		return fmt.Errorf("не удалось получить подписку: %w", err)
+	}
 }
 
 func selectSubscriptionKey(snapshot protocol.Subscription) (protocol.Key, error) {

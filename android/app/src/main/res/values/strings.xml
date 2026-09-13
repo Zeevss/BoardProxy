@@ -59,6 +59,10 @@
     <string name="profiles_error_clipboard_empty">Clipboard does not contain text</string>
     <string name="profiles_error_invalid_link">The value is not a valid subscription URL or BoardProxy key</string>
     <string name="profiles_error_subscription">Could not load the subscription</string>
+    <string name="profiles_error_subscription_link">The link is incomplete — copy all of it, including the tail after “#”</string>
+    <string name="profiles_error_subscription_rejected">The subscription was revoked or no longer exists</string>
+    <string name="profiles_error_subscription_empty">The subscription has no active keys</string>
+    <string name="profiles_error_subscription_unreachable">The subscription service is not responding, nor is the backup channel. Try again later</string>
     <string name="profiles_imported">Profile imported</string>
     <string name="profiles_deleted">Profile deleted</string>
     <string name="profiles_refresh">Refresh</string>

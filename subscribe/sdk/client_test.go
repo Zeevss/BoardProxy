@@ -3,9 +3,11 @@ package sdk
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/Zeevss/BoardProxy/subscribe/protocol"
 )
@@ -46,6 +48,95 @@ func TestFetchDoesNotBypassTerminalHTTPStatusWithCache(t *testing.T) {
 
 	if _, err := client.Fetch(context.Background(), rawURL); err == nil {
 		t.Fatal("expected terminal HTTP 410 error")
+	}
+}
+
+// Клиент не должен разбирать текст ошибки, чтобы понять, что показать человеку:
+// у каждого отказа свой устойчивый код, и для каждого нужен свой совет.
+func TestFetchClassifiesFailures(t *testing.T) {
+	valid := testSubscriptionURL(t)
+
+	cases := []struct {
+		name   string
+		url    string
+		client *Client
+		want   Reason
+	}{
+		{
+			// Хвост `#bp1=…` теряют мессенджеры и копирование по двойному
+			// щелчку. Сети тут нет вовсе: отказ приходит мгновенно.
+			name: "ссылка без капсулы",
+			url:  "https://subscribe.example.com/s/bps_token",
+			want: ReasonLink,
+		},
+		{
+			name: "сервис отказал",
+			url:  valid,
+			client: &Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) *http.Response {
+				return response(http.StatusGone, "revoked")
+			})}},
+			want: ReasonRejected,
+		},
+		{
+			// 502 — не отказ, а недоступность: клиент идёт в резервный канал,
+			// а тот в тесте без сети тоже не отвечает.
+			name: "оба канала молчат",
+			url:  valid,
+			client: &Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) *http.Response {
+				return response(http.StatusBadGateway, "down")
+			})}},
+			want: ReasonUnreachable,
+		},
+		{
+			name: "подписка без включённых ключей",
+			url:  valid,
+			client: &Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) *http.Response {
+				return response(http.StatusOK, `{
+                    "version":1,"id":"family","name":"Family","state":"enabled","revision":"r1",
+                    "keys":[{"id":"phone","nodeId":"node-1","userId":"alice","state":"disabled","keylink":"bproxy://one"}]}`)
+			})}},
+			want: ReasonEmpty,
+		},
+	}
+
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			client := item.client
+			if client == nil {
+				client = &Client{}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			_, err := client.Fetch(ctx, item.url)
+
+			var failure *FetchError
+			if !errors.As(err, &failure) {
+				t.Fatalf("Fetch() = %v, ждали *FetchError", err)
+			}
+			if failure.Reason != item.want {
+				t.Fatalf("Reason = %q, ждали %q (ошибка: %v)", failure.Reason, item.want, err)
+			}
+		})
+	}
+}
+
+// Пустая подписка получена честно: имя и остаток трафика показать можно,
+// подключиться — нельзя. Поэтому снимок отдаётся вместе с ошибкой.
+func TestFetchReturnsTheSnapshotOfAnEmptySubscription(t *testing.T) {
+	client := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) *http.Response {
+		return response(http.StatusOK, `{
+            "version":1,"id":"family","name":"Family","state":"enabled","revision":"r1","keys":[]}`)
+	})}}
+
+	snapshot, err := client.Fetch(context.Background(), testSubscriptionURL(t))
+
+	var failure *FetchError
+	if !errors.As(err, &failure) || failure.Reason != ReasonEmpty {
+		t.Fatalf("Fetch() = %v, ждали ReasonEmpty", err)
+	}
+	if snapshot.Name != "Family" {
+		t.Fatalf("Name = %q, снимок обязан дойти вместе с ошибкой", snapshot.Name)
 	}
 }
 

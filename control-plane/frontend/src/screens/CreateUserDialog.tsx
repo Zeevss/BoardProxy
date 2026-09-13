@@ -117,7 +117,6 @@ export function CreateUserDialog({ open, onClose }: { open: boolean; onClose: ()
         }
       }}
       title={t.newUserTitle}
-      subtitle={t.newUserHint}
       footer={
         <>
           <Button variant="outline" disabled={busy} onClick={onClose}>
@@ -148,7 +147,7 @@ export function CreateUserDialog({ open, onClose }: { open: boolean; onClose: ()
         />
       </ModalSection>
 
-      <ModalSection title={t.secAccess} hint={t.accessHint}>
+      <ModalSection title={t.secAccess}>
         <div className="flex flex-wrap gap-2">
           {(nodes.data?.items ?? []).map((node) => {
             const on = selected.has(node.id)

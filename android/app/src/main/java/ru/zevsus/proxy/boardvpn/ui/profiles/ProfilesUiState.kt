@@ -1,6 +1,7 @@
 package ru.zevsus.proxy.boardvpn.ui.profiles
 
 import ru.zevsus.proxy.boardvpn.domain.model.VpnProfile
+import ru.zevsus.proxy.boardvpn.domain.repository.SubscriptionFailureReason
 import ru.zevsus.proxy.boardvpn.domain.model.VpnProfileId
 
 /** Open editor dialog, either creating a profile or changing an existing one. */
@@ -19,7 +20,10 @@ data class ProfileEditorState(
 sealed interface ProfilesMessage {
     data object ClipboardEmpty : ProfilesMessage
     data object InvalidLink : ProfilesMessage
-    data object SubscriptionFailed : ProfilesMessage
+
+    /** Причина нужна здесь целиком: у каждой свой совет, что делать дальше. */
+    data class SubscriptionFailed(val reason: SubscriptionFailureReason) : ProfilesMessage
+
     data object ProfileImported : ProfilesMessage
     data object ProfileDeleted : ProfilesMessage
     data object SubscriptionsUpdated : ProfilesMessage

@@ -48,37 +48,93 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("subscription endpoint returned HTTP %d: %s", e.Status, e.Detail)
 }
 
+// Reason — устойчивый код причины отказа.
+//
+// Клиенты показывают человеку не текст ошибки, а собственную формулировку по
+// этому коду: текст здесь английский, технический и для интерфейса не годится.
+// Разбирать его строкой на стороне клиента — тем более. Набор намеренно
+// короткий: каждый код требует от человека своего действия.
+type Reason string
+
+const (
+	// ReasonLink — ссылка не разбирается. Чаще всего у неё отрезан хвост
+	// `#bp1=…`: его теряют мессенджеры и копирование по двойному щелчку.
+	// Сеть при этом не трогалась вовсе.
+	ReasonLink Reason = "link"
+	// ReasonRejected — сервис ответил и отказал: подписки нет, она отозвана
+	// или выключена. Повторять бессмысленно, оба канала согласны.
+	ReasonRejected Reason = "rejected"
+	// ReasonUnreachable — не ответили оба канала, и подходящего снимка в кэше
+	// не нашлось. Это единственный код, который стоит повторить позже.
+	ReasonUnreachable Reason = "unreachable"
+	// ReasonEmpty — подписка получена, но включённых ключей в ней нет.
+	// Подключаться не к чему, хотя сама подписка жива.
+	ReasonEmpty Reason = "empty"
+)
+
+// FetchError несёт код причины рядом с исходной ошибкой: код — для интерфейса,
+// причина — для логов и отладки.
+type FetchError struct {
+	Reason Reason
+	Cause  error
+}
+
+func (e *FetchError) Error() string { return fmt.Sprintf("%s: %v", e.Reason, e.Cause) }
+
+func (e *FetchError) Unwrap() error { return e.Cause }
+
+// Fetch возвращает снимок подписки. При ReasonEmpty снимок отдаётся вместе с
+// ошибкой: он получен честно, и показать из него имя и остаток трафика можно —
+// нельзя только подключиться.
 func (c *Client) Fetch(ctx context.Context, subscriptionURL string) (protocol.Subscription, error) {
 	requestURL, _, capsule, err := protocol.ParseURL(subscriptionURL)
 	if err != nil {
-		return protocol.Subscription{}, err
+		return protocol.Subscription{}, &FetchError{Reason: ReasonLink, Cause: err}
 	}
 
 	primary, primaryErr := c.fetchHTTP(ctx, requestURL.String())
 	if primaryErr == nil {
 		c.store(subscriptionURL, primary)
-		return primary, nil
+		return primary, usable(primary)
 	}
 	var statusErr *StatusError
 	if errors.As(primaryErr, &statusErr) && statusErr.Status >= 400 && statusErr.Status < 500 {
-		return protocol.Subscription{}, primaryErr
+		return protocol.Subscription{}, &FetchError{Reason: ReasonRejected, Cause: primaryErr}
 	}
 
 	fallback, fallbackErr := c.fetchYandex(ctx, capsule)
 	if fallbackErr == nil {
 		c.store(subscriptionURL, fallback)
-		return fallback, nil
+		return fallback, usable(fallback)
 	}
 	var recoveryErr *RecoveryError
 	if errors.As(fallbackErr, &recoveryErr) && recoveryErr.terminal {
-		return protocol.Subscription{}, recoveryErr
+		return protocol.Subscription{}, &FetchError{Reason: ReasonRejected, Cause: recoveryErr}
 	}
 	if c.Cache != nil {
 		if cached, ok := c.Cache.Load(subscriptionURL); ok {
-			return cached, nil
+			return cached, usable(cached)
 		}
 	}
-	return protocol.Subscription{}, errors.Join(primaryErr, fallbackErr)
+	return protocol.Subscription{}, &FetchError{
+		Reason: ReasonUnreachable,
+		Cause:  errors.Join(primaryErr, fallbackErr),
+	}
+}
+
+// usable отделяет живую подписку от пустой.
+//
+// Подписка без единого включённого ключа доходит и проверку формата, и
+// подпись: она просто ни к чему не ведёт. Раньше такая доезжала до интерфейса
+// как успех, и клиент показывал пустой список без всякого объяснения.
+func usable(value protocol.Subscription) error {
+	if len(value.EnabledKeys()) == 0 {
+		return &FetchError{
+			Reason: ReasonEmpty,
+			Cause:  errors.New("subscription carries no enabled keys"),
+		}
+	}
+	return nil
 }
 
 func (c *Client) fetchHTTP(ctx context.Context, endpoint string) (protocol.Subscription, error) {

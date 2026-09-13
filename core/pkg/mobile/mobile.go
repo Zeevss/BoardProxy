@@ -24,6 +24,15 @@ var mobileSubscriptionClient = &subscribesdk.Client{
 	Cache: subscribesdk.NewMemoryCache(),
 }
 
+// SubscriptionReasonPrefix помечает отказ разбора подписки устойчивым кодом.
+//
+// gomobile переносит через границу только текст ошибки — типы и обёртки
+// `errors.As` на стороне Kotlin недоступны. Поэтому код причины едет в начале
+// сообщения: `bp-reason:unreachable; …`. Без него Android видел один
+// неразличимый отказ на все случаи и показывал одно и то же «не удалось» и
+// при обрезанной ссылке, и при лежащем сервисе.
+const SubscriptionReasonPrefix = "bp-reason:"
+
 // ResolveSubscription fetches and authenticates a subscription URL through
 // the public endpoint with Yandex recovery and returns the snapshot as JSON.
 // The URL and contained keylinks are credentials and must never be logged.
@@ -35,6 +44,10 @@ func ResolveSubscription(subscriptionURL string) (string, error) {
 	defer cancel()
 	snapshot, err := mobileSubscriptionClient.Fetch(ctx, strings.TrimSpace(subscriptionURL))
 	if err != nil {
+		var failure *subscribesdk.FetchError
+		if errors.As(err, &failure) {
+			return "", fmt.Errorf("%s%s; resolve subscription: %w", SubscriptionReasonPrefix, failure.Reason, err)
+		}
 		return "", fmt.Errorf("mobile: resolve subscription: %w", err)
 	}
 	raw, err := json.Marshal(snapshot)

@@ -159,8 +159,24 @@ class PostgresSubscriptionServiceRepository(
         )
     }
 
+    /**
+     * Гасит все накопившиеся запросы перезапуска, а не только последний.
+     *
+     * Перезапуск — это состояние «просили перезапуститься», а не очередь
+     * заданий: один рестарт удовлетворяет все невыданные запросы сразу.
+     * Раньше отмечалась ровно одна команда — с максимальным nonce, который
+     * приходит из настроек, — а более старые оставались ждущими навсегда.
+     * Со второго нажатия кнопки сервис уходил в вечный цикл перезапусков:
+     * каждый опрос видел древнюю невыданную команду и снова получал приказ.
+     */
     override fun markRestartDelivered(nonce: Long, at: Instant) {
-        commands.markDelivered(AGENT_ID, nonce, at)
+        jdbc.update(
+            """
+            UPDATE agent_commands SET delivered_at = :at
+            WHERE agent_id = :agentId AND nonce <= :nonce AND delivered_at IS NULL
+            """.trimIndent(),
+            mapOf("agentId" to AGENT_ID, "nonce" to nonce, "at" to at.toSqlTimestamp()),
+        )
     }
 
     private fun settings(rs: ResultSet) = SubscriptionServiceSettings(

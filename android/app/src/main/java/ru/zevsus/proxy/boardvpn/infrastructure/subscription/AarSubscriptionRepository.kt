@@ -9,6 +9,8 @@ import ru.zevsus.proxy.boardvpn.domain.model.BoardProxySubscriptionUrl
 import ru.zevsus.proxy.boardvpn.domain.model.SubscriptionKeySummary
 import ru.zevsus.proxy.boardvpn.domain.model.VpnSubscription
 import ru.zevsus.proxy.boardvpn.domain.repository.ResolvedSubscription
+import ru.zevsus.proxy.boardvpn.domain.repository.SubscriptionFailure
+import ru.zevsus.proxy.boardvpn.domain.repository.SubscriptionFailureReason
 import ru.zevsus.proxy.boardvpn.domain.repository.SubscriptionRepository
 
 class AarSubscriptionRepository : SubscriptionRepository {
@@ -17,7 +19,12 @@ class AarSubscriptionRepository : SubscriptionRepository {
         preferredKeyId: String?,
     ): ResolvedSubscription =
         withContext(Dispatchers.IO) {
-            val root = JSONObject(Mobile.resolveSubscription(url.reveal()))
+            // Код причины приходит внутри сообщения от Go: типов через границу
+            // gomobile не переносит. Без разбора здесь интерфейс показывал бы
+            // один и тот же отказ на все случаи.
+            val raw = runCatching { Mobile.resolveSubscription(url.reveal()) }
+                .getOrElse { cause -> throw SubscriptionFailure.fromBridge(cause) }
+            val root = JSONObject(raw)
             val keysJson = root.getJSONArray("keys")
             val summaries = buildList {
                 for (index in 0 until keysJson.length()) {
@@ -43,7 +50,7 @@ class AarSubscriptionRepository : SubscriptionRepository {
             val selected = enabledKeys.firstOrNull { key ->
                 preferredKeyId != null && key.optString("id") == preferredKeyId
             } ?: enabledKeys.firstOrNull()
-                ?: error("Subscription does not contain an enabled key")
+                ?: throw SubscriptionFailure(SubscriptionFailureReason.EMPTY)
             val selectedKeylink = BoardProxyKeylink.fromRaw(selected.getString("keylink"))
             ResolvedSubscription(
                 name = root.optString("name").ifBlank { "BoardProxy subscription" },

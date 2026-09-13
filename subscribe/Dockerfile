@@ -1,9 +1,15 @@
-FROM golang:1.26-alpine AS build
+# Сборка нативная, целевую архитектуру Go берёт на себя. Рантайм здесь
+# distroless и без единого RUN, так что эмуляции этот образ не требует вовсе.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+ARG TARGETARCH
+# Версию сервис сообщает control-plane, и она видна в панели.
+ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/subscribe ./cmd/subscribe
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o /out/subscribe ./cmd/subscribe
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/subscribe /subscribe
