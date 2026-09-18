@@ -2,7 +2,6 @@ package ru.zevsus.proxy.boardvpn.ui.profiles
 
 import android.text.format.DateFormat
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,10 +16,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -43,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -309,9 +311,12 @@ private fun subscriptionStatus(updatedAt: Long, refreshing: Boolean, failed: Boo
 private fun SubscriptionKeyRow(key: SubscriptionKeySummary, active: Boolean, onClick: () -> Unit) {
     val enabled = key.state == "enabled"
     Row(
+        // selectable, а не clickable: строки ключей — набор с единственным
+        // выбранным, и TalkBack должен озвучивать «выбрано», а не просто
+        // «кнопка». Роль радиокнопки берёт это на себя.
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled, onClick = onClick)
+            .selectable(selected = active, enabled = enabled, role = Role.RadioButton, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -344,9 +349,20 @@ private fun SubscriptionKeyRow(key: SubscriptionKeySummary, active: Boolean, onC
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (active) {
-            Spacer(Modifier.width(8.dp))
-            ActiveDot()
+        Spacer(Modifier.width(8.dp))
+        // Галка, а не ещё один кружок: слева в этой же строке уже есть точка
+        // статуса ключа того же цвета, и два одинаковых кружка с разным
+        // смыслом читаются как один. Слот занят всегда, иначе цифры трафика
+        // разъезжаются между выбранной и остальными строками.
+        Box(modifier = Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+            if (active) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
     }
 }

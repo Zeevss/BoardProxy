@@ -185,6 +185,10 @@ class ProfilesViewModel(
         viewModelScope.launch {
             val profile = profileRepository.getProfile(profileId) ?: return@launch
             val subscription = profile.subscription ?: return@launch
+            // Тап по узлу — это и выбор самого профиля: строка ключа перехватывает
+            // клик у карточки, и без этого узел бы сменился у профиля, на который
+            // подключение так и не переключилось.
+            profileRepository.selectProfile(profileId)
             if (subscription.selectedKeyId == keyId) return@launch
             profileRepository.saveProfile(
                 profile.copy(subscription = subscription.copy(selectedKeyId = keyId))
