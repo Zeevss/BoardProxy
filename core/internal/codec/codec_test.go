@@ -81,6 +81,30 @@ func TestCodecsDoNotCrossDecode(t *testing.T) {
 	}
 }
 
+// TestZ85AlphabetHasNoHTMLMarkup фиксирует находку живого теста: доска
+// Яндекса рендерит value объекта как рич-текст, вырезает '<...>' как
+// HTML-тег (а для незакрытого '<' — вообще всё до конца строки) и заменяет
+// одиночный '&' на литеральную "&amp;". Алфавит Z85 не должен содержать эти
+// символы, иначе достаточно длинный (или просто невезучий) payload долетает
+// до пира обрезанным или подменённым.
+func TestZ85AlphabetHasNoHTMLMarkup(t *testing.T) {
+	for _, c := range z85Alphabet {
+		if c == '<' || c == '>' || c == '&' {
+			t.Fatalf("z85Alphabet must not contain %q: the live board mangles it as HTML markup/entity", c)
+		}
+	}
+	if len(z85Alphabet) != 85 {
+		t.Fatalf("z85Alphabet must have exactly 85 symbols, got %d", len(z85Alphabet))
+	}
+	seen := make(map[rune]bool, 85)
+	for _, c := range z85Alphabet {
+		if seen[c] {
+			t.Fatalf("z85Alphabet has duplicate symbol %q", c)
+		}
+		seen[c] = true
+	}
+}
+
 func TestIsProtocolValue(t *testing.T) {
 	value, err := Base64Codec{}.Encode([]byte("x"))
 	if err != nil {

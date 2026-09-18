@@ -72,6 +72,7 @@ class ProfilesViewModel(
             is ProfilesAction.RequestDeletion -> deletionRequest.value = action.profileId
             is ProfilesAction.ShareProfile -> shareRequest.value = action.profileId
             is ProfilesAction.RefreshSubscription -> refreshSubscription(action.profileId)
+            is ProfilesAction.SelectSubscriptionKey -> selectSubscriptionKey(action.profileId, action.keyId)
             is ProfilesAction.EditorNameChanged -> editorState.update {
                 it?.copy(name = action.name, nameError = false)
             }
@@ -172,6 +173,22 @@ class ProfilesViewModel(
 
     private fun refreshSubscription(profileId: VpnProfileId) {
         viewModelScope.launch {
+            message.value = subscriptionSyncManager.refresh(profileId).fold(
+                onSuccess = { ProfilesMessage.SubscriptionsUpdated },
+                onFailure = { ProfilesMessage.SubscriptionUpdateFailed },
+            )
+        }
+    }
+
+    /** Переключает узел (ключ) подписки, на который подключается профиль. */
+    private fun selectSubscriptionKey(profileId: VpnProfileId, keyId: String) {
+        viewModelScope.launch {
+            val profile = profileRepository.getProfile(profileId) ?: return@launch
+            val subscription = profile.subscription ?: return@launch
+            if (subscription.selectedKeyId == keyId) return@launch
+            profileRepository.saveProfile(
+                profile.copy(subscription = subscription.copy(selectedKeyId = keyId))
+            )
             message.value = subscriptionSyncManager.refresh(profileId).fold(
                 onSuccess = { ProfilesMessage.SubscriptionsUpdated },
                 onFailure = { ProfilesMessage.SubscriptionUpdateFailed },

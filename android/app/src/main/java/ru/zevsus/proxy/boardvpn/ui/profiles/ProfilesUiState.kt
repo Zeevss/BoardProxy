@@ -58,6 +58,7 @@ sealed interface ProfilesAction {
     data class RequestDeletion(val profileId: VpnProfileId) : ProfilesAction
     data class ShareProfile(val profileId: VpnProfileId) : ProfilesAction
     data class RefreshSubscription(val profileId: VpnProfileId) : ProfilesAction
+    data class SelectSubscriptionKey(val profileId: VpnProfileId, val keyId: String) : ProfilesAction
     data class EditorNameChanged(val name: String) : ProfilesAction
     data class EditorKeylinkChanged(val keylink: String) : ProfilesAction
 }

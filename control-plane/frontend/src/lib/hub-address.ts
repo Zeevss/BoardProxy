@@ -11,20 +11,21 @@
  */
 export const GRPC_PORT = 8443
 
-/** IP вместо имени: в SAN сертификата по умолчанию только `hub` и `localhost`. */
-const IP_ADDRESS = /^\d{1,3}(\.\d{1,3}){3}$/
-
 /**
  * Догадка для поля ввода, а не истина.
  *
- * Локально панель открывают по `localhost` или по адресу — оба не совпадут с
- * именем в сертификате, зато совпадёт `hub` из compose. На настоящем стенде
- * панель открывают по имени хаба, и оно же обычно годится для gRPC.
+ * Берётся имя, по которому открыта панель: по нему хаб доступен хотя бы
+ * откуда-то, и его же обычно вписывают в `CONTROL_GRPC_SERVER_NAMES`.
+ *
+ * Раньше для `localhost` и IP подставлялось `hub:8443` — имя сервиса из общего
+ * compose. Пока нода поднималась профилем в той же сети, оно работало; с
+ * отдельным compose у ноды своя сеть, и `hub` не резолвится ни во что —
+ * агент бесконечно повторяет «name resolver error: produced zero addresses».
+ * Подставлять заведомо нерабочее значение хуже, чем неточное: `localhost`
+ * оператор хотя бы прочитает как «поправь на адрес хаба».
  */
 export function suggestHubAddress(location: { hostname: string } = window.location): string {
-  const { hostname } = location
-  if (hostname === 'localhost' || IP_ADDRESS.test(hostname)) return `hub:${GRPC_PORT}`
-  return `${hostname}:${GRPC_PORT}`
+  return `${location.hostname}:${GRPC_PORT}`
 }
 
 /** Пусто, схема или отсутствие порта — верный признак того, что взяли адрес панели. */

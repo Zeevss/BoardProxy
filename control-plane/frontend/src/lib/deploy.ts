@@ -30,7 +30,11 @@ export interface NodeDeployOptions {
 }
 
 export function nodeCompose({ secret, statsInterface = 'eth0' }: NodeDeployOptions): string {
-  return `services:
+  return `# Адрес хаба зашит в секрете и должен резолвиться с машины ноды.
+# Если нода стоит рядом с хабом и в секрете осталось имя из его compose —
+# раскомментируйте networks внизу, иначе агент будет повторять
+# «name resolver error: produced zero addresses».
+services:
   node:
     image: ${REGISTRY}/boardproxy-node-agent:${TAG}
     restart: unless-stopped
@@ -40,6 +44,13 @@ export function nodeCompose({ secret, statsInterface = 'eth0' }: NodeDeployOptio
       BPROXY_CORE_CONTROL: unix:///run/bproxy/control.sock
     volumes:
       - node-data:/var/lib/bproxy-node
+#    networks:
+#      - hub
+
+#networks:
+#  hub:
+#    external: true
+#    name: boardproxy_default
 
 volumes:
   node-data:
@@ -52,13 +63,44 @@ export interface SubscribeDeployOptions {
   controlPlaneUrl: string
   /** Порт на хосте; наружу его публикует реверс-прокси. */
   port?: number
+  /** Сервис поднимают рядом с хабом — подключаем его к сети хаба. */
+  sameHost?: boolean
+}
+
+/**
+ * Адрес хаба для сервиса подписок.
+ *
+ * Origin панели годится, только когда её открывают по внешнему имени. На
+ * `localhost` он указывает внутрь контейнера сервиса, а не на хаб, и сервис
+ * бесконечно повторяет «connect: connection refused». В этом случае берём имя
+ * сервиса из compose хаба — оно разрешится, если подключить сервис к его сети.
+ */
+export function suggestControlPlaneUrl(location: { hostname: string; origin: string }): {
+  url: string
+  sameHost: boolean
+} {
+  const local = location.hostname === 'localhost' || /^\d{1,3}(\.\d{1,3}){3}$/.test(location.hostname)
+  return local ? { url: 'http://hub:8080', sameHost: true } : { url: location.origin, sameHost: false }
 }
 
 export function subscribeCompose({
   token,
   controlPlaneUrl,
   port = 8090,
+  sameHost = false,
 }: SubscribeDeployOptions): string {
+  // Блок сети нужен, только когда сервис стоит рядом с хабом: иначе он остаётся
+  // в своей сети, где имени `hub` не существует.
+  const networks = sameHost
+    ? `    networks:
+      - hub
+
+networks:
+  hub:
+    external: true
+    name: boardproxy_default
+`
+    : ''
   return `services:
   subscribe:
     image: ${REGISTRY}/boardproxy-subscribe:${TAG}
@@ -77,7 +119,7 @@ export function subscribeCompose({
       - ALL
     security_opt:
       - no-new-privileges:true
-`
+${networks}`
 }
 
 /** Одна и та же команда для обоих шаблонов. */

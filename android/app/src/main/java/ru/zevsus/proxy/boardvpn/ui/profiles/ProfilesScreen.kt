@@ -2,6 +2,7 @@ package ru.zevsus.proxy.boardvpn.ui.profiles
 
 import android.text.format.DateFormat
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -143,6 +144,9 @@ fun ProfilesScreen(
                             onEdit = { onAction(ProfilesAction.EditProfile(profile.id)) },
                             onShare = { onAction(ProfilesAction.ShareProfile(profile.id)) },
                             onDelete = { onAction(ProfilesAction.RequestDeletion(profile.id)) },
+                            onSelectKey = { keyId ->
+                                onAction(ProfilesAction.SelectSubscriptionKey(profile.id, keyId))
+                            },
                             modifier = Modifier.animateItem(),
                         )
                     }
@@ -236,6 +240,7 @@ private fun SubscriptionCard(
     onEdit: () -> Unit,
     onShare: () -> Unit,
     onDelete: () -> Unit,
+    onSelectKey: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val subscription = checkNotNull(profile.subscription)
@@ -281,7 +286,11 @@ private fun SubscriptionCard(
                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
                     )
                 }
-                SubscriptionKeyRow(key)
+                SubscriptionKeyRow(
+                    key = key,
+                    active = key.id == subscription.selectedKeyId,
+                    onClick = { onSelectKey(key.id) },
+                )
             }
         }
     }
@@ -297,10 +306,13 @@ private fun subscriptionStatus(updatedAt: Long, refreshing: Boolean, failed: Boo
 }
 
 @Composable
-private fun SubscriptionKeyRow(key: SubscriptionKeySummary) {
+private fun SubscriptionKeyRow(key: SubscriptionKeySummary, active: Boolean, onClick: () -> Unit) {
     val enabled = key.state == "enabled"
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 13.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Surface(
@@ -313,6 +325,7 @@ private fun SubscriptionKeyRow(key: SubscriptionKeySummary) {
             Text(
                 key.name.ifBlank { key.id },
                 style = MaterialTheme.typography.titleSmall,
+                color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -331,6 +344,10 @@ private fun SubscriptionKeyRow(key: SubscriptionKeySummary) {
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (active) {
+            Spacer(Modifier.width(8.dp))
+            ActiveDot()
+        }
     }
 }
 

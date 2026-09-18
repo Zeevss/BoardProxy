@@ -150,6 +150,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      # Не выгружать запись сборки отдельным артефактом `*.dockerbuild`.
+      # Релизу она не нужна, а в списке артефактов только мешает.
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
     strategy:
       fail-fast: false
       matrix:
@@ -258,7 +262,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: core-binaries
+          name: boardproxy-core
           path: artifacts/*
           if-no-files-found: error
 
@@ -425,9 +429,13 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Только артефакты релиза. Без шаблона сюда попадают ещё и записи сборки
+      # `*.dockerbuild`, которые добавляет build-push-action, — на них скачивание
+      # и падало: «Artifact download failed after 5 retries».
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: boardproxy-*
           merge-multiple: true
 
       - run: ls -laR dist

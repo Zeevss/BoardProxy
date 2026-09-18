@@ -88,6 +88,10 @@ function ServiceSection({ service }: { service: SubscriptionService }) {
   const { status, settings } = service
   const patch = (change: Partial<ServiceDraft>) => setDraft({ ...draft, ...change })
 
+  // Пока правки не сохранены, выдавать токен рано: сервис заберёт с хаба то,
+  // что там лежит, а не то, что видно на экране.
+  const dirty = JSON.stringify(draft) !== JSON.stringify(draftOf(service))
+
   /**
    * Включённая доставка обязана быть работоспособной, поэтому хаб требует четыре
    * поля из пяти и проверяет, что адреса разбираются. Помечаем их здесь, иначе
@@ -170,52 +174,7 @@ function ServiceSection({ service }: { service: SubscriptionService }) {
           />
         </header>
 
-        {/* Наблюдаемое состояние и две кнопки над формой: они про живой сервис,
-            а не про его настройки, и правки в них ничего не отменяют. */}
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-line-soft bg-inset px-5 py-3.5">
-          <div className="flex items-center gap-2.5">
-            <StatusDot
-              tone={status.connected ? 'ok' : 'muted'}
-              live={status.connected}
-              className="size-2"
-            />
-            <span className="text-[13px] font-medium">
-              {status.connected ? t.serviceConnected : t.serviceOffline}
-            </span>
-            <span className="font-mono text-[11.5px] text-dim">
-              v{status.serviceVersion ?? '—'} · rev {status.appliedRevision ?? '—'} ·{' '}
-              {seen ?? t.never}
-            </span>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={issue.isPending}
-              onClick={() =>
-                issue.mutate(undefined, {
-                  onSuccess: (issued) => setSecret(issued.secret),
-                  onError: () => toast(t.errorOffline, 'danger'),
-                })
-              }
-            >
-              {t.serviceToken}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={restart.isPending}
-              onClick={() =>
-                restart.mutate(undefined, {
-                  onSuccess: () => toast(t.restartRequested),
-                  onError: () => toast(t.errorOffline, 'danger'),
-                })
-              }
-            >
-              {t.restart}
-            </Button>
-          </div>
-        </div>
+        <StepHeader index={1} title={t.stepConfigure} />
 
         <div className="grid gap-4 px-5 py-4.5 sm:grid-cols-2">
           {fields.map((field) => (
@@ -278,15 +237,96 @@ function ServiceSection({ service }: { service: SubscriptionService }) {
         ) : null}
 
         <footer className="flex items-center justify-between gap-3 border-t border-line-soft px-5 py-3.5">
-          <p className="font-mono text-xs text-dim">revision {settings.revision}</p>
+          <p className="font-mono text-xs text-dim">
+            revision {settings.revision}
+            {dirty ? <span className="ml-2 text-warn">· {t.unsaved}</span> : null}
+          </p>
           <Button variant="primary" disabled={update.isPending} onClick={save}>
             {t.save}
           </Button>
         </footer>
+
+        <StepHeader index={2} title={t.stepDeploy} />
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+          {/* Токен выдаётся после сохранения: сервис заберёт конфигурацию сразу
+              после запуска, а несохранённые поля до него не доедут. */}
+          <p className="text-[12.5px] text-dim">{dirty ? t.saveFirst : t.subIssueHint}</p>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={issue.isPending || dirty}
+            onClick={() =>
+              issue.mutate(undefined, {
+                onSuccess: (issued) => setSecret(issued.secret),
+                onError: () => toast(t.errorOffline, 'danger'),
+              })
+            }
+          >
+            {t.serviceToken}
+          </Button>
+        </div>
+
+        <StepHeader index={3} title={t.stepLink} />
+        <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-4">
+          <div className="flex items-center gap-2.5">
+            <StatusDot
+              tone={status.connected ? 'ok' : 'muted'}
+              live={status.connected}
+              className="size-2"
+            />
+            <span className="text-[13px] font-medium">
+              {/* «Не отвечает» у сервиса, который никогда не запускали, читается
+                  как поломка. Это разные состояния, и говорим о них по-разному. */}
+              {status.connected
+                ? t.serviceConnected
+                : status.lastSeenAt === null
+                  ? t.serviceNeverSeen
+                  : t.serviceOffline}
+            </span>
+            {status.lastSeenAt === null ? null : (
+              <span className="font-mono text-[11.5px] text-dim">
+                v{status.serviceVersion ?? '—'} · rev {status.appliedRevision ?? '—'} ·{' '}
+                {seen ?? t.never}
+              </span>
+            )}
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            // Перезапускать нечего, пока сервис ни разу не выходил на связь.
+            disabled={restart.isPending || status.lastSeenAt === null}
+            onClick={() =>
+              restart.mutate(undefined, {
+                onSuccess: () => toast(t.restartRequested),
+                onError: () => toast(t.errorOffline, 'danger'),
+              })
+            }
+          >
+            {t.restart}
+          </Button>
+        </div>
       </div>
 
       <SubscribeDeployDialog token={secret} onClose={() => setSecret(null)} />
     </>
+  )
+}
+
+/**
+ * Полоса-разделитель с номером шага.
+ *
+ * Три действия — настроить, развернуть, дождаться связи — идут строго по
+ * очереди, но на экране выглядели равноправными: кнопка «Сервисный токен»
+ * вообще стояла выше формы, то есть визуально раньше сохранения.
+ */
+function StepHeader({ index, title }: { index: number; title: string }) {
+  return (
+    <div className="flex items-center gap-2.5 border-y border-line-soft bg-inset px-5 py-2.5">
+      <span className="flex size-5 items-center justify-center rounded-full border border-line font-mono text-[11px] text-dim">
+        {index}
+      </span>
+      <span className="text-[12.5px] font-semibold tracking-[0.03em] uppercase">{title}</span>
+    </div>
   )
 }
 

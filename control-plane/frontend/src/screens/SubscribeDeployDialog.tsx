@@ -3,14 +3,15 @@ import { Button } from '@/components/ui/button'
 import { CopyButton } from '@/components/ui/copy'
 import { Modal } from '@/components/ui/modal'
 import { Snippet } from '@/components/ui/snippet'
-import { RUN_COMMAND, subscribeCompose } from '@/lib/deploy'
+import { RUN_COMMAND, subscribeCompose, suggestControlPlaneUrl } from '@/lib/deploy'
 
 /**
  * Сервисный токен вместе с готовым шаблоном развёртывания.
  *
- * Адрес хаба берётся из origin панели: сервис ходит в тот же хаб, который эту
- * панель и отдал. Если сервис ставят в другой сети и туда смотрит другое имя,
- * строку в шаблоне поправят руками — но по умолчанию она верна.
+ * Адрес хаба не берётся из origin панели напрямую: на `localhost` он указывал
+ * бы внутрь контейнера самого сервиса, и тот бесконечно повторял бы
+ * «connect: connection refused». Для локальной панели подставляем имя из
+ * compose хаба и сразу подключаем сервис к его сети.
  */
 export function SubscribeDeployDialog({
   token,
@@ -20,8 +21,9 @@ export function SubscribeDeployDialog({
   onClose: () => void
 }) {
   const { t } = useLanguage()
+  const hub = suggestControlPlaneUrl(window.location)
   const compose = token
-    ? subscribeCompose({ token, controlPlaneUrl: window.location.origin })
+    ? subscribeCompose({ token, controlPlaneUrl: hub.url, sameHost: hub.sameHost })
     : ''
 
   return (

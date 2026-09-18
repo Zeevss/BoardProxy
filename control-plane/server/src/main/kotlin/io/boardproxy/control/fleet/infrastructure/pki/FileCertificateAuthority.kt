@@ -111,7 +111,10 @@ class FileCertificateAuthority(
     }
 
     private fun loadOrCreate(): Material {
-        if (Files.exists(materialFile)) return json.readValue(Files.readAllBytes(materialFile), Material::class.java)
+        if (Files.exists(materialFile)) {
+            val stored = json.readValue(Files.readAllBytes(materialFile), Material::class.java)
+            return if (stored.serverNames == serverNames) stored else reissueServerCertificate(stored)
+        }
         val now = clock.instant()
         val caKeys = keyPair()
         val caName = X500Name("CN=BoardProxy Control Plane CA")
@@ -132,6 +135,33 @@ class FileCertificateAuthority(
         val value = Material(
             caCertificatePem = pem(ca),
             caPrivateKey = encrypt("pki:ca-private-key", privateKeyPem(caKeys.private)),
+            serverCertificatePem = pem(server),
+            serverPrivateKey = encrypt("pki:server-private-key", privateKeyPem(serverKeys.private)),
+            serverNames = serverNames,
+        )
+        writeAtomically(json.writeValueAsBytes(value))
+        return value
+    }
+
+    /**
+     * Перевыпускает серверный сертификат, когда список имён изменился.
+     *
+     * Имя, по которому нода дозванивается до хаба, обязано быть в SAN. Раньше
+     * сохранённый список писался в файл, но никогда не сверялся с настройкой:
+     * правка `CONTROL_GRPC_SERVER_NAMES` на работающей установке молча ничего
+     * не меняла, и единственным способом добавить адрес оставалось удаление
+     * тома PKI. Это ротация CA, то есть обесценивание сертификатов всех нод
+     * разом — цена, несопоставимая с добавлением одного имени.
+     *
+     * Удостоверяющий центр при этом остаётся прежним: меняются только ключ и
+     * сертификат сервера, а выданные нодам сертификаты продолжают проверяться.
+     */
+    private fun reissueServerCertificate(stored: Material): Material {
+        val caKey = parsePrivateKey(decrypt("pki:ca-private-key", stored.caPrivateKey))
+        val ca = parseCertificate(stored.caCertificatePem)
+        val serverKeys = keyPair()
+        val server = serverCertificate(ca, caKey, serverKeys, clock.instant())
+        val value = stored.copy(
             serverCertificatePem = pem(server),
             serverPrivateKey = encrypt("pki:server-private-key", privateKeyPem(serverKeys.private)),
             serverNames = serverNames,

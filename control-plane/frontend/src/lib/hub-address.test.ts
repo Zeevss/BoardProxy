@@ -2,15 +2,22 @@ import { describe, expect, it } from 'vitest'
 import { hubAddressProblem, suggestHubAddress } from './hub-address'
 
 describe('подсказка адреса хаба', () => {
-  /** Локально имя панели с сертификатом не сойдётся, а `hub` из compose — да. */
-  it('для localhost и IP предлагает имя из compose', () => {
-    expect(suggestHubAddress({ hostname: 'localhost' })).toBe('hub:8443')
-    expect(suggestHubAddress({ hostname: '127.0.0.1' })).toBe('hub:8443')
-    expect(suggestHubAddress({ hostname: '10.1.2.3' })).toBe('hub:8443')
+  it('берёт имя, по которому открыта панель, с портом gRPC', () => {
+    expect(suggestHubAddress({ hostname: 'hub.example.net' })).toBe('hub.example.net:8443')
+    expect(suggestHubAddress({ hostname: 'localhost' })).toBe('localhost:8443')
+    expect(suggestHubAddress({ hostname: '10.1.2.3' })).toBe('10.1.2.3:8443')
   })
 
-  it('для доменного имени берёт его же с портом gRPC', () => {
-    expect(suggestHubAddress({ hostname: 'hub.example.net' })).toBe('hub.example.net:8443')
+  /**
+   * `hub` — имя сервиса из общего compose. У ноды в отдельном compose своя
+   * сеть, и такое имя не резолвится ни во что: агент падает в бесконечный
+   * «name resolver error: produced zero addresses». Заведомо нерабочая
+   * подсказка хуже неточной.
+   */
+  it('никогда не предлагает имя сервиса из compose', () => {
+    for (const hostname of ['localhost', '127.0.0.1', '10.1.2.3', 'panel.example.net']) {
+      expect(suggestHubAddress({ hostname })).not.toBe('hub:8443')
+    }
   })
 })
 

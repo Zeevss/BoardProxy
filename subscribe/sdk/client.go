@@ -19,6 +19,10 @@ import (
 
 const Version = "0.1.0"
 
+// fallbackAttempts — сколько раз переоткрыть канал восстановления при
+// нетерминальной ошибке, прежде чем отдать её наружу.
+const fallbackAttempts = 3
+
 type Cache interface {
 	Load(subscriptionURL string) (protocol.Subscription, bool)
 	Store(subscriptionURL string, value protocol.Subscription)
@@ -102,7 +106,7 @@ func (c *Client) Fetch(ctx context.Context, subscriptionURL string) (protocol.Su
 		return protocol.Subscription{}, &FetchError{Reason: ReasonRejected, Cause: primaryErr}
 	}
 
-	fallback, fallbackErr := c.fetchYandex(ctx, capsule)
+	fallback, fallbackErr := c.fetchYandexRetrying(ctx, capsule)
 	if fallbackErr == nil {
 		c.store(subscriptionURL, fallback)
 		return fallback, usable(fallback)
@@ -168,6 +172,32 @@ func (c *Client) fetchHTTP(ctx context.Context, endpoint string) (protocol.Subsc
 		return protocol.Subscription{}, err
 	}
 	return result, nil
+}
+
+// fetchYandexRetrying открывает канал восстановления заново на каждой
+// попытке: пакет yandex прямо требует переоткрывать сессию целиком при любой
+// нетерминальной ошибке (гонки живого bundle-потока на только что открытом
+// документе — обычное дело, сами себя не чинят в рамках одной сессии). Один
+// fetchYandex без этого ловил разрыв как окончательный отказ — типичная
+// причина, почему первое обращение к подписке через фаллбек не проходило, а
+// повторное (например, следующий периодический sync) — проходило.
+func (c *Client) fetchYandexRetrying(ctx context.Context, capsule protocol.Capsule) (protocol.Subscription, error) {
+	var lastErr error
+	for attempt := 0; attempt < fallbackAttempts; attempt++ {
+		result, err := c.fetchYandex(ctx, capsule)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		var recoveryErr *RecoveryError
+		if errors.As(err, &recoveryErr) && recoveryErr.terminal {
+			return protocol.Subscription{}, err
+		}
+		if ctx.Err() != nil {
+			return protocol.Subscription{}, err
+		}
+	}
+	return protocol.Subscription{}, lastErr
 }
 
 func (c *Client) fetchYandex(ctx context.Context, capsule protocol.Capsule) (protocol.Subscription, error) {
