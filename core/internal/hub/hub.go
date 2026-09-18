@@ -27,6 +27,16 @@ const (
 	hubCleanupTimeout  = 5 * time.Second
 )
 
+// helloHandleTimeout ограничивает одну обработку HELLO целиком. Внутри неё идут
+// сетевые вызовы к доске (Join/Subscribe/scrubPage), а emit сессии переживает
+// обрыв websocket'а, ожидая переподключения ровно столько, сколько живёт
+// переданный контекст. С s.ctx (жизнь сервера) такое ожидание не кончается:
+// слоты helloSem утекают по одному на каждый сбой сети, после 16 штук рандеву
+// встаёт молча и навсегда. Бюджет чуть меньше клиентского rendezvousTimeout —
+// позже ответ всё равно никому не нужен. Переменная, а не константа, только
+// чтобы тест не ждал реальные 25 секунд.
+var helloHandleTimeout = 25 * time.Second
+
 const (
 	pageCleanupPasses  = 6
 	pageCleanupDelay   = 150 * time.Millisecond
@@ -515,6 +525,12 @@ func (s *Server) processHubObject(obj board.Object) {
 	default:
 		// Keep the rendezvous reader bounded under a HELLO flood. The client owns
 		// timeout/retry and removes its HELLO; a later event/reconnect can retry.
+		//
+		// Ветка обязана логироваться: клиент тут не получает даже DENIED и висит
+		// до своего таймаута, так что без записи это выглядит как «сервер живёт,
+		// но никого не пускает» без единой улики.
+		rvLog(s.cfg.Link.Log).Warn("hub: rendezvous busy, HELLO dropped",
+			"in_flight", len(s.helloSem), "limit", maxConcurrentHello)
 		s.releaseHello(obj.ID)
 		s.enqueueHubCleanup(obj.ID)
 		return
@@ -619,6 +635,19 @@ func (s *Server) recordPageCleanup(deleted int, err error) {
 // is returned to the allocator only after it remains empty; a failed cleanup
 // quarantines it in the busy set instead of exposing the next user to stale
 // ciphertext or a still-writing previous client.
+// releasePageAsync отправляет уборку страницы в фон. Внутри handleHello звать
+// releasePage напрямую нельзя: он ходит в доску со своим 30-секундным бюджетом
+// и на недоступной сети держал бы слот helloSem сверх helloHandleTimeout —
+// ровно то, от чего этот бюджет и защищает. Клиенту уборка не нужна: он уже
+// получил DENIED, страница возвращается в пул сама.
+func (s *Server) releasePageAsync(page string) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.releasePage(page)
+	}()
+}
+
 func (s *Server) releasePage(page string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), pageCleanupTimeout)
 	defer cancel()
@@ -658,6 +687,10 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 	// повторно доставленный дубль.
 	defer s.releaseHello(helloID)
 	defer s.deleteHubObject(helloID)
+	// Единый бюджет на все сетевые шаги рукопожатия: без него зависший вызов к
+	// доске держит слот helloSem до конца жизни сервера (см. helloHandleTimeout).
+	ctx, cancel := context.WithTimeout(s.ctx, helloHandleTimeout)
+	defer cancel()
 	log := rvLog(s.cfg.Link.Log)
 	hello, ok := decodeHello(msg1)
 	if !ok {
@@ -683,7 +716,7 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 		s.putRV(encodeDenied(nonce))
 		return
 	}
-	user, err := s.cfg.Users.Authorize(s.ctx, resp.PeerStatic(), s.cfg.BoardTag)
+	user, err := s.cfg.Users.Authorize(ctx, resp.PeerStatic(), s.cfg.BoardTag)
 	if err != nil {
 		log.Warn("hub: клиент не авторизован", "err", err)
 		s.putRV(encodeDenied(nonce))
@@ -783,7 +816,7 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 		}, version)
 		if !valid {
 			log.Warn("hub: failed to encode bundle assignment", "bundle", bundleID.String())
-			s.releasePage(page)
+			s.releasePageAsync(page)
 			s.putRV(encodeDenied(nonce))
 			return
 		}
@@ -791,41 +824,41 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 	keys, msg2, err := resp.Accept(responsePayload)
 	if err != nil {
 		log.Warn("hub: не удалось завершить рукопожатие", "err", err)
-		s.releasePage(page)
+		s.releasePageAsync(page)
 		s.putRV(encodeDenied(nonce))
 		return
 	}
 	sealed, err := crypto.NewSealed(s.cfg.Codec, keys.Send, keys.Recv)
 	if err != nil {
 		log.Warn("hub: не удалось собрать sealed-кодек", "err", err)
-		s.releasePage(page)
+		s.releasePageAsync(page)
 		s.putRV(encodeDenied(nonce))
 		return
 	}
 
-	sess, err := s.cfg.Dialer.Join(s.ctx)
+	sess, err := s.cfg.Dialer.Join(ctx)
 	if err != nil {
 		log.Warn("hub: не удалось поднять серверную сессию доски", "err", err, "user", user.Name)
-		s.releasePage(page)
+		s.releasePageAsync(page)
 		s.putRV(encodeDenied(nonce))
 		return
 	}
 	log.Info("hub: server session for client", "user", user.Name, "participant", sess.Participant(), "page", page)
-	snapshot, err := sess.Subscribe(s.ctx, page)
+	snapshot, err := sess.Subscribe(ctx, page)
 	if err != nil {
 		log.Warn("hub: не удалось подписаться на страницу", "err", err, "page", page)
 		_ = sess.Close()
-		s.releasePage(page)
+		s.releasePageAsync(page)
 		s.putRV(encodeDenied(nonce))
 		return
 	}
-	deleted, err := scrubPage(s.ctx, sess, page, snapshot)
+	deleted, err := scrubPage(ctx, sess, page, snapshot)
 	s.recordPageCleanup(deleted, err)
 	if err != nil {
 		log.Error("hub: page cleanup before assignment failed", "err", err,
 			"page", page, "deleted_objects", deleted)
 		_ = sess.Close()
-		s.releasePage(page)
+		s.releasePageAsync(page)
 		s.putRV(encodeDenied(nonce))
 		return
 	}
@@ -855,7 +888,7 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 			log.Warn("hub: failed to attach bundle lane", "err", err,
 				"bundle", bundleID.String(), "lane", bundleLane)
 			_ = l.Close()
-			s.releasePage(page)
+			s.releasePageAsync(page)
 			s.putRV(encodeDenied(nonce))
 			return
 		}
@@ -912,7 +945,7 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 		} else {
 			_ = m.Close()
 		}
-		s.releasePage(page)
+		s.releasePageAsync(page)
 		s.putRV(encodeDenied(nonce))
 		return
 	}
@@ -928,7 +961,7 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 		} else {
 			_ = m.Close()
 		}
-		s.releasePage(page)
+		s.releasePageAsync(page)
 		return
 	}
 	s.mu.Lock()
@@ -939,14 +972,14 @@ func (s *Server) handleHello(nonce [nonceLen]byte, msg1 []byte, helloID string) 
 		} else {
 			_ = m.Close()
 		}
-		s.releasePage(page)
+		s.releasePageAsync(page)
 		return
 	}
 	if isJoin {
 		if s.bundles[bundleID] != bundle || s.clients[m] != bundle {
 			s.mu.Unlock()
 			bundleConn.RemoveLane(bundleLane)
-			s.releasePage(page)
+			s.releasePageAsync(page)
 			s.putRV(encodeDenied(nonce))
 			return
 		}

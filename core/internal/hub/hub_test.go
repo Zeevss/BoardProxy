@@ -933,3 +933,93 @@ func readAll(t *testing.T, r io.Reader, d time.Duration) string {
 		return ""
 	}
 }
+
+// blockingDialer виснет в Join до отмены контекста — так ведёт себя сессия
+// доски, у которой оборвался websocket: emit ждёт переподключения ровно
+// столько, сколько живёт контекст.
+type blockingDialer struct {
+	started chan struct{}
+}
+
+func (d blockingDialer) Join(ctx context.Context) (board.Session, error) {
+	select {
+	case d.started <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestStuckBoardJoinDoesNotWedgeRendezvous фиксирует боевой отказ: пока
+// handleHello ходил в доску с s.ctx, зависший Join держал слот helloSem до
+// конца жизни процесса. Набиралось maxConcurrentHello таких слотов — и хаб
+// продолжал считать доску активной, вычищал чужие объекты со своей страницы,
+// но каждый новый HELLO молча выбрасывал, не отвечая даже DENIED. Клиенты
+// получали rendezvous timeout бесконечно, без единой строчки в логах.
+func TestStuckBoardJoinDoesNotWedgeRendezvous(t *testing.T) {
+	previous := helloHandleTimeout
+	helloHandleTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { helloHandleTimeout = previous })
+
+	b := memory.NewBoard()
+	serverKP, err := crypto.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	users := newFakeUsers()
+	dialer := blockingDialer{started: make(chan struct{}, 1)}
+	srv, err := NewServer(context.Background(), ServerConfig{
+		HubSession: b.NewSession("hub-observer"), HubSlide: "hub", Pool: []string{"p1", "p2"},
+		Dialer: dialer, ServerStatic: serverKP, Users: users, Codec: codec.Base64Codec{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+
+	// Занимаем все слоты рукопожатиями, которые повиснут в Join.
+	for i := range maxConcurrentHello {
+		clientKP, err := crypto.Generate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		users.provision(clientKP.Public())
+		init, err := handshake.Initiate(clientKP, serverKP.Public())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var nonce [nonceLen]byte
+		nonce[0] = byte(i)
+		value, err := codec.Base64Codec{}.Encode(encodeLegacyHello(nonce, 2, init.Message()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sess := b.NewSession(fmt.Sprintf("stuck-client-%d", i))
+		if _, err := sess.Subscribe(context.Background(), "hub"); err != nil {
+			t.Fatal(err)
+		}
+		if err := sess.Put(context.Background(), board.Object{
+			ID: fmt.Sprintf("stuck-hello-%d", i), Value: value,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case <-dialer.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ни одно рукопожатие не дошло до Join")
+	}
+
+	// Слоты обязаны освободиться сами: без бюджета на обработку они остаются
+	// занятыми навсегда и рандеву больше никогда никого не пускает.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if len(srv.helloSem) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("слоты helloSem не освободились: занято %d из %d", len(srv.helloSem), maxConcurrentHello)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
